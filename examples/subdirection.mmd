@@ -1,0 +1,20 @@
+# A top-down diagram with two subgraphs that each pick their own direction:
+# "Services" lays out left-right (a horizontal chain), "Storage" lays out
+# top-down (a vertical chain). Cross-boundary edges attach to the members
+# without dragging the groups' internal arrangement around.
+diagram top-down
+
+client "Client"
+gateway "API Gateway"
+
+subgraph left-right "Services"
+    auth "Auth" --> users "Users" --> orders "Orders"
+end
+
+subgraph top-down "Storage"
+    cache "Cache" --> db "Database"
+end
+
+client --> gateway
+gateway --> auth
+orders --> db

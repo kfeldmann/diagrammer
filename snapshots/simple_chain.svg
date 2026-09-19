@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="80.00" height="214.00" viewBox="0 0 80.00 214.00">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto"
+            markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#333"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="#333" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="40.00,48.00 40.00,93.00" marker-end="url(#arrow)"/>
+    <polyline points="40.00,121.00 40.00,166.00" marker-end="url(#arrow)"/>
+  </g>
+  <g>
+    <rect x="20.00" y="20.00" width="40.00" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="40.00" y="34.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">a</text>
+    <rect x="20.00" y="93.00" width="40.00" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="40.00" y="107.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">b</text>
+    <rect x="20.00" y="166.00" width="40.00" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="40.00" y="180.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">c</text>
+  </g>
+</svg>

@@ -1,0 +1,29 @@
+# diagram.mmd — sample infrastructure
+diagram top-down
+
+web       "Web Server"
+lb        "Load Balancer"
+api1      "API Server 1"
+api2      "API Server 2"
+db        "Postgres"   : cylinder
+cache     "Redis"      : cylinder
+queue     "Message Queue"
+
+web --> lb
+lb  --> api1
+lb  --> api2
+
+api1 --> db
+api2 --> db
+api1 -- dotted --> cache
+api2 -- dotted --> cache
+api1 -- "events" --> queue
+api2 -- "events" --> queue
+
+# edge with style + label + color, all between the dashes
+db -- thick "replication" color="#888" --> replica "Replica" : cylinder
+
+subgraph "Kubernetes Cluster"
+    api1
+    api2
+end

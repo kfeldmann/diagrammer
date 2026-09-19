@@ -1,0 +1,193 @@
+//! Data types for the diagram grammar (see `docs/grammar.md`).
+//!
+//! There are two layers:
+//! - the **raw** (syntactic) AST produced by the parser, preserving every
+//!   declaration as written (including duplicate node occurrences);
+//! - the **resolved** [`Diagram`] produced by [`crate::resolve`], with
+//!   deduplicated nodes, validated attributes, and assigned subgraph
+//!   membership.
+
+// ---- Shared enums ----
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    TopDown,
+    BottomUp,
+    LeftRight,
+    RightLeft,
+}
+
+impl Direction {
+    pub fn from_ident(s: &str) -> Option<Self> {
+        Some(match s {
+            "top-down" => Direction::TopDown,
+            "bottom-up" => Direction::BottomUp,
+            "left-right" => Direction::LeftRight,
+            "right-left" => Direction::RightLeft,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Direction::TopDown => "top-down",
+            Direction::BottomUp => "bottom-up",
+            Direction::LeftRight => "left-right",
+            Direction::RightLeft => "right-left",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    Box,
+    Cylinder,
+}
+
+impl Shape {
+    pub fn from_ident(s: &str) -> Option<Self> {
+        Some(match s {
+            "box" => Shape::Box,
+            "cylinder" => Shape::Cylinder,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Shape::Box => "box",
+            Shape::Cylinder => "cylinder",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Style {
+    Solid,
+    Dotted,
+    Dashed,
+    Thick,
+}
+
+impl Style {
+    pub fn from_ident(s: &str) -> Option<Self> {
+        Some(match s {
+            "solid" => Style::Solid,
+            "dotted" => Style::Dotted,
+            "dashed" => Style::Dashed,
+            "thick" => Style::Thick,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Style::Solid => "solid",
+            Style::Dotted => "dotted",
+            Style::Dashed => "dashed",
+            Style::Thick => "thick",
+        }
+    }
+}
+
+// ---- Raw (syntactic) AST ----
+
+#[derive(Debug, Clone)]
+pub struct RawDiagram {
+    pub direction: Direction,
+    pub direction_offset: usize,
+    pub statements: Vec<RawStatement>,
+}
+
+#[derive(Debug, Clone)]
+pub enum RawStatement {
+    NodeList(RawNodeList),
+    Subgraph(RawSubgraph),
+}
+
+/// A line of the form `nodespec (edge nodespec)*`. With no edges this is a
+/// single standalone node declaration; otherwise it is an edge chain whose
+/// consecutive nodes form edges.
+#[derive(Debug, Clone)]
+pub struct RawNodeList {
+    pub nodes: Vec<RawNodeDecl>,
+    pub edges: Vec<RawEdgeDecl>, // len == nodes.len() - 1
+}
+
+#[derive(Debug, Clone)]
+pub struct RawNodeDecl {
+    pub id: String,
+    pub label: Option<String>,
+    pub shape: Option<Shape>,
+    pub attrs: Vec<RawAttr>,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawEdgeDecl {
+    pub style: Option<Style>,
+    pub label: Option<String>,
+    pub attrs: Vec<RawAttr>,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawAttr {
+    pub name: String,
+    pub value: String,
+    pub offset: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct RawSubgraph {
+    pub direction: Option<Direction>,
+    pub title: Option<String>,
+    pub attrs: Vec<RawAttr>,
+    pub statements: Vec<RawStatement>,
+    pub offset: usize,
+}
+
+// ---- Resolved (validated) diagram ----
+
+#[derive(Debug, Clone)]
+pub struct Diagram {
+    pub direction: Direction,
+    pub nodes: Vec<Node>,
+    pub edges: Vec<Edge>,
+    pub subgraphs: Vec<Subgraph>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Node {
+    pub id: String,
+    pub label: String,
+    pub shape: Shape,
+    pub color: Option<String>,
+    pub fill: Option<String>,
+    /// Index into [`Diagram::subgraphs`]; `None` means top-level.
+    pub group: Option<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Edge {
+    pub from: String,
+    pub to: String,
+    pub style: Style,
+    pub label: Option<String>,
+    pub color: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Subgraph {
+    pub title: Option<String>,
+    /// Per-subgraph layout direction (M4). `None` means "inherit the
+    /// effective direction of the enclosing level".
+    pub direction: Option<Direction>,
+    /// Direct child node ids belonging to this subgraph, in declaration
+    /// order. (Deeper descendants belong to their own, inner subgraphs.)
+    pub members: Vec<String>,
+    /// Indices of direct child subgraphs, in declaration order.
+    pub children: Vec<usize>,
+    /// Enclosing subgraph index; `None` means this subgraph is top-level.
+    pub parent: Option<usize>,
+}

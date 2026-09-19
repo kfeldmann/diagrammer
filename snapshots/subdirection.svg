@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="324.31" height="416.00" viewBox="0 0 324.31 416.00">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="10" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto"
+            markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#333"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="#7a7a7a" stroke-width="1" stroke-linejoin="round">
+    <rect x="20.00" y="166.00" width="284.31" height="56.00" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
+    <rect x="111.46" y="267.00" width="101.39" height="129.00" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
+  </g>
+  <g fill="#3a3a3a" font-family="DejaVu Sans, Arial, sans-serif" font-size="12.00">
+    <text x="30.00" y="170.00" text-anchor="start" dominant-baseline="hanging">Services</text>
+    <text x="121.46" y="271.00" text-anchor="start" dominant-baseline="hanging">Storage</text>
+  </g>
+  <g fill="none" stroke="#333" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="82.19,200.00 127.19,200.00" marker-end="url(#arrow)"/>
+    <polyline points="184.87,200.00 229.87,200.00" marker-end="url(#arrow)"/>
+    <polyline points="162.16,315.00 162.16,360.00" marker-end="url(#arrow)"/>
+    <polyline points="162.16,48.00 162.16,93.00" marker-end="url(#arrow)"/>
+    <polyline points="162.16,121.00 162.16,166.00 56.09,186.00" marker-end="url(#arrow)"/>
+    <polyline points="262.09,214.00 162.16,222.00 162.16,267.00 162.16,360.00" marker-end="url(#arrow)"/>
+  </g>
+  <g>
+    <rect x="132.75" y="20.00" width="58.82" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="162.16" y="34.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Client</text>
+    <rect x="112.17" y="93.00" width="99.98" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="162.16" y="107.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">API Gateway</text>
+    <rect x="30.00" y="186.00" width="52.19" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="56.09" y="200.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Auth</text>
+    <rect x="127.19" y="186.00" width="57.68" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="156.03" y="200.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Users</text>
+    <rect x="229.87" y="186.00" width="64.44" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="262.09" y="200.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Orders</text>
+    <rect x="131.45" y="287.00" width="61.40" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="162.16" y="301.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Cache</text>
+    <rect x="121.46" y="360.00" width="81.39" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="162.16" y="374.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Database</text>
+  </g>
+</svg>

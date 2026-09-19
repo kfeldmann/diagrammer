@@ -6,7 +6,7 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0, M1, M2, M3, M4, M5, and M5.5 are complete. **M6 (render shapes, styles, and colors) is next.**
+**Current position:** M0, M1, M2, M3, M4, M5, M5.5, and M6 are complete. **M7 (orthogonal edge routing) is next.**
 
 ---
 
@@ -210,15 +210,41 @@ alignment tests.
 **Blocked by:** M2 (the flat engine). **Independent of:** M5, M6.
 **Blocks:** M7 (orthogonal edges only look clean once nodes line up).
 
-## ▶ M6 — Render shapes, styles, and colors (already parsed)
+## ✅ M6 — Render shapes, styles, and colors (already parsed)
 
-Most of this is already parsed in M1; this milestone is purely rendering work
-once the SVG pipeline exists.
+Most of this was already parsed in M1; this milestone was purely rendering
+work once the SVG pipeline existed.
 
-- [ ] Cylinder shape.
-- [ ] Edge line styles: `dotted`, `dashed`, `thick`.
-- [ ] Node `color` (stroke) and `fill` (interior); edge `color`.
-- [ ] Edge labels (positioned along the edge).
+- [x] Cylinder shape.
+- [x] Edge line styles: `dotted`, `dashed`, `thick`.
+- [x] Node `color` (stroke) and `fill` (interior); edge `color`.
+- [x] Edge labels (positioned along the edge).
+
+Implemented in `src/render/svg.rs`: the `cylinder` shape draws as a body
+`<path>` (two vertical sides, a front-bottom arc, and a back-top arc) plus a
+full top `<ellipse>` for the lid, sized so the elliptical caps fit exactly
+inside the laid-out box rect (cap radius = `0.18·h` clamped to 5–12 px, so
+the body always keeps a visible straight section). Edge `style` maps to
+stroke attributes — `dotted` → `stroke-dasharray="1 4"` (the shared round
+linecaps render that as a row of round dots), `dashed` → `"6 4"`, `thick` →
+a doubled `stroke-width` (3 vs the default 1.5); `solid` is the default.
+Per-node `color` (stroke) and `fill` (interior), and per-edge `color`, are
+carried into the SVG attributes directly. The single arrowhead `<marker>` now
+uses `fill="currentColor"`, which inherits the `color` set on each edge's
+`<polyline>`, so a colored edge gets a matching arrowhead without a marker
+per color. Edge labels are placed at the arc-length midpoint of their
+polyline, with a white knockout `<rect>` behind the text so the line reads as
+broken behind the label (the classic Graphviz look); labels are drawn after
+edges but before nodes, so a node covers any label that strays over it, and
+the knockout/text split into two `<g>` groups keeps one label's rect from
+covering another's glyphs. Color, fill, and label values are XML-escaped on
+the way out (a quoted-string attribute value can legally contain a `"`).
+10 new render unit tests + a new `shapes_styles` snapshot exercising the full
+M6 surface (cylinders with custom color/fill, all three edge styles, edge
+colors, and edge labels); all seven existing snapshots regenerated — the
+`currentColor` marker, the per-edge stroke/width/dasharray attributes, and
+the new edge-label groups changed every file byte-for-byte. Diagonal edge
+segments still come from the M3/M5 router; orthogonal routing is M7.
 
 **Blocked by:** M3. Can interleave with M4/M5.
 

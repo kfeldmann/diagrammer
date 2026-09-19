@@ -82,6 +82,16 @@ const MARGIN: f32 = 20.0;
 /// Smallest node size, so even tiny labels get a visible box.
 const MIN_NODE_W: f32 = 40.0;
 const MIN_NODE_H: f32 = 28.0;
+/// Elliptical cap radius (the lid and base rim) for `cylinder` nodes, in
+/// pixels. Fixed (not scaled to the box) so that growing a cylinder's height
+/// actually buys the label more room instead of also growing the caps. Public
+/// so the SVG renderer draws the caps at the same radius the layout sized for.
+pub const CYL_RY: f32 = 5.0;
+/// Extra vertical breathing room inside a cylinder's straight-sided body,
+/// each side, beyond a box's [`NODE_PAD_Y`]. The caps dip `2·CYL_RY` into the
+/// box from top and bottom; this padding keeps the centered label clear of the
+/// lid's bottom curve (see [`cyl_height`]).
+const CYL_PAD: f32 = 2.0;
 /// Iteration count for crossing minimization. Deterministic; chosen
 /// generously for small graphs.
 const CROSS_ITERS: usize = 24;
@@ -245,6 +255,24 @@ struct ChildOut {
 }
 
 // ---- Public entry point ----
+
+/// Box height for a node of `shape` with a label of `text_height` pixels:
+/// the label plus vertical padding, floored at [`MIN_NODE_H`]. For cylinders
+/// the straight-sided body is sized like a box (same text padding) plus an
+/// extra [`CYL_PAD`] each side, and the two elliptical caps ([`CYL_RY`] each,
+/// but dipping `2·CYL_RY` into the box) are added on top and bottom. With
+/// `dominant-baseline="central"` the centered label's glyph extent is the em
+/// box (`text_height` tall, centered), so the clearance from the lid's
+/// lowest point is `NODE_PAD_Y + CYL_PAD - CYL_RY` — positive and comfortable,
+/// unlike a plain box where the caps would eat the text room.
+fn cyl_height(shape: crate::ast::Shape, text_height: f32) -> f32 {
+    use crate::ast::Shape;
+    match shape {
+        Shape::Box => (text_height + 2.0 * NODE_PAD_Y).max(MIN_NODE_H),
+        Shape::Cylinder => (text_height + 2.0 * NODE_PAD_Y + 2.0 * CYL_PAD + 2.0 * CYL_RY)
+            .max(MIN_NODE_H + 2.0 * CYL_RY),
+    }
+}
 
 /// Lay out a resolved [`Diagram`], honoring subgraph containment and
 /// per-subgraph direction.
@@ -437,7 +465,7 @@ fn layout_level(
         if node.group == level {
             let m = text::measure(&node.label, FONT_SIZE);
             let w = (m.width + 2.0 * NODE_PAD_X).max(MIN_NODE_W);
-            let h = (m.height + 2.0 * NODE_PAD_Y).max(MIN_NODE_H);
+            let h = cyl_height(node.shape, m.height);
             item_of.insert(ItemRef::Node(gi), items.len());
             item_refs.push(ItemRef::Node(gi));
             items.push(FlatItem { w, h });
@@ -1797,12 +1825,30 @@ mod tests {
     }
 
     #[test]
-    fn cylinder_shapes_are_distinct_but_measured_same_way() {
-        // Shapes don't change v0 box geometry; just ensure layout still works.
-        let (_d, l) = lay("diagram top-down\ndb \"Pg\" : cylinder\ncache \"Redis\" : cylinder\ndb-->cache\n");
+    fn cylinder_is_taller_than_a_box_for_the_same_label() {
+        // A cylinder needs room for its elliptical caps plus breathing space
+        // for the centered label (see `cyl_height`), so it is taller than a
+        // box with the same label — and tall enough that the label clears the
+        // lid (the guarantee exercised in the render tests).
+        let (_d, l) = lay(
+            "diagram top-down\n\n\
+             box \"Pg\"\n\
+             cyl \"Pg\" : cylinder\n",
+        );
+        let box_h = node_rect(&l, "box").h;
+        let cyl_h = node_rect(&l, "cyl").h;
+        assert!(cyl_h > box_h, "cylinder ({cyl_h}) should be taller than box ({box_h})");
+        // Concretely: box = text + 2·pad = 28; cylinder adds 2·CYL_PAD + 2·CYL_RY.
+        assert_eq!(box_h, 28.0);
+        assert_eq!(cyl_h, 28.0 + 2.0 * CYL_PAD + 2.0 * CYL_RY);
+        // The label clears the lid's lowest point (em box above it).
+        let r = node_rect(&l, "cyl");
+        let cy = r.y + r.h / 2.0;
+        let glyph_top = cy - FONT_SIZE / 2.0;
+        let lid_bottom = r.y + 2.0 * CYL_RY;
+        assert!(glyph_top >= lid_bottom + 3.0, "label would collide with lid");
         assert_all_finite(&l);
         assert_no_overlaps(&l);
-        // `Shape::Cylinder` is parsed; the rect is still a box for v0.
         let _ = Shape::Cylinder;
     }
 

@@ -2,14 +2,11 @@
 //!
 //! v0 status: the input language is parsed and semantically validated end to
 //! end, laid out (Sugiyama-style, including compound subgraphs with
-//! per-subgraph direction), and rendered to a self-contained SVG. See
-//! [`docs/grammar.md`](../docs/grammar.md) and the milestone plan in
+//! per-subgraph direction), and rendered to a self-contained SVG. Rendering
+//! (M6) honors the `cylinder` shape, per-node `color`/`fill`, the
+//! `dotted`/`dashed`/`thick` edge styles, per-edge `color`, and edge labels.
+//! See [`docs/grammar.md`](../docs/grammar.md) and the milestone plan in
 //! [`docs/milestones.md`](../docs/milestones.md).
-//!
-//! Cross-boundary edge routing through subgraph frames (M5) and
-//! shape/style/color rendering (M6) are parsed but not yet reflected in the
-//! output; the resolved-model fields for them are carried through until those
-//! milestones land.
 #![allow(dead_code)]
 
 mod ast;

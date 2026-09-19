@@ -12,12 +12,15 @@ SVG output. It exists to:
 
 v0: the input language is **parsed, validated, laid out, and rendered to
 SVG end to end**, including **compound layout with per-subgraph direction**
-(M4) and **cross-boundary edge routing through subgraph frames** (M5) —
-subgraphs render as labeled frames, size to fit their contents, each may
-declare its own `direction` independent of the diagram's, and edges crossing a
-group boundary route to connection points on the frames without disturbing
-the groups' internal layout. Shape/style/color rendering (M6) is the next
-milestone (see the plan in `docs/milestones.md`).
+(M4), **cross-boundary edge routing through subgraph frames** (M5), and
+**shape/style/color rendering** (M6) — subgraphs render as labeled frames,
+size to fit their contents, each may declare its own `direction` independent
+of the diagram's, and edges crossing a group boundary route to connection
+points on the frames without disturbing the groups' internal layout. Nodes
+render as rounded boxes or cylinders (with `color`/`fill`); edges render with
+the `dotted`/`dashed`/`thick` styles and per-edge `color`, and edge labels
+sit at the edge midpoint. Orthogonal edge routing (M7) is the next milestone
+(see the plan in `docs/milestones.md`).
 
 ```console
 $ cargo run -- examples/infra.mmd

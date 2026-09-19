@@ -184,7 +184,10 @@ quoted strings, so they can hold hex colors (`"#888"`, `"#888888"`) or CSS
 named colors (`"red"`). Quoting colors is deliberate: a bare `#888` would
 be eaten by the `#`-comment lexer.
 
-### Attribute semantics (parsed in v0, rendering comes later)
+### Attribute semantics
+
+Parsed in v0 and **rendered as of M6** (stroke, fill, line styles, colors,
+and edge labels).
 
 - **Nodes:**
   - `color` — border / stroke color.
@@ -241,7 +244,6 @@ one inherits the direction of its enclosing level.
 - No-arrow edges (`---`).
 - Reusable style classes (`classDef`-style).
 - Shapes beyond `box` and `cylinder`.
-- Any rendering of colors/styles beyond parsing and preserving them.
 - Cross-boundary edge routing that connects through subgraph frames.
   Frame-aware routing is implemented (M5): an edge crossing a group boundary
   runs to a connection point on the frame (at the frame's center, on the side

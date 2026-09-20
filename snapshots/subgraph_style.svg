@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="170.00" height="193.00" viewBox="0 0 170.00 193.00">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto"
+            markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#333"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="#7a7a7a" stroke-width="1" stroke-linejoin="round">
+    <rect x="20.00" y="93.00" width="130.00" height="80.00" rx="8" ry="8" fill="#cfe" stroke="#0a7" stroke-width="1" stroke-dasharray="6 4"/>
+  </g>
+  <g fill="#3a3a3a" font-family="DejaVu Sans, Arial, sans-serif" font-size="12.00">
+    <text x="30.00" y="97.00" fill="#005" text-anchor="start" dominant-baseline="hanging">Group</text>
+  </g>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="50.00,48.00 50.00,70.50 67.38,70.50 67.38,93.00 67.38,113.00 50.00,113.00 50.00,121.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="120.00,48.00 120.00,93.00 120.00,121.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  </g>
+  <g fill="#fff" stroke="none">
+    <rect x="35.16" y="50.25" width="29.67" height="18.00"/>
+  </g>
+  <g fill="#222" font-family="DejaVu Sans, Arial, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
+    <text x="50.00" y="59.25" fill="#0a7">sync</text>
+  </g>
+  <g>
+    <rect x="30.00" y="20.00" width="40.00" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="50.00" y="34.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#0055ff" text-anchor="middle" dominant-baseline="central">A</text>
+    <rect x="100.00" y="20.00" width="40.00" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="120.00" y="34.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">B</text>
+    <rect x="30.00" y="125.00" width="40.00" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="50.00" y="139.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">C</text>
+    <rect x="100.00" y="125.00" width="40.00" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="120.00" y="139.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#a00" text-anchor="middle" dominant-baseline="central">D</text>
+  </g>
+</svg>

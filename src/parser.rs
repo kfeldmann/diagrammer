@@ -74,11 +74,10 @@ fn blank_lines(i: &mut &str) -> ModalResult<()> {
 /// longer identifier). Backtracks otherwise.
 fn keyword(i: &mut &str, mut kw: &'static str) -> ModalResult<()> {
     kw.parse_next(i)?;
-    if let Some(c) = i.chars().next() {
-        if c.is_alphanumeric() || c == '_' || c == '-' {
+    if let Some(c) = i.chars().next()
+        && (c.is_alphanumeric() || c == '_' || c == '-') {
             return Err(ErrMode::Backtrack(ContextError::new()));
         }
-    }
     Ok(())
 }
 
@@ -103,7 +102,7 @@ fn direction_soft(i: &mut &str) -> ModalResult<Direction> {
 fn direction_required(i: &mut &str) -> ModalResult<Direction> {
     match direction_soft(i) {
         Ok(d) => Ok(d),
-        Err(e) if matches!(e, ErrMode::Backtrack(_)) => {
+        Err(ErrMode::Backtrack(_)) => {
             fail_cut("expected direction: top-down, bottom-up, left-right, or right-left")
         }
         Err(e) => Err(e),
@@ -131,7 +130,7 @@ fn attr(i: &mut &str, base: usize) -> ModalResult<RawAttr> {
     let off = here(i, base);
     // Confirm "ident ws =" before committing, so a trailing identifier that
     // isn't an attribute lets the enclosing repetition stop cleanly.
-    let _ = peek(|i: &mut &str| {
+    peek(|i: &mut &str| {
         let _ = lexer::ident(i)?;
         lexer::ws(i)?;
         "=".parse_next(i)?;

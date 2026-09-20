@@ -9,7 +9,11 @@
 //!   referencing it inside a `subgraph` body moves it into that group (this is
 //!   the common pattern).
 //! - Validate attributes strictly: unknown attributes and duplicate
-//!   attributes within a single declaration are errors.
+//!   attributes within a single declaration are errors. As of M7.5 the
+//!   recognized attributes are: nodes `color`/`fill`/`text`, edges
+//!   `color`/`text`, and subgraphs `color`/`fill`/`line`/`text` (where
+//!   `line` is a `solid`/`dotted`/`dashed`/`thick` border style, validated
+//!   against the [`Style`] set).
 //! - Record the subgraph containment tree (each subgraph's `parent` and
 //!   `children`) and carry each subgraph's optional per-subgraph `direction`
 //!   through to layout (M4).
@@ -25,6 +29,7 @@ struct NodeInfo {
     shape: Option<Shape>,
     color: Option<String>,
     fill: Option<String>,
+    text: Option<String>,
     /// Current group: `None` = top level, `Some(idx)` = a subgraph.
     membership: Option<usize>,
     /// Distinct subgraphs this node has been placed in. Length >= 2 is an
@@ -35,6 +40,10 @@ struct NodeInfo {
 struct SubgraphInfo {
     title: Option<String>,
     direction: Option<Direction>,
+    color: Option<String>,
+    fill: Option<String>,
+    line: Option<Style>,
+    text: Option<String>,
     /// Enclosing subgraph index; `None` = top level. Captured when the
     /// subgraph is opened so the resolved model can express nesting.
     parent: Option<usize>,
@@ -77,6 +86,10 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
                 members,
                 children: Vec::new(),
                 parent: sg.parent,
+                color: sg.color.clone(),
+                fill: sg.fill.clone(),
+                line: sg.line,
+                text: sg.text.clone(),
             }
         })
         .collect();
@@ -97,6 +110,7 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
             shape: n.shape.unwrap_or(Shape::Box),
             color: n.color.clone(),
             fill: n.fill.clone(),
+            text: n.text.clone(),
             group: n.membership,
         })
         .collect();
@@ -120,12 +134,30 @@ impl Ctx {
     fn process_subgraph(&mut self, sg: &RawSubgraph, parent: Option<usize>) -> Result<(), Error> {
         // Per-subgraph direction is now honored by layout (M4); the grammar
         // already validates the direction token, so we only carry it through.
-        // No subgraph attributes are defined for v0, so any attribute is unknown.
-        validate_attrs(&sg.attrs, &[], "subgraph")?;
+        // Subgraph style attributes (M7.5): `color` (border), `fill`
+        // (background), `line` (border line style), and `text` (title color).
+        validate_attrs(&sg.attrs, &["color", "fill", "line", "text"], "subgraph")?;
+        let mut color = None;
+        let mut fill = None;
+        let mut line = None;
+        let mut text = None;
+        for attr in &sg.attrs {
+            match attr.name.as_str() {
+                "color" => color = Some(attr.value.clone()),
+                "fill" => fill = Some(attr.value.clone()),
+                "line" => line = Some(parse_line_style(&attr.value, attr.offset)?),
+                "text" => text = Some(attr.value.clone()),
+                _ => unreachable!("validate_attrs ensures only known subgraph attributes"),
+            }
+        }
         let idx = self.subgraphs.len();
         self.subgraphs.push(SubgraphInfo {
             title: sg.title.clone(),
             direction: sg.direction,
+            color,
+            fill,
+            line,
+            text,
             parent,
             offset: sg.offset,
         });
@@ -143,11 +175,14 @@ impl Ctx {
         for (i, e) in nl.edges.iter().enumerate() {
             let from = nl.nodes[i].id.clone();
             let to = nl.nodes[i + 1].id.clone();
-            validate_attrs(&e.attrs, &["color"], "edge")?;
+            validate_attrs(&e.attrs, &["color", "text"], "edge")?;
             let mut color = None;
+            let mut text = None;
             for attr in &e.attrs {
-                if attr.name == "color" {
-                    color = Some(attr.value.clone());
+                match attr.name.as_str() {
+                    "color" => color = Some(attr.value.clone()),
+                    "text" => text = Some(attr.value.clone()),
+                    _ => unreachable!("validate_attrs ensures only known edge attributes"),
                 }
             }
             self.edges.push(Edge {
@@ -156,6 +191,7 @@ impl Ctx {
                 style: e.style.unwrap_or(Style::Solid),
                 label: e.label.clone(),
                 color,
+                text,
             });
         }
         Ok(())
@@ -167,7 +203,7 @@ impl Ctx {
         is_standalone: bool,
         group: Option<usize>,
     ) -> Result<(), Error> {
-        validate_attrs(&occ.attrs, &["color", "fill"], "node")?;
+        validate_attrs(&occ.attrs, &["color", "fill", "text"], "node")?;
         if let Some(&idx) = self.id_index.get(&occ.id) {
             // Existing node: merge and check consistency.
             let info = &mut self.nodes[idx];
@@ -205,6 +241,7 @@ impl Ctx {
                 match attr.name.as_str() {
                     "color" => merge_attr(&mut info.color, &attr.value, attr.offset, &occ.id, "color")?,
                     "fill" => merge_attr(&mut info.fill, &attr.value, attr.offset, &occ.id, "fill")?,
+                    "text" => merge_attr(&mut info.text, &attr.value, attr.offset, &occ.id, "text")?,
                     _ => unreachable!("validate_attrs ensures only known node attributes"),
                 }
             }
@@ -234,10 +271,12 @@ impl Ctx {
             // New node: implicitly declared in the current group.
             let mut color = None;
             let mut fill = None;
+            let mut text = None;
             for attr in &occ.attrs {
                 match attr.name.as_str() {
                     "color" => color = Some(attr.value.clone()),
                     "fill" => fill = Some(attr.value.clone()),
+                    "text" => text = Some(attr.value.clone()),
                     _ => unreachable!("validate_attrs ensures only known node attributes"),
                 }
             }
@@ -252,6 +291,7 @@ impl Ctx {
                 shape: occ.shape,
                 color,
                 fill,
+                text,
                 membership: group,
                 placed_subgraphs,
             });
@@ -281,12 +321,26 @@ fn merge_attr(
     }
 }
 
+/// Parse the value of a subgraph `line` attribute into a [`Style`]. The
+/// value is a quoted string (so `"dashed"`, not the bare contextual keyword
+/// an edge body uses), and must be one of the four style names; anything else
+/// is a resolve error so a typo like `line="wavy"` fails loudly instead of
+/// silently rendering as a solid frame.
+fn parse_line_style(value: &str, offset: usize) -> Result<Style, Error> {
+    Style::from_ident(value).ok_or_else(|| Error::Resolve {
+        offset,
+        message: format!(
+            "subgraph `line` must be one of solid, dotted, dashed, thick; got `{value}`"
+        ),
+    })
+}
+
 /// Validate that every attribute name is allowed for this position and that
 /// no attribute name repeats within a single declaration.
 fn validate_attrs(attrs: &[RawAttr], allowed: &[&str], pos_name: &str) -> Result<(), Error> {
     let mut seen: Vec<String> = Vec::new();
     for attr in attrs {
-        if !allowed.iter().any(|a| *a == attr.name.as_str()) {
+        if !allowed.contains(&attr.name.as_str()) {
             return Err(Error::Resolve {
                 offset: attr.offset,
                 message: format!("unknown {} attribute `{}`", pos_name, attr.name),
@@ -552,5 +606,116 @@ mod tests {
         let (e, line) = err("diagram top-down\nend\n");
         assert_eq!(line, 2);
         assert!(matches!(e, Error::Parse { ref message, .. } if message.contains("unexpected `end`")));
+    }
+
+    // ---- M7.5: subgraph color/fill/line/text and text-color attributes ----
+
+    #[test]
+    fn subgraph_style_attributes_are_parsed() {
+        let d = ok(
+            "diagram top-down\n\
+             subgraph \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
+             a\n\
+             end\n",
+        );
+        assert_eq!(d.subgraphs.len(), 1);
+        let sg = &d.subgraphs[0];
+        assert_eq!(sg.color.as_deref(), Some("#888"));
+        assert_eq!(sg.fill.as_deref(), Some("#eef"));
+        assert_eq!(sg.line, Some(Style::Dashed));
+        assert_eq!(sg.text.as_deref(), Some("#005"));
+    }
+
+    #[test]
+    fn subgraph_line_accepts_all_styles() {
+        for (s, want) in [
+            ("solid", Style::Solid),
+            ("dotted", Style::Dotted),
+            ("dashed", Style::Dashed),
+            ("thick", Style::Thick),
+        ] {
+            let src = format!("diagram top-down\nsubgraph \"S\" line=\"{s}\"\na\nend\n");
+            let d = ok(&src);
+            assert_eq!(d.subgraphs[0].line, Some(want), "line=\"{s}\"");
+        }
+    }
+
+    #[test]
+    fn subgraph_invalid_line_style_is_an_error() {
+        let (e, line) = err(
+            "diagram top-down\n\
+             subgraph \"S\" line=\"wavy\"\n\
+             a\n\
+             end\n",
+        );
+        assert_eq!(line, 2);
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("subgraph `line` must be one of") && message.contains("wavy"))
+        );
+    }
+
+    #[test]
+    fn subgraph_unknown_attribute_is_an_error() {
+        let (e, line) = err(
+            "diagram top-down\n\
+             subgraph \"S\" bogus=\"x\"\n\
+             a\n\
+             end\n",
+        );
+        assert_eq!(line, 2);
+        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("unknown subgraph attribute `bogus`")));
+    }
+
+    #[test]
+    fn subgraph_duplicate_attribute_is_an_error() {
+        let (e, _line) = err(
+            "diagram top-down\n\
+             subgraph \"S\" color=\"x\" color=\"y\"\n\
+             a\n\
+             end\n",
+        );
+        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("duplicate attribute `color`")));
+    }
+
+    #[test]
+    fn node_text_attribute_is_parsed() {
+        let d = ok("diagram top-down\na \"A\" text=\"#005\"\n");
+        assert_eq!(node(&d, "a").text.as_deref(), Some("#005"));
+    }
+
+    #[test]
+    fn edge_text_attribute_is_parsed() {
+        let d = ok("diagram top-down\na -- \"sync\" text=\"#005\" --> b\n");
+        assert_eq!(d.edges[0].text.as_deref(), Some("#005"));
+        assert_eq!(d.edges[0].label.as_deref(), Some("sync"));
+    }
+
+    #[test]
+    fn node_text_conflict_on_redeclaration_is_an_error() {
+        let (e, line) = err("diagram top-down\na text=\"#005\"\na text=\"#006\"\n");
+        assert_eq!(line, 3);
+        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("conflicting value for `text`")));
+    }
+
+    #[test]
+    fn node_text_redeclared_consistently_is_ok() {
+        let d = ok("diagram top-down\na text=\"#005\"\na text=\"#005\"\n");
+        assert_eq!(node(&d, "a").text.as_deref(), Some("#005"));
+    }
+
+    #[test]
+    fn subgraph_style_attrs_do_not_perturb_structure() {
+        // Style attributes are render-only; they must not change the resolved
+        // structural fields (direction, members, containment).
+        let d = ok(
+            "diagram top-down\n\
+             subgraph left-right \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
+             a\n\
+             b\n\
+             end\n",
+        );
+        assert_eq!(d.subgraphs[0].direction, Some(Direction::LeftRight));
+        assert_eq!(d.subgraphs[0].members, ["a", "b"]);
     }
 }

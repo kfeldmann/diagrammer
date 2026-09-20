@@ -1,23 +1,40 @@
-//! SVG output (milestones 3 and 6).
+//! SVG output (milestones 3, 6, 7, and 7.5).
 //!
 //! Turns a resolved [`Diagram`] plus a [`Layout`] into a self-contained,
 //! static SVG document: rounded-rect boxes or cylinders with centered labels,
-//! edges as direct (non-orthogonal) polylines carrying an auto-oriented
+//! edges as orthogonal (right-angle) polylines carrying an auto-oriented
 //! arrowhead, and — as of M6 — per-node `color`/`fill`, per-edge `color`,
 //! the `dotted`/`dashed`/`thick` line styles, the `cylinder` shape, and edge
-//! labels placed at the midpoint of each edge. The document is GitHub-
+//! labels placed at the midpoint of each edge's longest segment. M7.5 adds
+//! per-subgraph frame `color`/`fill`/`line` (border style) and a `text`
+//! text-color attribute on node labels, edge labels, and subgraph titles.
+//! The document is GitHub-
 //! renderable — no scripts, no external references, no CSS dependencies, only
 //! inline attributes.
+//!
+//! The orthogonal edge geometry (M7) is produced by the layout engine; the
+//! renderer just strokes each edge's waypoint polyline as given. The shared
+//! `orient="auto"` arrowhead orients itself along the (now axis-aligned)
+//! final segment, so the arrow points straight at the target with no
+//! per-edge marker work.
 //!
 //! One arrowhead `<marker>` is emitted per distinct edge color, each with a
 //! hard-coded `fill`, so a colored edge's arrowhead matches its line. This is
 //! more portable than relying on `currentColor`/`context-stroke` inheriting
 //! from the referencing element, which SVG markers don't do reliably across
-//! renderers (including GitHub's). Edge labels are centered on the
-//! edge's arc-length midpoint with a white knockout rect behind them, so the
-//! line reads as broken behind the text (the classic Graphviz look).
+//! renderers (including GitHub's). Edge labels are centered on the midpoint of
+//! the longest segment of their (orthogonal) polyline — the long straight run
+//! of the route, not the arc-length midpoint (which can land on or near a
+//! bend) — with a white knockout rect behind them, so the line reads as broken
+//! behind the text (the classic Graphviz look).
+//!
+//! Each edge's line is shortened at the target end by [`ARROW_BACKOFF`] so the
+//! stroke tucks under its same-color arrowhead: a thick line's round cap
+//! would otherwise ride past the arrowhead's tip and read as a blunt, square
+//! arrow. The marker's `refX` is reduced by the same amount so the tip still
+//! lands on the target node's boundary.
 
-use crate::ast::{Diagram, Edge, Node, Shape, Style};
+use crate::ast::{Diagram, Edge, Node, Shape, Style, Subgraph};
 use crate::layout::{EdgePath, Layout, NodeRect, SubgraphRect};
 use crate::text;
 
@@ -33,6 +50,15 @@ const RADIUS: f32 = 6.0;
 const EDGE_WIDTH: f32 = 1.5;
 /// Heavier stroke width for `thick` edges.
 const THICK_WIDTH: f32 = 3.0;
+/// How far an edge's line ends short of its arrowhead tip, so the stroke
+/// tucks under the (same-color) arrowhead instead of poking past it. A thick
+/// line's round cap is half the stroke wide and bulges that far past the line
+/// end, so this is sized to clear the widest stroke (`THICK_WIDTH` plus its
+/// cap) with margin; the same-color arrowhead fill makes the gap seamless for
+/// thinner strokes. The arrowhead `<marker>`'s `refX` is reduced by this same
+/// amount (see [`defs`]) so the tip still lands on the target node's
+/// boundary.
+const ARROW_BACKOFF: f32 = 4.0;
 /// Optical vertical offset (downward) for a cylinder's label, in user units.
 /// A cylinder's top edge (the lid's front arc) and bottom edge (the base's
 /// front arc) both bow downward in the middle, so a label centered on the
@@ -90,7 +116,7 @@ pub fn render_svg(diagram: &Diagram, layout: &Layout) -> String {
     // entirely when there are no subgraphs, keeping subgraph-free output
     // byte-identical to the pre-M4 renderer.
     if !layout.subgraphs.is_empty() {
-        s.push_str(&render_subgraphs(&layout.subgraphs));
+        s.push_str(&render_subgraphs(&diagram.subgraphs, &layout.subgraphs));
     }
 
     // Edges first. Stroke color, width, and dash pattern are per-edge (M6:
@@ -140,10 +166,15 @@ pub fn render_svg(diagram: &Diagram, layout: &Layout) -> String {
 /// which SVG markers don't do reliably across renderers (including GitHub's).
 fn defs(edge_color_ids: &[(String, String)]) -> String {
     let mut s = String::from("  <defs>\n");
+    // The marker's tip sits `refX` ahead of the line end. Reducing refX from
+    // the tip (10) by [`ARROW_BACKOFF`] offsets the line shortening done in
+    // [`render_edge`], so the arrowhead tip still lands on the target node's
+    // boundary while the line tucks under it.
+    let ref_x = fmt(10.0 - ARROW_BACKOFF);
     for (color, id) in edge_color_ids {
         let color = escape_xml(color);
         s.push_str(&format!(
-            "    <marker id=\"{id}\" viewBox=\"0 0 10 10\" refX=\"10\" refY=\"5\"\n\
+            "    <marker id=\"{id}\" viewBox=\"0 0 10 10\" refX=\"{ref_x}\" refY=\"5\"\n\
              \x20           markerWidth=\"10\" markerHeight=\"10\" orient=\"auto\"\n\
              \x20           markerUnits=\"userSpaceOnUse\">\n\
              \x20     <path d=\"M0,0 L10,5 L0,10 Z\" fill=\"{color}\"/>\n\
@@ -197,43 +228,97 @@ fn marker_id_for(color: &str, existing: &[(String, String)]) -> String {
     id
 }
 
-/// The subgraph frames: one rounded, transparent rectangle per subgraph
-/// with its title set into the top-left of the frame. Drawn before edges and
-/// nodes so contained boxes and crossing edges render on top of the border.
-fn render_subgraphs(subgraphs: &[SubgraphRect]) -> String {
+/// The subgraph frames: one rounded rectangle per subgraph with its title
+/// set into the top-left of the frame. Drawn before edges and nodes so
+/// contained boxes and crossing edges render on top of the border.
+///
+/// `subgraphs` (the resolved [`Subgraph`]s, carrying style) and `rects`
+/// (the laid-out [`SubgraphRect`]s, carrying geometry) correspond by index
+/// (declaration order), so they're zipped — the same pattern the renderer
+/// uses for nodes and edges. A frame's `color` (border), `fill` (background),
+/// `line` (border style), and `text` (title color) are honored (M7.5); a
+/// frame with none of these renders byte-identically to the pre-M7.5 output
+/// (the group's default stroke/width stands, and the default title color is
+/// inherited from the group), so subgraph-free styling never perturbs
+/// existing snapshots.
+fn render_subgraphs(subgraphs: &[Subgraph], rects: &[SubgraphRect]) -> String {
     let mut s = String::new();
+    // The group sets the default frame stroke/width (the M4 defaults); each
+    // frame's <rect> overrides fill/stroke/width/dasharray with its own
+    // `color`/`fill`/`line` (M7.5). `fill="none"` keeps a default subgraph
+    // transparent so edges routed behind it stay visible.
     s.push_str(&format!(
         "  <g fill=\"none\" stroke=\"{FRAME_STROKE}\" stroke-width=\"{FRAME_STROKE_WIDTH}\" stroke-linejoin=\"round\">\n"
     ));
-    for sg in subgraphs {
+    for (sg, r) in subgraphs.iter().zip(rects.iter()) {
+        let stroke = escape_xml(sg.color.as_deref().unwrap_or(FRAME_STROKE));
+        let fill = match &sg.fill {
+            Some(f) => escape_xml(f),
+            None => "none".to_string(),
+        };
+        let (width, dash) = frame_stroke(sg.line);
         s.push_str(&format!(
-            "    <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"none\" stroke=\"{FRAME_STROKE}\" stroke-width=\"{FRAME_STROKE_WIDTH}\"/>\n",
-            fmt(sg.x),
-            fmt(sg.y),
-            fmt(sg.w),
-            fmt(sg.h),
+            "    <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{}\"",
+            fmt(r.x),
+            fmt(r.y),
+            fmt(r.w),
+            fmt(r.h),
             FRAME_RADIUS,
             FRAME_RADIUS,
+            width,
         ));
+        if let Some(d) = dash {
+            s.push_str(&format!(" stroke-dasharray=\"{d}\""));
+        }
+        s.push_str("/>\n");
     }
     s.push_str("  </g>\n");
-    // Titles ride on top of the frame border.
+    // Titles ride on top of the frame border. The group sets the default
+    // title color; a subgraph with a `text` attribute overrides it on its own
+    // <text> so the default (no `text`) title stays byte-identical.
     s.push_str(&format!(
         "  <g fill=\"{FRAME_TITLE_FILL}\" font-family=\"DejaVu Sans, Arial, sans-serif\" font-size=\"{}\">\n",
         fmt(FRAME_TITLE_SIZE)
     ));
-    for sg in subgraphs {
+    for (sg, r) in subgraphs.iter().zip(rects.iter()) {
         if let Some(title) = &sg.title {
-            s.push_str(&format!(
-                "    <text x=\"{}\" y=\"{}\" text-anchor=\"start\" dominant-baseline=\"hanging\">{}</text>\n",
-                fmt(sg.x + FRAME_TITLE_X),
-                fmt(sg.y + FRAME_TITLE_Y),
-                escape_xml(title),
-            ));
+            if let Some(c) = &sg.text {
+                s.push_str(&format!(
+                    "    <text x=\"{}\" y=\"{}\" fill=\"{}\" text-anchor=\"start\" dominant-baseline=\"hanging\">{}</text>\n",
+                    fmt(r.x + FRAME_TITLE_X),
+                    fmt(r.y + FRAME_TITLE_Y),
+                    escape_xml(c),
+                    escape_xml(title),
+                ));
+            } else {
+                s.push_str(&format!(
+                    "    <text x=\"{}\" y=\"{}\" text-anchor=\"start\" dominant-baseline=\"hanging\">{}</text>\n",
+                    fmt(r.x + FRAME_TITLE_X),
+                    fmt(r.y + FRAME_TITLE_Y),
+                    escape_xml(title),
+                ));
+            }
         }
     }
     s.push_str("  </g>\n");
     s
+}
+
+/// Map a subgraph frame's optional `line` style (M7.5) to its
+/// (stroke-width, optional dash pattern). `None` (or `solid`) is the default
+/// plain frame; `dotted`/`dashed` reuse the same dash patterns as edges;
+/// `thick` doubles the base frame stroke width (mirroring the edge
+/// convention where `thick` doubles the base edge width). Widths are emitted
+/// via plain `Display` (not [`fmt`]) so the default width renders as `"1"`,
+/// byte-identical to the pre-M7.5 frame output.
+fn frame_stroke(style: Option<Style>) -> (f32, Option<&'static str>) {
+    match style {
+        None | Some(Style::Solid) => (FRAME_STROKE_WIDTH, None),
+        // A 1-on dash with round caps renders as a row of round dots.
+        Some(Style::Dotted) => (FRAME_STROKE_WIDTH, Some("1 4")),
+        Some(Style::Dashed) => (FRAME_STROKE_WIDTH, Some("6 4")),
+        Some(Style::Thick) => (2.0 * FRAME_STROKE_WIDTH, None),
+    }
 }
 
 /// One edge as a polyline through its waypoints, with an arrowhead at the end.
@@ -241,15 +326,22 @@ fn render_subgraphs(subgraphs: &[SubgraphRect]) -> String {
 /// (`dotted`/`dashed`/`thick`) and the optional `color` attribute. The
 /// arrowhead is the per-color marker `marker_id` (one marker per distinct
 /// edge color is emitted in `<defs>`), so a colored edge's arrowhead matches
-/// its line.
+/// its line. The final waypoint is pulled back by [`ARROW_BACKOFF`] along the
+/// last segment so the line ends under the arrowhead rather than poking past
+/// its tip (most visible on `thick` edges); the marker's reduced `refX` keeps
+/// the tip on the target node's boundary.
 fn render_edge(s: &mut String, edge: &Edge, path: &EdgePath, marker_id: &str) {
     if path.points.is_empty() {
         return;
     }
     let color = escape_xml(edge.color.as_deref().unwrap_or(STROKE));
     let (width, dash) = edge_stroke(edge.style);
+    // The line ends `ARROW_BACKOFF` short of the last waypoint so the stroke
+    // tucks under the arrowhead (drawn at the original tip by the marker,
+    // whose `refX` is reduced by the same amount) instead of poking past it.
+    let points = shortened_points(path);
     let mut pts = String::new();
-    for (i, (x, y)) in path.points.iter().enumerate() {
+    for (i, (x, y)) in points.iter().enumerate() {
         if i > 0 {
             pts.push(' ');
         }
@@ -267,6 +359,31 @@ fn render_edge(s: &mut String, edge: &Edge, path: &EdgePath, marker_id: &str) {
     s.push_str(&format!(" marker-end=\"url(#{marker_id})\"/>\n"));
 }
 
+/// The edge's waypoints with the final point pulled back by [`ARROW_BACKOFF`]
+/// along the last segment, so the line ends under the arrowhead (which the
+/// marker draws at the original tip) instead of poking past it. Clamped to the
+/// last segment's length so a pathologically short final segment can't flip
+/// backwards — with the layout's minimum edge segment (~8, a cross-boundary
+/// frame fan) that clamp never triggers in practice, since `ARROW_BACKOFF` is
+/// well below it.
+fn shortened_points(path: &EdgePath) -> Vec<(f32, f32)> {
+    let mut pts = path.points.clone();
+    let n = pts.len();
+    if n >= 2 {
+        let (px, py) = pts[n - 2];
+        let (lx, ly) = pts[n - 1];
+        let dx = lx - px;
+        let dy = ly - py;
+        let len = dx.hypot(dy);
+        if len > 1e-6 {
+            let back = ARROW_BACKOFF.min(len - 1e-3).max(0.0);
+            pts[n - 1].0 = lx - back * dx / len;
+            pts[n - 1].1 = ly - back * dy / len;
+        }
+    }
+    pts
+}
+
 /// Map an edge [`Style`] to its (stroke-width, optional dash pattern).
 fn edge_stroke(style: Style) -> (f32, Option<&'static str>) {
     match style {
@@ -278,16 +395,20 @@ fn edge_stroke(style: Style) -> (f32, Option<&'static str>) {
     }
 }
 
-/// Edge labels: each is centered on the midpoint of its polyline (by arc
-/// length), with a white knockout rect behind the text so the edge line reads
-/// as broken behind the label. Drawn after the edges and before the nodes.
+/// Edge labels: each is centered on the midpoint of the longest segment of
+/// its polyline (the long straight run of an orthogonal route — not the
+/// arc-length midpoint, which can land on or near a bend), with a white
+/// knockout rect behind the text so the edge line reads as broken behind the
+/// label. Drawn after the edges and before the nodes. The midpoint is taken
+/// from the arrow-shortened (rendered) points so the label centers on the
+/// line actually drawn.
 fn render_edge_labels(s: &mut String, labeled: &[(&Edge, &EdgePath)]) {
     // Knockout rects first (their own group), then the text (another group),
     // so no rect can cover a sibling label's text.
     s.push_str(&format!("  <g fill=\"{LABEL_KNOCKOUT}\" stroke=\"none\">\n"));
     for (edge, path) in labeled {
         let label = edge.label.as_deref().unwrap();
-        let (mx, my) = point_at_fraction(&path.points, 0.5);
+        let (mx, my) = longest_segment_midpoint(&shortened_points(path));
         let m = text::measure(label, EDGE_LABEL_SIZE);
         let rw = m.width + 2.0 * LABEL_PAD;
         let rh = m.height + 2.0 * LABEL_PAD;
@@ -306,52 +427,61 @@ fn render_edge_labels(s: &mut String, labeled: &[(&Edge, &EdgePath)]) {
     ));
     for (edge, path) in labeled {
         let label = edge.label.as_deref().unwrap();
-        let (mx, my) = point_at_fraction(&path.points, 0.5);
-        s.push_str(&format!(
-            "    <text x=\"{}\" y=\"{}\">{}</text>\n",
-            fmt(mx),
-            fmt(my),
-            escape_xml(label),
-        ));
+        let (mx, my) = longest_segment_midpoint(&shortened_points(path));
+        if let Some(c) = &edge.text {
+            s.push_str(&format!(
+                "    <text x=\"{}\" y=\"{}\" fill=\"{}\">{}</text>\n",
+                fmt(mx),
+                fmt(my),
+                escape_xml(c),
+                escape_xml(label),
+            ));
+        } else {
+            s.push_str(&format!(
+                "    <text x=\"{}\" y=\"{}\">{}</text>\n",
+                fmt(mx),
+                fmt(my),
+                escape_xml(label),
+            ));
+        }
     }
     s.push_str("  </g>\n");
 }
 
-/// The point at `frac` (0..1) of the arc length along a polyline. Used to
-/// place edge labels at the visual midpoint of their edge.
-fn point_at_fraction(points: &[(f32, f32)], frac: f32) -> (f32, f32) {
+/// The midpoint of the longest segment of a polyline (by Euclidean length),
+/// with ties going to the first (lowest-index) such segment. Used to place an
+/// edge label on the most visually significant segment of an orthogonal
+/// route — the long straight run — rather than at the arc-length midpoint,
+/// which can land on or near a bend (e.g. the "T" where a fork's branches
+/// merge into a shared trunk) and read as off-center. For a single-segment
+/// (straight) edge this is just that segment's midpoint.
+///
+/// Pass the *rendered* (arrow-shortened) points (see [`shortened_points`]) so
+/// the label centers on the line actually drawn: a straight edge's line is
+/// pulled back by [`ARROW_BACKOFF`] at the target, so centering on the
+/// unshortened path would sit the label half-of-that closer to the target
+/// than the visible line's true middle.
+fn longest_segment_midpoint(points: &[(f32, f32)]) -> (f32, f32) {
     if points.is_empty() {
         return (0.0, 0.0);
     }
     if points.len() == 1 {
         return points[0];
     }
-    let mut total = 0.0_f32;
-    let mut lens: Vec<f32> = Vec::with_capacity(points.len() - 1);
-    for w in points.windows(2) {
+    let mut best_i = 0usize;
+    let mut best_len = -1.0_f32;
+    for (i, w) in points.windows(2).enumerate() {
         let (ax, ay) = w[0];
         let (bx, by) = w[1];
-        let l = (bx - ax).hypot(by - ay).max(1e-6);
-        lens.push(l);
-        total += l;
-    }
-    let target = total * frac;
-    let mut acc = 0.0_f32;
-    for (i, &l) in lens.iter().enumerate() {
-        let prev = acc;
-        acc += l;
-        if acc >= target || i == lens.len() - 1 {
-            let (ax, ay) = points[i];
-            let (bx, by) = points[i + 1];
-            let t = if l > 1e-6 {
-                ((target - prev) / l).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            return (ax + t * (bx - ax), ay + t * (by - ay));
+        let l = (bx - ax).hypot(by - ay);
+        if l > best_len {
+            best_len = l;
+            best_i = i;
         }
     }
-    *points.last().unwrap()
+    let (ax, ay) = points[best_i];
+    let (bx, by) = points[best_i + 1];
+    ((ax + bx) * 0.5, (ay + by) * 0.5)
 }
 
 /// One node: a rounded rect (or cylinder) plus a centered label. The node's
@@ -360,6 +490,7 @@ fn point_at_fraction(points: &[(f32, f32)], frac: f32) -> (f32, f32) {
 fn render_node(s: &mut String, node: &Node, rect: &NodeRect) {
     let stroke = escape_xml(node.color.as_deref().unwrap_or(STROKE));
     let fill = escape_xml(node.fill.as_deref().unwrap_or(FILL));
+    let ink = escape_xml(node.text.as_deref().unwrap_or(INK));
     let cx = rect.x + rect.w / 2.0;
     let cy = rect.y + rect.h / 2.0;
     match node.shape {
@@ -387,7 +518,7 @@ fn render_node(s: &mut String, node: &Node, rect: &NodeRect) {
         Shape::Box => cy,
     };
     s.push_str(&format!(
-        "    <text x=\"{}\" y=\"{}\" font-family=\"DejaVu Sans, Arial, sans-serif\" font-size=\"{}\" fill=\"{INK}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
+        "    <text x=\"{}\" y=\"{}\" font-family=\"DejaVu Sans, Arial, sans-serif\" font-size=\"{}\" fill=\"{ink}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
         fmt(cx),
         fmt(label_y),
         crate::layout::FONT_SIZE,
@@ -794,7 +925,7 @@ mod tests {
         let svg = render("diagram top-down\na -- color=\"#888\" --> b\nc -- color=\"#888\" --> d\n");
         // default `arrow` + one `arrow-888` only.
         assert_eq!(svg.matches("<marker").count(), 2);
-        let e1 = svg.lines().filter(|l| l.contains("<polyline")).nth(0).unwrap();
+        let e1 = svg.lines().find(|l| l.contains("<polyline")).unwrap();
         let e2 = svg.lines().filter(|l| l.contains("<polyline")).nth(1).unwrap();
         assert!(e1.contains("url(#arrow-888)"));
         assert!(e2.contains("url(#arrow-888)"));
@@ -825,6 +956,73 @@ mod tests {
     }
 
     #[test]
+    fn edge_line_ends_short_of_arrowhead_tip() {
+        // The line is pulled back by `ARROW_BACKOFF` along its last segment so
+        // it tucks under the arrowhead (a thick stroke's round cap would
+        // otherwise poke past the tip). For a top-down a->b edge the last
+        // segment is vertical, so the rendered polyline's final point sits
+        // `ARROW_BACKOFF` above b's top edge.
+        let raw = parser::parse_diagram("diagram top-down\na-->b\n").unwrap();
+        let d = resolve::resolve(&raw).unwrap();
+        let l = layout::layout(&d);
+        let svg = render_svg(&d, &l);
+        let b = l.nodes.iter().find(|n| n.id == "b").unwrap();
+        let line = svg.lines().find(|ln| ln.contains("<polyline")).unwrap();
+        let pts_attr = line.split("points=\"").nth(1).unwrap().split('"').next().unwrap();
+        let last = pts_attr.split(' ').next_back().unwrap();
+        let mut it = last.split(',');
+        let lx: f32 = it.next().unwrap().parse().unwrap();
+        let ly: f32 = it.next().unwrap().parse().unwrap();
+        let cx = b.x + b.w / 2.0;
+        assert!((lx - cx).abs() < 1e-2, "last x {lx} != b center {cx}");
+        assert!(
+            (ly - (b.y - ARROW_BACKOFF)).abs() < 1e-2,
+            "line should end {ARROW_BACKOFF} above b's top ({:.2}), got y={ly}",
+            b.y - ARROW_BACKOFF
+        );
+    }
+
+    #[test]
+    fn arrow_marker_refx_offsets_line_shortening() {
+        // The marker's refX is reduced from the tip (10) by `ARROW_BACKOFF` so
+        // the arrowhead tip still lands on the node boundary while the line
+        // tucks under it.
+        let svg = render("diagram top-down\na-->b\n");
+        let want = fmt(10.0 - ARROW_BACKOFF);
+        assert!(
+            svg.contains(&format!("refX=\"{want}\"")),
+            "marker refX should be {want} (10 - ARROW_BACKOFF):\n{svg}"
+        );
+        assert!(!svg.contains("refX=\"10\""), "refX should not be the bare tip 10");
+    }
+
+    #[test]
+    fn shortened_points_pulls_back_and_clamps() {
+        use crate::layout::EdgePath;
+        // Normal segment: pulled back by ARROW_BACKOFF along the segment.
+        let p = shortened_points(&EdgePath {
+            from: "a".into(),
+            to: "b".into(),
+            points: vec![(0.0, 0.0), (0.0, 100.0)],
+        });
+        assert_eq!(p[1], (0.0, 100.0 - ARROW_BACKOFF));
+        // Segment shorter than ARROW_BACKOFF: clamped, never flips backwards.
+        let p = shortened_points(&EdgePath {
+            from: "a".into(),
+            to: "b".into(),
+            points: vec![(0.0, 0.0), (0.0, 1.0)],
+        });
+        assert!(p[1].1 > 0.0 && p[1].1 < 1.0, "clamped end out of bounds: {:?}", p[1]);
+        // Single point: unchanged.
+        let p = shortened_points(&EdgePath {
+            from: "a".into(),
+            to: "b".into(),
+            points: vec![(5.0, 5.0)],
+        });
+        assert_eq!(p, vec![(5.0, 5.0)]);
+    }
+
+    #[test]
     fn edge_label_is_rendered_with_knockout() {
         let svg = render("diagram top-down\na -- \"sync\" --> b\n");
         assert!(svg.contains(">sync</text>"), "edge label text missing");
@@ -846,13 +1044,97 @@ mod tests {
     }
 
     #[test]
-    fn point_at_fraction_endpoints() {
-        assert_eq!(point_at_fraction(&[], 0.5), (0.0, 0.0));
-        assert_eq!(point_at_fraction(&[(1.0, 2.0)], 0.5), (1.0, 2.0));
-        // Midpoint of a single segment.
-        assert_eq!(point_at_fraction(&[(0.0, 0.0), (10.0, 0.0)], 0.5), (5.0, 0.0));
-        // Halfway along a two-segment path of equal length lands at the joint.
-        assert_eq!(point_at_fraction(&[(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)], 0.5), (10.0, 0.0));
+    fn longest_segment_midpoint_placement() {
+        // Empty / single-point degenerate cases.
+        assert_eq!(longest_segment_midpoint(&[]), (0.0, 0.0));
+        assert_eq!(longest_segment_midpoint(&[(1.0, 2.0)]), (1.0, 2.0));
+        // A single segment: its midpoint.
+        assert_eq!(
+            longest_segment_midpoint(&[(0.0, 0.0), (10.0, 0.0)]),
+            (5.0, 0.0)
+        );
+        // A Z-route: the longest (horizontal) segment's midpoint, NOT the
+        // arc-length midpoint (which would sit just past the first bend).
+        //   seg0 vertical 10, seg1 horizontal 40, seg2 vertical 10.
+        let z = vec![(0.0, 0.0), (0.0, 10.0), (40.0, 10.0), (40.0, 20.0)];
+        assert_eq!(longest_segment_midpoint(&z), (20.0, 10.0));
+        // Ties go to the first (lowest-index) longest segment.
+        //   two segments of equal length 10.
+        let tied = vec![(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
+        assert_eq!(longest_segment_midpoint(&tied), (5.0, 0.0));
+    }
+
+    #[test]
+    fn edge_label_centers_on_longest_segment_of_orthogonal_route() {
+        // Regression for the infra "events" label: it used to sit at the
+        // arc-length midpoint, which lands on the "T" where the two
+        // api->queue edges merge into a shared horizontal trunk. It must
+        // instead sit at the midpoint of that trunk (the longest segment),
+        // centered between the down-edge from the cluster and the down-edge
+        // into the queue.
+        let raw = parser::parse_diagram(include_str!("../../examples/infra.mmd")).unwrap();
+        let d = resolve::resolve(&raw).unwrap();
+        let l = layout::layout(&d);
+        let svg = render_svg(&d, &l);
+        let idx = d
+            .edges
+            .iter()
+            .position(|e| e.label.as_deref() == Some("events"))
+            .unwrap();
+        let path = &l.edges[idx];
+        let pts = shortened_points(path);
+        // Locate the longest segment and confirm it's the horizontal trunk.
+        let (mut best_i, mut best_len) = (0usize, -1.0_f32);
+        for (i, w) in pts.windows(2).enumerate() {
+            let len = (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1);
+            if len > best_len {
+                best_len = len;
+                best_i = i;
+            }
+        }
+        let (sx, sy) = pts[best_i];
+        let (ex, ey) = pts[best_i + 1];
+        assert!((sy - ey).abs() < 1e-3, "longest segment should be horizontal");
+        assert!(
+            best_len > 50.0,
+            "longest segment should be the long trunk, got len {best_len}"
+        );
+        let want_x = (sx + ex) / 2.0;
+        let text = svg.lines().find(|t| t.contains(">events</text>")).unwrap();
+        assert!(
+            text.contains(&format!("x=\"{}\"", fmt(want_x))),
+            "events label x should be trunk midpoint {want_x}: {text}"
+        );
+    }
+
+    #[test]
+    fn edge_label_on_straight_edge_centers_on_visible_line() {
+        // A straight (single-segment) edge's label must sit at the midpoint of
+        // the *rendered* line — which is shortened by ARROW_BACKOFF at the
+        // target — not the midpoint of the full layout segment, otherwise the
+        // label reads as shifted toward the target. Checks the infra
+        // db->replica "replication" edge.
+        let raw = parser::parse_diagram(include_str!("../../examples/infra.mmd")).unwrap();
+        let d = resolve::resolve(&raw).unwrap();
+        let l = layout::layout(&d);
+        let svg = render_svg(&d, &l);
+        let idx = d
+            .edges
+            .iter()
+            .position(|e| e.label.as_deref() == Some("replication"))
+            .unwrap();
+        let path = &l.edges[idx];
+        let pts = shortened_points(path);
+        assert_eq!(pts.len(), 2, "replication should be a single-segment edge");
+        let want_y = (pts[0].1 + pts[1].1) / 2.0;
+        let text = svg
+            .lines()
+            .find(|t| t.contains(">replication</text>"))
+            .unwrap();
+        assert!(
+            text.contains(&format!("y=\"{}\"", fmt(want_y))),
+            "replication label y should be visible-line midpoint {want_y}: {text}"
+        );
     }
 
     // ---- Golden snapshots (lock the output) ----
@@ -919,6 +1201,180 @@ mod tests {
                  src -- dotted \"polls\" --> db\n\
                  src -- dashed color=\"#888\" --> cache\n\
                  db -- thick \"replication\" color=\"#888\" --> sink\n",
+            ),
+        );
+    }
+
+    // ---- M7: orthogonal routing in the SVG output ----
+
+    /// Parse the `points="..."` of a `<polyline>` into a list of `(x, y)`.
+    fn parse_polyline_points(line: &str) -> Vec<(f32, f32)> {
+        let pts = line
+            .split("points=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
+        pts.split(' ')
+            .map(|p| {
+                let mut it = p.split(',');
+                (
+                    it.next().unwrap().parse::<f32>().unwrap(),
+                    it.next().unwrap().parse::<f32>().unwrap(),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn svg_edge_polylines_are_orthogonal() {
+        // Every edge <polyline> in a rendered diagram must be axis-aligned
+        // (M7), including the cross-boundary edges into the K8s subgraph.
+        let svg = render(include_str!("../../examples/infra.mmd"));
+        let polylines: Vec<&str> = svg.lines().filter(|l| l.contains("<polyline")).collect();
+        assert!(!polylines.is_empty(), "infra should have edge polylines");
+        for line in &polylines {
+            let pts = parse_polyline_points(line);
+            assert!(pts.len() >= 2, "polyline has < 2 points: {line}");
+            for w in pts.windows(2) {
+                let (ax, ay) = w[0];
+                let (bx, by) = w[1];
+                assert!(
+                    (ax - bx).abs() < 1e-2 || (ay - by).abs() < 1e-2,
+                    "non-orthogonal segment in polyline: {line}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn arrow_marker_is_auto_oriented() {
+        // The arrowhead marker keeps `orient="auto"` so the axis-aligned
+        // final segment orients the arrow along a clean cardinal direction.
+        let svg = render("diagram top-down\na-->b\n");
+        assert!(svg.contains("orient=\"auto\""));
+    }
+
+    // ---- M7.5: subgraph color/fill/line/text and text-color rendering ----
+
+    /// The frame `<rect>` for the (single) subgraph in a diagram. Frames use
+    /// `rx="8"` (FRAME_RADIUS); node boxes use `rx="6"` (RADIUS), so this
+    /// picks the frame out from any node boxes.
+    fn frame_rect(svg: &str) -> &str {
+        svg.lines()
+            .find(|l| l.contains("<rect") && l.contains("rx=\"8\""))
+            .unwrap_or_else(|| panic!("no subgraph frame <rect rx=\"8\"> in:\n{svg}"))
+    }
+
+    #[test]
+    fn subgraph_color_fill_line_text_are_rendered() {
+        let svg = render(
+            "diagram top-down\n\
+             subgraph \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
+             a\n\
+             end\n",
+        );
+        let frame = frame_rect(&svg);
+        assert!(frame.contains("fill=\"#eef\""), "subgraph fill not rendered: {frame}");
+        assert!(frame.contains("stroke=\"#888\""), "subgraph border color not rendered: {frame}");
+        assert!(frame.contains("stroke-dasharray=\"6 4\""), "dashed subgraph line not rendered: {frame}");
+        let title = svg.lines().find(|l| l.contains(">S</text>")).unwrap();
+        assert!(title.contains("fill=\"#005\""), "subgraph title text color not rendered: {title}");
+    }
+
+    #[test]
+    fn subgraph_line_styles_render() {
+        // thick doubles the frame stroke width (1 -> 2) and stays solid.
+        let svg = render("diagram top-down\nsubgraph \"S\" line=\"thick\"\na\nend\n");
+        let frame = frame_rect(&svg);
+        assert!(frame.contains("stroke-width=\"2\""), "thick frame not wider: {frame}");
+        assert!(!frame.contains("stroke-dasharray"), "thick frame should not be dashed: {frame}");
+        // dotted reuses the same 1-4 dash as dotted edges.
+        let svg = render("diagram top-down\nsubgraph \"S\" line=\"dotted\"\na\nend\n");
+        let frame = frame_rect(&svg);
+        assert!(frame.contains("stroke-dasharray=\"1 4\""), "dotted frame: {frame}");
+        // solid is explicit but equivalent to the default.
+        let svg = render("diagram top-down\nsubgraph \"S\" line=\"solid\"\na\nend\n");
+        let frame = frame_rect(&svg);
+        assert!(!frame.contains("stroke-dasharray"), "solid frame should have no dash: {frame}");
+        assert!(frame.contains("stroke-width=\"1\""), "solid frame width: {frame}");
+    }
+
+    #[test]
+    fn default_subgraph_frame_is_unstyled() {
+        // A subgraph with no style attributes renders byte-identically to the
+        // pre-M7.5 frame: transparent fill, default border, default width,
+        // no dash, and a title that inherits the group's default fill.
+        let svg = render("diagram top-down\nsubgraph \"S\"\na\nend\n");
+        let frame = frame_rect(&svg);
+        assert!(frame.contains("fill=\"none\""), "{frame}");
+        assert!(frame.contains("stroke=\"#7a7a7a\""), "{frame}");
+        assert!(frame.contains("stroke-width=\"1\""), "{frame}");
+        assert!(!frame.contains("stroke-dasharray"), "{frame}");
+        let title = svg.lines().find(|l| l.contains(">S</text>")).unwrap();
+        assert!(!title.contains("fill="), "default title should inherit the group fill: {title}");
+    }
+
+    #[test]
+    fn node_text_color_is_rendered() {
+        let svg = render("diagram top-down\na \"A\" text=\"#0055ff\"\n");
+        let text = svg.lines().find(|l| l.contains(">A</text>")).unwrap();
+        assert!(text.contains("fill=\"#0055ff\""), "node text color not rendered: {text}");
+    }
+
+    #[test]
+    fn default_node_text_color_is_ink() {
+        let svg = render("diagram top-down\na \"A\"\n");
+        let text = svg.lines().find(|l| l.contains(">A</text>")).unwrap();
+        assert!(text.contains("fill=\"#222\""), "default node text should be INK #222: {text}");
+    }
+
+    #[test]
+    fn edge_text_color_is_rendered() {
+        let svg = render("diagram top-down\na -- \"sync\" text=\"#005\" --> b\n");
+        let text = svg.lines().find(|l| l.contains(">sync</text>")).unwrap();
+        assert!(text.contains("fill=\"#005\""), "edge label text color not rendered: {text}");
+    }
+
+    #[test]
+    fn default_edge_label_text_color_is_ink() {
+        // A default edge label inherits the label group's `fill` (INK) rather
+        // than carrying its own, so the output stays minimal.
+        let svg = render("diagram top-down\na -- \"sync\" --> b\n");
+        let text = svg.lines().find(|l| l.contains(">sync</text>")).unwrap();
+        assert!(!text.contains("fill="), "default edge label should inherit the group fill: {text}");
+    }
+
+    #[test]
+    fn subgraph_fill_paints_behind_contents() {
+        // The frame is drawn before edges and nodes, so a filled subgraph is
+        // a background behind its members (the member node's own fill sits
+        // on top). Confirm the frame rect precedes the node rect in the SVG.
+        let svg = render("diagram top-down\nsubgraph \"S\" fill=\"#eef\"\na\nend\n");
+        assert!(svg.find("rx=\"8\"").unwrap() < svg.find("rx=\"6\"").unwrap());
+        let frame = svg.lines().find(|l| l.contains("rx=\"8\"")).unwrap();
+        let node = svg.lines().find(|l| l.contains("rx=\"6\"")).unwrap();
+        assert!(frame.contains("fill=\"#eef\""), "frame fill: {frame}");
+        assert!(node.contains("fill=\"#fff\""), "node keeps its own default fill: {node}");
+    }
+
+    #[test]
+    fn snapshot_subgraph_style() {
+        // The full M7.5 surface in one diagram: subgraph color/fill/line/text,
+        // plus node and edge text colors. Frames paint behind contents.
+        assert_snapshot(
+            "subgraph_style",
+            &render(
+                "diagram top-down\n\
+                 a \"A\" text=\"#0055ff\"\n\
+                 b \"B\"\n\
+                 subgraph \"Group\" color=\"#0a7\" fill=\"#cfe\" line=\"dashed\" text=\"#005\"\n\
+                 c \"C\"\n\
+                 d \"D\" text=\"#a00\"\n\
+                 end\n\
+                 a -- \"sync\" text=\"#0a7\" --> c\n\
+                 b --> d\n",
             ),
         );
     }

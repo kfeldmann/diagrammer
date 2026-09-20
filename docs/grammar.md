@@ -186,19 +186,37 @@ be eaten by the `#`-comment lexer.
 
 ### Attribute semantics
 
-Parsed in v0 and **rendered as of M6** (stroke, fill, line styles, colors,
-and edge labels).
+Parsed in v0 and **rendered as of M6** (node `color`/`fill`, edge `color`
+and line styles, and edge labels) and **M7.5** (subgraph `color`/`fill`/
+`line`, and a `text` text-color attribute on nodes, edges, and subgraphs).
 
 - **Nodes:**
   - `color` — border / stroke color.
   - `fill` — interior background color.
+  - `text` — label text color (M7.5).
 
 - **Edges:**
   - `color` — line and arrowhead color.
+  - `text` — edge-label text color (M7.5). Applies only when the edge has
+    a label.
+
+- **Subgraphs:**
+  - `color` — frame border / stroke color (M7.5).
+  - `fill` — frame interior background color (M7.5). The default is
+    transparent (`none`), so edges routed behind a subgraph stay visible
+    through it.
+  - `line` — frame border line style (M7.5): one of `solid`, `dotted`,
+    `dashed`, `thick` — the same set as edge styles, but supplied as a
+    quoted attribute value (e.g. `line="dashed"`), since the subgraph
+    header has no style keyword slot. `thick` doubles the border width;
+    `dotted`/`dashed` reuse the edge dash patterns. An unknown value
+    (e.g. `line="wavy"`) is a resolve error.
+  - `text` — frame title text color (M7.5). Applies only when the subgraph
+    has a title.
 
 **Unknown attributes are a parse error.** An attribute is valid only if it
 is recognized for the position it appears in (see the per-position lists
-below). This catches typos like `colr="#888"` early rather than silently
+above). This catches typos like `colr="#888"` early rather than silently
 ignoring them. The recognized attributes are fixed for v0; adding new ones
 later is a deliberate grammar change.
 
@@ -227,6 +245,17 @@ Referencing a node in a subgraph places it in that group; a node not
 referenced by any subgraph belongs to the top-level diagram. A node may
 not appear in more than one subgraph (parse error).
 
+A subgraph's frame can be styled with `color` (border), `fill`
+(background), `line` (border style), and `text` (title color) attributes
+(M7.5); see [Attribute semantics](#attribute-semantics). For example:
+
+```
+subgraph "Kubernetes Cluster" color="#0a7" fill="#cfe" line="dashed" text="#005"
+    api1
+    api2
+end
+```
+
 ## Direction
 
 ```
@@ -249,7 +278,9 @@ one inherits the direction of its enclosing level.
   runs to a connection point on the frame (at the frame's center, on the side
   facing the other endpoint along the level's direction axis), then continues
   to the inner node, without disturbing the group's internal layout. The
-  segments may still be diagonal; orthogonal routing is a later milestone (M7).
+  segments are routed orthogonally (M7): each is a right-angle path whose jog
+  lands in an inter-rank gap or a frame's padding, and a stub crossing a
+  titled frame's top side jogs just below the title rather than across it.
 - Explicit alignment or placement hints for nodes. Ranks center
   automatically on their parents' centroid (see the layout engine); if that
   proves insufficient for complex diagrams, per-node pinning/alignment

@@ -6,7 +6,7 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0, M1, M2, M3, M4, M5, M5.5, and M6 are complete. **M7 (orthogonal edge routing) is next.**
+**Current position:** M0, M1, M2, M3, M4, M5, M5.5, M6, M7, and M7.5 are complete. **M8 (CLI polish and extras) is next.**
 
 ---
 
@@ -100,7 +100,7 @@ six diagrams against committed `snapshots/*.svg` (regenerated via
 `UPDATE_SNAPSHOTS=1 cargo test`). Per-edge styles/colors/labels and the
 `cylinder` shape are parsed but deliberately deferred to M6.
 
-**Blocked by:** M2. **Note:** orthogonal edges are deferred (see M7).
+**Blocked by:** M2. **Note:** orthogonal edges landed in M7.
 
 ## ✅ M4 — Subgraphs with per-subgraph direction (headline feature)
 
@@ -166,8 +166,65 @@ edges cross its frame. The LCA direction is reconstructed in `assemble` via
 cross-boundary waypoints — which M4 discarded — are no longer needed. 5 new
 layout tests (frame connection points, two-frame edges, direction preserved
 with frame points, stub-doesn't-cross-sibling, nested-frame crossings);
-`snapshots/infra.svg` and `snapshots/subdirection.svg` regenerated. Segments
-may still be diagonal; M7 makes them orthogonal.
+`snapshots/infra.svg` and `snapshots/subdirection.svg` regenerated. (Segments
+were diagonal until M7 made them orthogonal.)
+
+**Follow-up — around-the-frame routing for a deep target (post-M7.5).** The
+straight within-frame target stub pierces the frame's internal content when
+the target node sits beyond other members along the frame's internal flow axis
+— e.g. `orders --> db` in `examples/subdirection.mmd`: the Storage subgraph is
+top-down, entered from the top, but Database is its *bottom* node with Cache
+above it, so the stub ran straight through Cache and then exactly overlapped
+the Cache→Database edge. `cross_boundary_path` now detects this (the stub
+segment from the frame's facing-side port to the target's same-side port
+crosses a sibling of the target inside its frame) and, for the common
+single-target-frame / single-or-zero-source-frame case, reroutes via
+`try_around_target_route`: the edge runs from the source node, around the
+*outside* of the target frame, and into the target from a side perpendicular
+to the flow axis — so it clears the sibling and stays distinct from the
+internal edge it overlapped. It prefers the side toward the source (a clean L
+when the source node is already clear of the frame's cross-span; a gap-jog when
+the source sits above the frame within its cross-span), falls back to the far
+side if a sibling blocks the near perpendicular entry, and keeps the straight
+stub if both sides are blocked or the nesting is deeper than one frame. The
+groups' internal layouts stay untouched (the M5 headline guarantee holds).
+`assemble` now passes each subgraph's immediate children (node rects + nested
+frame rects) to `cross_boundary_path` for the pierce test. 2 new layout tests
+(`cross_boundary_edge_routes_around_frame_when_target_is_deep` on the
+subdirection sample, and the source-above-frame gap-jog case);
+`snapshots/subdirection.svg` regenerated — only the `orders→db` polyline
+changed (it now runs down beside Storage and turns into Database's right
+side instead of crossing Cache and overlapping the Cache→Database edge).
+
+**Follow-up — node-aligned frame connection points (post-M7.5).** A
+cross-boundary edge's representative port on a subgraph frame used to sit at
+the frame's *center* on its facing side. That made every edge entering a
+subgraph converge on the same midpoint — so two edges into one group read as
+both sources reaching both members — and made a within-frame stub jog from
+the node's coordinate up to the frame-center coordinate and back (the
+`prv-clb --> tke` edge in a nested left-right diagram jogged up to the
+subgraph's center-y and back down). `cross_boundary_path` now places each rep
+port at the **endpoint node's** cross-coordinate on its frame's facing side
+(`port_at_cross`), so a within-frame stub runs straight along the node's own
+axis and edges enter a subgraph lined up with their target. The one
+complication is the frame's (top-left) title: a straight stub at the node's
+`x` would cross the title text when the node sits under it, so a title detour
+(`title_detour` / `title_detour_clear_x`) enters the frame just past the
+title's right edge and jogs across to the node below the title — but only for
+the common single-frame, top-down, grown case where the `CROSS_FRAME_PAD` band
+gives room below the title, and only when a clear entry past the title exists;
+otherwise the stub stays straight (crossing a too-wide title no worse than the
+old center design did). The M7 `JogBias` near-node mechanism is gone (the
+detour places its own jog), so `ortho_chain` always jogs at the segment
+midpoint. The sibling-pierce around-route and the M5 headline guarantee are
+unchanged. 2 new layout tests (`cross_boundary_edges_enter_subgraph_aligned_
+with_target_node` and `cross_boundary_edge_between_aligned_nodes_is_straight`);
+`cross_boundary_stub_does_not_cross_sibling` and
+`cross_boundary_stub_jog_clears_title_region_and_arrowhead` updated for the
+new model; `snapshots/infra.svg`, `snapshots/subdirection.svg`, and
+`snapshots/subgraph_style.svg` regenerated — cross-boundary edges no longer
+merge at a frame's center (e.g. infra's `lb → api1/api2` and `api1/api2 →
+db` now enter/leave the K8s frame at each node's own `x`).
 
 **Blocked by:** M4. **Blocks:** nothing new (M7 already blocked by M5.5).
 
@@ -209,7 +266,6 @@ alignment tests.
 
 **Blocked by:** M2 (the flat engine). **Independent of:** M5, M6.
 **Blocks:** M7 (orthogonal edges only look clean once nodes line up).
-
 ## ✅ M6 — Render shapes, styles, and colors (already parsed)
 
 Most of this was already parsed in M1; this milestone was purely rendering
@@ -243,21 +299,103 @@ the way out (a quoted-string attribute value can legally contain a `"`).
 M6 surface (cylinders with custom color/fill, all three edge styles, edge
 colors, and edge labels); all seven existing snapshots regenerated — the
 `currentColor` marker, the per-edge stroke/width/dasharray attributes, and
-the new edge-label groups changed every file byte-for-byte. Diagonal edge
-segments still come from the M3/M5 router; orthogonal routing is M7.
+the new edge-label groups changed every file byte-for-byte. (Diagonal edge
+segments came from the M3/M5 router until M7 made them orthogonal.)
 
 **Blocked by:** M3. Can interleave with M4/M5.
 
-## ⬜ M7 — Orthogonal edge routing
+## ✅ M7 — Orthogonal edge routing
 
 Upgrade edges from diagonal to right-angle routing typical of infrastructure
 diagrams.
 
-- [ ] Orthogonal router (e.g. channel-based) producing bend points.
-- [ ] Arrowhead orientation at segment end.
-- [ ] Snapshot tests updated.
+- [x] Orthogonal router producing bend points.
+- [x] Arrowhead orientation at segment end.
+- [x] Snapshot tests updated.
 
-**Blocked by:** M3, M5.5. Independent of M4/M5; can be done after M6.
+Implemented in `src/layout.rs` (`ortho_chain` plus `FlowAxis` / `cross_flow`
+/ `with_flow` / `jog_flow` / `JogBias`, applied in `assemble`): every edge —
+direct or cross-boundary — is finally passed through one orthogonalizer that
+turns each diagonal segment into a right-angle "Z" — along the edge's flow
+axis (the rank axis in page space: vertical for top-down / bottom-up,
+horizontal for left-right / right-left) to the segment's flow midpoint,
+across to the target's cross coordinate, then along the flow axis to the
+target. The flow axis is read per edge from its LCA-level effective
+direction, so an edge inside a left-right subgraph jogs horizontally even in
+a top-down diagram. The perpendicular jog lands between the two waypoints'
+flow coordinates — in an inter-rank `RANK_GAP` or a frame's padding — so it
+stays clear of node interiors and the M5 "stub does not cross a sibling"
+guarantee holds. Direct edges keep the flat engine's waypoints (dummy
+centers and frame connection points are preserved; collinear extras render
+the same straight line), so the M2 long-edge and M5 nested-frame tests still
+see their waypoints. The one exception is a within-frame stub that crosses a
+titled frame's TOP side: a midpoint jog would sit on the title text, so such
+stubs instead jog a fixed `STUB_JOG_CLEARANCE` (12 px — sized to exceed both
+the renderer's `ARROW_BACKOFF` of 4 px so the arrowhead tip still lands on
+the node boundary, and the arrowhead's `markerHeight` of 10 px so the
+horizontal approach clears the arrowhead body rather than cutting into its
+side) above the node, in the clear padding below the title. That padding is
+created by `CROSS_FRAME_PAD`: a subgraph that a cross-boundary edge reaches
+through (to an *immediate* child) grows by one subgraph-title font height on
+top and bottom, so the 12-px jog lands in the grown band below the title
+text rather than on it; a subgraph with no such edge keeps the default frame
+geometry. `cross_boundary_path` routes the source stub (`NearStart`), the
+LCA segment (`Mid`), and the target stub (`NearEnd`) as separate orthogonal
+chains. The arrowhead keeps its `orient="auto"` marker, which the now
+axis-aligned final segment orients along a clean cardinal direction, so the
+arrow points straight at the target — no renderer change was needed. 9 new
+tests (orthogonality over direct/long/fork/merge/cross-boundary/cycled
+diagrams, bends on forks, endpoints still on node bounds, a cardinal final
+segment, the near-node titled-frame stub jog, SVG-output orthogonality +
+`orient="auto"`, the cross-boundary frame growth, and the stub jog clearing
+the title region and arrowhead); all eight snapshots regenerated — every
+edge is now a right-angle route (`diamond` and `shapes_styles` gained clean
+Z-bends; `infra`'s `lb → api1/2` stubs jog below the "Kubernetes Cluster"
+title instead of crossing it, and the K8s frame grew to give them room).
+
+**Blocked by:** M3, M5.5. **Independent of:** M4/M5; done after M6.
+
+## ✅ M7.5 — Subgraph color, fill, and line (border) style; text color
+
+- [x] Subgraph color attribute (color for the line (border))
+- [x] Subgraph fill attribute (color of the fill (background) of the subgraph)
+- [x] Subgraph line style (dashed, dotted, thick, etc.)
+- [x] For all text: text attribute (color of the text)
+
+Implemented in `src/resolve.rs` + `src/render/svg.rs` (+ new fields on the
+resolved `Subgraph`/`Node`/`Edge` in `src/ast.rs`): the resolver now accepts
+four subgraph style attributes — `color` (border), `fill` (background),
+`line` (border style: `solid`/`dotted`/`dashed`/`thick`, supplied as a
+quoted value since the subgraph header has no style keyword slot), and
+`text` (title color) — and a `text` text-color attribute on nodes and
+edges. `line`'s value is validated against the `Style` set (an unknown
+value like `line="wavy"` is a resolve error); node `text` follows the same
+redeclaration-consistency rule as `color`/`fill`. The renderer now zips
+`diagram.subgraphs` with `layout.subgraphs` (the index-correspondence
+invariant) to read a frame's `color`/`fill`/`line`/`text` from the resolved
+`Subgraph` and its geometry from `SubgraphRect` — the same split it already
+uses for nodes and edges — so `SubgraphRect` is now geometry-only (its
+`title` field moved to `Subgraph`, which already carried it). A frame with
+no style attributes renders byte-identically to the pre-M7.5 output: the
+`<g>` keeps the default frame stroke/width, each `<rect>` overrides with
+its own (defaulting to those same constants), and a title with no `text`
+inherits the group's default fill. `line` maps via a `frame_stroke` helper
+mirroring `edge_stroke` (`dotted`/`dashed` reuse the same dash patterns;
+`thick` doubles the frame border width, mirroring the edge convention);
+`fill` defaults to `none` so a default subgraph stays transparent and edges
+behind it stay visible. The `text` attribute sets a per-element `fill` on
+the node label, the edge-label `<text>`, and the subgraph-title `<text>`,
+each only when present (default text keeps the existing group/INK color, so
+unstyled diagrams are unchanged). 19 new tests (subgraph attrs parsed + each
+`line` style + invalid `line` value + unknown/duplicate subgraph attrs +
+node/edge `text` + `text` redeclaration consistency + render checks for
+every new attribute + a `subgraph_style` snapshot); all eight existing
+snapshots regenerated and verified byte-identical (only a new
+`subgraph_style.svg` was added) — subgraph styling is render-only, so layout
+geometry is untouched.
+
+**Blocked by:** M3 (rendering), M6 (attribute pipeline). **Independent of:**
+M7 (orthogonal routing).
 
 ## ⬜ M8 — CLI polish and extras
 

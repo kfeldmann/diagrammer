@@ -90,7 +90,11 @@ files (don't hand-edit them).
   arrowhead `<marker>` per distinct edge color with a hard-coded `fill`,
   because `currentColor`/`context-stroke` don't inherit into markers reliably
   and GitHub sanitizes — don't "simplify" it back to a single currentColor
-  marker.
+  marker. Each edge line is also shortened at the target end (by
+  `ARROW_BACKOFF` in `render/svg.rs`) so the stroke tucks under its same-color
+  arrowhead — a thick line's round cap would otherwise poke past the tip and
+  read as a blunt arrow — and the marker's `refX` is reduced by the same
+  amount so the tip stays on the node boundary.
 - **Deterministic output.** `fmt()` formats floats to exactly 2 decimals; text
   is measured against the **embedded** DejaVu Sans Regular (via the `dejavu`
   crate + `ab_glyph`), never a system font. Snapshots are byte-stable across
@@ -99,14 +103,37 @@ files (don't hand-edit them).
 
 ## Shared constants across the layout/render boundary
 
-These two are defined in `layout.rs` and read by `render/svg.rs` — keep them
-in sync (changing one without the other silently breaks geometry):
+These are defined in `layout.rs` and read by (or constrained against)
+`render/svg.rs` — keep them in sync (changing one without the other silently
+breaks geometry):
 
 - `layout::FONT_SIZE = 14.0` — node label size; the renderer sizes `<text>`
   to match the boxes laid out from these metrics.
 - `layout::CYL_RY = 5.0` — cylinder elliptical-cap radius; layout sizes the
   cylinder box to include it (`cyl_height`), the renderer draws the caps at
   this radius.
+- `layout::FRAME_TITLE_X = 10.0` and `layout::FRAME_TITLE_FONT_SIZE = 12.0` —
+  the inset and font size of a subgraph's title text. Layout reads these only
+  to detect when a cross-boundary within-frame stub would cross the title text
+  (`title_detour_clear_x`) so it can route around it; they must match
+  `render::FRAME_TITLE_X` (10.0) and `render::FRAME_TITLE_SIZE` (12.0), else
+  the title-detour would misjudge the title's extent.
+- `layout::STUB_JOG_CLEARANCE = 12.0` — how far a title-detour within-frame
+  stub jogs from a node port (it sits in the grown `CROSS_FRAME_PAD` band just
+  below the title). It must exceed `render::ARROW_BACKOFF`
+  (4.0), else the stub's final segment is shorter than the line-end
+  shortening and the arrowhead tip pokes into the node; and it must exceed
+  the arrowhead's back-extent (`render`'s `markerHeight`, 10.0 — the marker
+  base sits `markerHeight` short of the tip), else the horizontal approach
+  line cuts into the arrowhead's side. With `CROSS_FRAME_PAD` growing the
+  frame it also clears the title text above the node. (One-directional:
+  layout does not read the render constants, it just promises to stay above
+  them.)
+- `layout::CROSS_FRAME_PAD = 12.0` — extra top + bottom padding added to a
+  subgraph frame when a cross-boundary edge connects to one of its immediate
+  children, so the within-frame stub has room to jog. One subgraph-title
+  font height each side; keep in sync with `render::FRAME_TITLE_SIZE` (12.0).
+  A subgraph with no such edges keeps the default frame geometry.
 
 ## Test layout
 

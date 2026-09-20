@@ -164,6 +164,9 @@ pub struct Node {
     pub shape: Shape,
     pub color: Option<String>,
     pub fill: Option<String>,
+    /// Color of the node's label text (M7.5). `None` falls back to the
+    /// renderer's default ink color.
+    pub text: Option<String>,
     /// Index into [`Diagram::subgraphs`]; `None` means top-level.
     pub group: Option<usize>,
 }
@@ -175,6 +178,9 @@ pub struct Edge {
     pub style: Style,
     pub label: Option<String>,
     pub color: Option<String>,
+    /// Color of the edge's label text (M7.5). `None` falls back to the
+    /// renderer's default ink color. Applies only when `label` is present.
+    pub text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -190,4 +196,17 @@ pub struct Subgraph {
     pub children: Vec<usize>,
     /// Enclosing subgraph index; `None` means this subgraph is top-level.
     pub parent: Option<usize>,
+    /// Border (line) color of the frame (M7.5). `None` falls back to the
+    /// renderer's default frame stroke.
+    pub color: Option<String>,
+    /// Interior background fill of the frame (M7.5). `None` leaves the
+    /// frame transparent (the default, so edges behind a subgraph stay
+    /// visible through it).
+    pub fill: Option<String>,
+    /// Border line style of the frame (M7.5): `solid`/`dotted`/`dashed`/
+    /// `thick`. `None` is a plain solid frame at the default width.
+    pub line: Option<Style>,
+    /// Color of the frame's title text (M7.5). `None` falls back to the
+    /// renderer's default title color. Applies only when `title` is present.
+    pub text: Option<String>,
 }

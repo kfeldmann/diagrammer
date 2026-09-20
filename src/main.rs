@@ -4,7 +4,9 @@
 //! end, laid out (Sugiyama-style, including compound subgraphs with
 //! per-subgraph direction), and rendered to a self-contained SVG. Rendering
 //! (M6) honors the `cylinder` shape, per-node `color`/`fill`, the
-//! `dotted`/`dashed`/`thick` edge styles, per-edge `color`, and edge labels.
+//! `dotted`/`dashed`/`thick` edge styles, per-edge `color`, and edge labels;
+//! M7.5 adds per-subgraph `color`/`fill`/`line` (border style) and a `text`
+//! text-color attribute on nodes, edges, and subgraphs.
 //! See [`docs/grammar.md`](../docs/grammar.md) and the milestone plan in
 //! [`docs/milestones.md`](../docs/milestones.md).
 #![allow(dead_code)]
@@ -118,7 +120,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
                     return Err(format!("{a} requires a value"));
                 };
                 if output.is_some() {
-                    return Err(format!("multiple output files given"));
+                    return Err("multiple output files given".to_string());
                 }
                 output = Some(PathBuf::from(val));
             }

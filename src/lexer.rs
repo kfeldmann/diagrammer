@@ -57,7 +57,7 @@ pub fn ident<'i>(i: &mut &'i str) -> ModalResult<String> {
 /// is consumed only if the segment follows, so `-->` is not eaten as part of
 /// an id).
 fn hyphen_segment<'i>(i: &mut &'i str) -> ModalResult<&'i str> {
-    let _ = peek(|i: &mut &str| {
+    peek(|i: &mut &str| {
         "-".parse_next(i)?;
         take_while(1.., |c: char| c.is_alphanumeric() || c == '_').parse_next(i)?;
         Ok(())

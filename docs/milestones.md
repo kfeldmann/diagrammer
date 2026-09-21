@@ -6,7 +6,7 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0, M1, M2, M3, M4, M5, M5.5, M6, M7, and M7.5 are complete. **M8 (CLI polish and extras) is next.**
+**Current position:** M0–M7.5 and M9 are complete. **M10 (title-detour robustness) is next**, then M11 → M12 → M13; M8 (CLI polish) is deferred until after.
 
 ---
 
@@ -397,22 +397,201 @@ geometry is untouched.
 **Blocked by:** M3 (rendering), M6 (attribute pipeline). **Independent of:**
 M7 (orthogonal routing).
 
-## ⬜ M8 — CLI polish and extras
+## ⬜ M8 — CLI polish and extras *(deferred until after M13)*
 
 - [ ] `--direction` flag to override the header.
 - [ ] Theme/style presets (reusable style classes — grammar slot is reserved).
 - [ ] Error message quality pass (context spans, suggestions).
+- [ ] Input-robustness guards: deeply nested subgraphs currently recurse on
+      the native stack in both the parser and the compound layout — a
+      pathologically nested input stack-overflows instead of erroring
+      cleanly. Cap or depth-proof both.
 - [ ] README usage section + sample SVG committed and embedded.
 
 **Blocked by:** M3. Otherwise incremental.
+
+## ✅ M9 — Edge separation & obstacle-aware LCA routing
+
+The M7 per-edge midpoint-jog orthogonalizer had two failure modes that this
+milestone eliminates: (1) an edge passing *through* a node — the LCA-level
+segment of a cross-boundary edge could jog through a peer node sitting between
+its endpoints (e.g. `User --> VPN` whose jog crossed `prd`, making it read as
+if `prd` connected to `VPN`); (2) parallel edges laying *on top of* each other
+— several edges from one source to one target subgraph shared the source's
+single port and the same jog lane, so their trunks overlapped and their labels
+collided (e.g. the five `VPN --> cvm` edges, and `lb --> api1/api2` in
+`infra`). Crossing is allowed; laying on top, and passing behind a node, are
+not.
+
+- [x] **Port separation** — a node side carrying more than one edge fans the
+      ports across the side (each placed at the *other* endpoint's
+      cross-coordinate projected onto the side, then nudged apart to a minimum
+      spacing), so edges no longer all leave/enter at the centre. Single-edge
+      sides keep the centre (the prior, tested behaviour).
+- [x] **Lane separation** — cross-boundary LCA segments sharing a source,
+      source side, and gap run at distinct jog flow-coordinates in that gap,
+      fanning without overlapping. (Grouped by the shared gap, not the target,
+      so same-gap edges like `api2 --> {db, cache, queue}` share lanes too.)
+- [x] **Obstacle avoidance** — when an LCA segment's jog would cross a peer
+      node at its level, it reroutes around it through a rectilinear track
+      graph (Dijkstra over obstacle-edge tracks, with a bend penalty for
+      fewer corners), so no edge passes through a node. Lanes are kept clear of
+      obstacles that intrude into the gap, so the router never falls back to a
+      colliding midpoint.
+- [x] Tests: no two edges share a collinear overlapping segment and no edge
+      segment passes through any non-endpoint node, asserted on `infra`,
+      `subdirection`, and the new `finance` sample; a cross-boundary LCA
+      around-a-peer-node test; orthogonality preserved.
+
+Implemented in `src/layout.rs` (M9 section after `orthogonalize`; plus changes
+to `cross_boundary_path`, which now returns a `CrossPath` of within-frame stubs
+plus an LCA segment for the caller to route, and to `assemble`, which runs a
+port-separation pre-pass, a lane-separation pre-pass, and a per-level obstacle
+field). Within-frame stubs keep the M5/M7 frame-aware logic unchanged (title
+detours, around-target-frame routes, nested-frame crossings); only the
+inter-representative LCA segment and direct-edge endpoints are rerouted, so the
+M5 headline guarantee (a subgraph's internal layout is never disturbed by a
+crossing edge) holds. New sample `examples/finance.mmd` + snapshot
+`snapshots/finance.svg`; `infra`, `diamond`, `cycle`, and `shapes_styles`
+snapshots regenerated (forks and 2-cycles now fan ports — e.g. an `a <-> b`
+cycle renders as two distinct parallel lines instead of one overlapping).
+
+**Known limitation:** edge labels are placed by the renderer at the midpoint of
+their polyline's longest segment; in a crowded gap (many parallel edges in one
+`RANK_GAP`) a long multi-line label can still crowd a neighbour (e.g.
+`vpn --> cvm1`'s two-line port list vs `vpn --> cvm3` in the finance diagram).
+The edges themselves are fully separated; smarter label placement is
+addressed in M13.
+
+**Blocked by:** M7 (orthogonal routing), M5 (cross-boundary structure).
+**Independent of:** M8.
+
+---
+
+## ▶ M10 — Title-detour robustness
+
+The M5.5 title detour has two verified failure modes that grow worse with
+longer subgraph titles:
+
+- [ ] **Entry gap eaten by viewer font fallback.** The detour enters exactly
+      `TITLE_CLEAR_GAP` (6 px) past the title's *measured* right edge. Text is
+      measured with the embedded DejaVu Sans (determinism invariant), but SVGs
+      are viewed in Firefox / GitHub READMEs / Confluence where DejaVu is
+      often absent and the font stack falls back to a wider face — the drawn
+      title extends past the measured end and eats the gap. The error is
+      proportional to title length: short titles get their last letter
+      touched, long titles get crossed. Fix with a larger gap (a fixed bump
+      plus a length-derived component), since the measurement font cannot
+      change.
+- [ ] **No room past the title on title-sized frames.** When the title
+      determines the frame width (`title_w + 2·FRAME_TITLE_X`), the right
+      margin past the title is only `FRAME_TITLE_X` (10 px) — smaller than
+      `FRAME_PAD_X` (21 px) — so the clamped entry point falls *inside* the
+      title, the `clear_x <= title_x1` guard gives up, and the straight stub
+      runs through the title. Fix by mirroring the `CROSS_FRAME_PAD` trick
+      horizontally: when a detour is needed and there is no clear band past
+      the title, grow the frame's width by side padding (this does not
+      disturb the group's internal arrangement — the M5 headline guarantee
+      holds). Also consider a left-side detour when the endpoint node sits
+      left of the title and the left band is clear.
+
+**Blocked by:** nothing (self-contained bug fix). **Blocks:** nothing, but it
+establishes the "grow the frame to make routing room" pattern M11–M13 may
+reuse.
+
+## ⬜ M11 — Edge side attributes (`from=` / `to=`)
+
+Let an edge request which page-space side of each node it connects to:
+`A -- from="right" to="top" --> B` leaves A from its right side and enters B
+at its top. The algorithm already chooses sides implicitly; this makes them
+explicit to mitigate ugly routing.
+
+- [ ] Grammar + parser: `from` and `to` recognized as edge-body attributes;
+      values `top | bottom | left | right`; unknown values are resolve
+      errors (strict-attribute convention).
+- [ ] Sides are **page-space** (as drawn), unambiguous regardless of the
+      diagram's or any subgraph's direction.
+- [ ] Resolved `Edge` carries `from_side` / `to_side`; layout honors them at
+      the two port-decision points — the flat engine's `edge_waypoints`
+      (direct edges) and `sides_along` (cross-boundary LCA segments).
+- [ ] **Literal semantics** (decided): the forced side is **always honored** —
+      the port lands on the requested side, with no automatic reversion to the
+      algorithm's choice. The attribute is an override; silently
+      second-guessing it would leave the user unable to tell whether it did
+      anything. A side that contradicts the approach direction is routed
+      around (cf. `try_around_target_route`); the result may be ugly, and
+      that is the user's cue to change or drop the attribute. `grammar.md`
+      will document this: *the attribute is honored literally; contradictory
+      choices produce ugly (but valid, non-overlapping) routes.*
+- [ ] **Routing must always succeed.** Forced sides can push routes outside
+      the current content bounds (e.g. an excursion around a wide subgraph);
+      the track graph needs unbounded escape corridors and the viewBox grows
+      to include them. What remains guaranteed even for contradictory
+      choices: orthogonal segments, no passing through node interiors, no two
+      edges laying collinearly on top of each other (M9 invariants), and port
+      separation still fans multiple edges sharing a forced side. Note the
+      existing termination ladder in `route_lca` (simple Z → mid jog →
+      track route → last-resort possibly-crossing Z) already ends in a
+      route that keeps the ports — the right shape for literal semantics;
+      keep that ladder (bounded, never loops) and make sure forced-side
+      routes use it.
+- [ ] Self-loops with forced sides (`A --> A` with `from`/`to`) need real
+      loop routing, not the current fixed below-node stub.
+- [ ] Tests: each forced side in each direction; a contradictory side routes
+      around (not fall back); forced-side fan; forced-side excursion beyond
+      the content bounds (viewBox grows); self-loop with forced sides;
+      snapshots regenerated.
+
+**Blocked by:** M9. **Blocks:** M12, M13 (they build on the final geometry so
+the cosmetic work is done once).
+
+## ⬜ M12 — Edges avoid frame outlines
+
+The M9 obstacle model (`track_route`) contains node rects only; subgraph
+frames are invisible to the router, so an LCA jog or lane can run along a
+frame's border stroke and read as a connection to the group.
+
+- [ ] Extend the obstacle model to subgraph **frame perimeters**: unlike node
+      rects, a frame's interior is legal to pass through (crossing a nested
+      frame is intentional and recorded as a waypoint), so the forbidden
+      thing is the *border line itself* — collinear overlap with a frame edge
+      is barred except at the designated entry/exit crossing points.
+- [ ] Reused by M13: frame borders and titles become obstacles for label
+      placement too.
+- [ ] Tests: an LCA segment that used to run along a frame border reroutes;
+      legitimate frame crossings are unchanged; snapshots regenerated.
+
+**Blocked by:** M9, M11 (geometry is final first). **Blocks:** M13.
+
+## ⬜ M13 — Label placement engine + parallel-edge spacing
+
+Edge labels are placed blind at the longest segment's midpoint (M9's known
+limitation); parallel edges sit close enough that a label's white knockout
+covers a neighboring edge.
+
+- [ ] **Move label anchors into layout** (decided): `assemble` computes each
+      label's anchor — it knows all geometry: obstacles, lanes, frames, other
+      edges — and stores it on `EdgePath` (a per-edge field, so the
+      index-correspondence invariant is safe); the renderer is slimmed to
+      draw the knockout rect + text at the given anchor.
+- [ ] Placement algorithm: candidate positions along each polyline (offsets
+      along segments), scored against other edges' segments, other labels'
+      rects, node rects, and frame borders/titles; deterministic greedy pass
+      with a refinement pass (no randomness, fixed iteration order).
+- [ ] **Label-aware parallel spacing**: lane/fan assignment informed by label
+      sizes so a labeled edge's knockout cannot cover a neighbor; bump
+      `FAN_SEP` / `LANE_INSET` / `LABEL_PAD` as needed.
+
+**Blocked by:** M11, M12 (final geometry + obstacle model). Resolves M9's
+known limitation.
 
 ---
 
 ### Dependency graph
 
 ```
-M0 ── M1 ── M2 ── M3 ── M4 ── M5
-              │   │      └── M6 (interleaves)
-              │   └──────── M8
-              └── M5.5 ── M7
+M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M12 ── M13
+              │   │      └── M6 (interleaves)        │
+              │   └──────── M8 (deferred) ───────────┘
+              └── M5.5 ── M7 ─┘
 ```

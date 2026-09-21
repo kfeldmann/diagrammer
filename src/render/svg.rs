@@ -68,6 +68,12 @@ const ARROW_BACKOFF: f32 = 4.0;
 /// screenshot: the 'd' in "Redis" is 19px tall and the label looks best 6px
 /// lower, i.e. 6/19 of the font height. Boxes keep the geometric center.
 const CYL_LABEL_SHIFT: f32 = (6.0 / 19.0) * crate::layout::FONT_SIZE;
+/// Font stack for every `<text>` element. Leads with the metric-compatible
+/// trio (Arial/Helvetica/Liberation Sans are interchangeable clones) so
+/// virtually every viewer renders identical glyph geometry; DejaVu Sans
+/// stays last as the Linux catch-all. Layout *measures* with the wider
+/// bundled DejaVu (`text.rs`), so boxes never under-size for any of these.
+const FONT_FAMILY: &str = "Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif";
 /// Font size for edge labels (slightly smaller than the node label size).
 const EDGE_LABEL_SIZE: f32 = 12.0;
 /// Padding inside an edge label's white knockout rect, each side.
@@ -277,25 +283,32 @@ fn render_subgraphs(subgraphs: &[Subgraph], rects: &[SubgraphRect]) -> String {
     // title color; a subgraph with a `text` attribute overrides it on its own
     // <text> so the default (no `text`) title stays byte-identical.
     s.push_str(&format!(
-        "  <g fill=\"{FRAME_TITLE_FILL}\" font-family=\"DejaVu Sans, Arial, sans-serif\" font-size=\"{}\">\n",
+        "  <g fill=\"{FRAME_TITLE_FILL}\" font-family=\"{FONT_FAMILY}\" font-size=\"{}\">\n",
         fmt(FRAME_TITLE_SIZE)
     ));
     for (sg, r) in subgraphs.iter().zip(rects.iter()) {
         if let Some(title) = &sg.title {
+            // Each line's top rides at its own `y` (hanging baseline): line
+            // 0 at `FRAME_TITLE_Y`, one [`text::line_height`] per extra line
+            // — matching the top inset [`frame_insets`] reserves.
+            let n = text::line_count(title);
+            let lh = text::line_height(FRAME_TITLE_SIZE);
+            let ys: Vec<f32> = (0..n).map(|i| r.y + FRAME_TITLE_Y + i as f32 * lh).collect();
+            let body = text_body(title, r.x + FRAME_TITLE_X, &ys);
             if let Some(c) = &sg.text {
                 s.push_str(&format!(
                     "    <text x=\"{}\" y=\"{}\" fill=\"{}\" text-anchor=\"start\" dominant-baseline=\"hanging\">{}</text>\n",
                     fmt(r.x + FRAME_TITLE_X),
                     fmt(r.y + FRAME_TITLE_Y),
                     escape_xml(c),
-                    escape_xml(title),
+                    body,
                 ));
             } else {
                 s.push_str(&format!(
                     "    <text x=\"{}\" y=\"{}\" text-anchor=\"start\" dominant-baseline=\"hanging\">{}</text>\n",
                     fmt(r.x + FRAME_TITLE_X),
                     fmt(r.y + FRAME_TITLE_Y),
-                    escape_xml(title),
+                    body,
                 ));
             }
         }
@@ -422,26 +435,27 @@ fn render_edge_labels(s: &mut String, labeled: &[(&Edge, &EdgePath)]) {
     }
     s.push_str("  </g>\n");
     s.push_str(&format!(
-        "  <g fill=\"{INK}\" font-family=\"DejaVu Sans, Arial, sans-serif\" font-size=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\">\n",
+        "  <g fill=\"{INK}\" font-family=\"{FONT_FAMILY}\" font-size=\"{}\" text-anchor=\"middle\" dominant-baseline=\"central\">\n",
         fmt(EDGE_LABEL_SIZE)
     ));
     for (edge, path) in labeled {
         let label = edge.label.as_deref().unwrap();
         let (mx, my) = longest_segment_midpoint(&shortened_points(path));
+        let ys = centered_line_ys(my, text::line_count(label), EDGE_LABEL_SIZE);
         if let Some(c) = &edge.text {
             s.push_str(&format!(
                 "    <text x=\"{}\" y=\"{}\" fill=\"{}\">{}</text>\n",
                 fmt(mx),
-                fmt(my),
+                fmt(ys[0]),
                 escape_xml(c),
-                escape_xml(label),
+                text_body(label, mx, &ys),
             ));
         } else {
             s.push_str(&format!(
                 "    <text x=\"{}\" y=\"{}\">{}</text>\n",
                 fmt(mx),
-                fmt(my),
-                escape_xml(label),
+                fmt(ys[0]),
+                text_body(label, mx, &ys),
             ));
         }
     }
@@ -484,6 +498,37 @@ fn longest_segment_midpoint(points: &[(f32, f32)]) -> (f32, f32) {
     ((ax + bx) * 0.5, (ay + by) * 0.5)
 }
 
+/// Inner content of a `<text>` element for a possibly multi-line `label`
+/// (lines separated by `\n`). Every line sits at `x`; `ys` gives each line's
+/// baseline y (line 0's is the `<text>` element's own y, so it is skipped).
+/// The first line is emitted inline and each further line becomes an
+/// absolutely positioned `<tspan x y>` (explicit x/y make each tspan its own
+/// text chunk, so inherited `text-anchor`/`dominant-baseline` apply per
+/// line). A single-line label renders as just the escaped text — byte-
+/// identical to the pre-multi-line output, so golden snapshots hold.
+fn text_body(label: &str, x: f32, ys: &[f32]) -> String {
+    let lines: Vec<&str> = label.split('\n').collect();
+    let mut out = escape_xml(lines[0]);
+    for (i, line) in lines.iter().enumerate().skip(1) {
+        out.push_str(&format!(
+            "<tspan x=\"{}\" y=\"{}\">{}</tspan>",
+            fmt(x),
+            fmt(ys[i]),
+            escape_xml(line),
+        ));
+    }
+    out
+}
+
+/// Baseline y for line `i` of an `n`-line text block centered on `cy` at
+/// `font_size`: lines step by one [`text::line_height`] and the block
+/// (first line's em box plus one line height per extra line) is centered.
+fn centered_line_ys(cy: f32, n: usize, font_size: f32) -> Vec<f32> {
+    let lh = text::line_height(font_size);
+    let mid = (n - 1) as f32 / 2.0;
+    (0..n).map(|i| cy + (i as f32 - mid) * lh).collect()
+}
+
 /// One node: a rounded rect (or cylinder) plus a centered label. The node's
 /// `color` (stroke) and `fill` (interior) attributes, and the `cylinder`
 /// shape, are honored (M6).
@@ -517,12 +562,13 @@ fn render_node(s: &mut String, node: &Node, rect: &NodeRect) {
         Shape::Cylinder => cy + CYL_LABEL_SHIFT,
         Shape::Box => cy,
     };
+    let ys = centered_line_ys(label_y, text::line_count(&node.label), crate::layout::FONT_SIZE);
     s.push_str(&format!(
-        "    <text x=\"{}\" y=\"{}\" font-family=\"DejaVu Sans, Arial, sans-serif\" font-size=\"{}\" fill=\"{ink}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
+        "    <text x=\"{}\" y=\"{}\" font-family=\"{FONT_FAMILY}\" font-size=\"{}\" fill=\"{ink}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
         fmt(cx),
-        fmt(label_y),
+        fmt(ys[0]),
         crate::layout::FONT_SIZE,
-        escape_xml(&node.label),
+        text_body(&node.label, cx, &ys),
     ));
 }
 
@@ -655,6 +701,88 @@ mod tests {
     }
 
     // ---- Unit checks (not golden) ----
+
+    /// Pull every `y="…"` attribute value out of the first `<text …>`
+    /// element (including its child tspans) whose content contains `needle`,
+    /// in document order (line 0's y first, then tspan ys).
+    fn text_ys(svg: &str, needle: &str) -> Vec<f32> {
+        let chunk = svg
+            .split("<text")
+            .find(|chunk| chunk.contains(needle))
+            .unwrap_or_else(|| panic!("no <text> containing {needle:?}"));
+        let element = &chunk[..chunk.find("</text>").expect("<text> closed")];
+        element
+            .split(" y=\"")
+            .skip(1)
+            .map(|rest| {
+                let y = &rest[..rest.find('"').expect("closed y attr")];
+                y.parse::<f32>().expect("numeric y")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn multiline_node_label_renders_tspans() {
+        let svg = render("diagram top-down\napp \"Kubernetes\\nCluster\"\n");
+        // First line inline, second line as an absolutely positioned tspan.
+        assert!(svg.contains("Kubernetes"), "first line inline");
+        assert!(svg.contains("<tspan x="), "extra line becomes a tspan");
+        assert!(svg.contains(">Cluster</tspan>"), "second line content");
+        // The two lines are one node line-height apart.
+        let ys = text_ys(&svg, "Kubernetes");
+        assert_eq!(ys.len(), 2);
+        assert!(
+            (ys[1] - ys[0] - text::line_height(crate::layout::FONT_SIZE)).abs() < 1e-2,
+            "lines should step by one line height: {ys:?}"
+        );
+    }
+
+    #[test]
+    fn single_line_labels_stay_plain() {
+        // The tspan path is only for labels that actually contain newlines;
+        // single-line output remains byte-identical to the old renderer.
+        let svg = render("diagram top-down\na\n");
+        assert!(!svg.contains("<tspan"));
+        assert!(svg.contains(">a</text>"));
+    }
+
+    #[test]
+    fn multiline_edge_label_renders_tspans() {
+        let svg = render(
+            "diagram top-down\n\n\
+             a -- \"deploy\\nrollback\" --> b\n",
+        );
+        assert!(svg.contains("deploy"));
+        assert!(svg.contains("<tspan x="));
+        assert!(svg.contains(">rollback</tspan>"));
+        let ys = text_ys(&svg, "deploy");
+        assert_eq!(ys.len(), 2);
+        assert!(
+            (ys[1] - ys[0] - text::line_height(EDGE_LABEL_SIZE)).abs() < 1e-2,
+            "edge label lines should step by one line height: {ys:?}"
+        );
+    }
+
+    #[test]
+    fn multiline_subgraph_title_renders_stacked_tspans() {
+        let svg = render(
+            "diagram top-down\n\
+             subgraph \"Kubernetes\\nCluster\"\n\
+             a\n\
+             end\n",
+        );
+        // Stacked downward from the frame top: line 0 at FRAME_TITLE_Y, the
+        // second one line height below (matching the inset frame_insets
+        // reserves).
+        let ys = text_ys(&svg, "Kubernetes");
+        assert_eq!(ys.len(), 2);
+        assert!(
+            (ys[1] - ys[0] - text::line_height(FRAME_TITLE_SIZE)).abs() < 1e-2,
+            "title lines should stack one line height apart: {ys:?}"
+        );
+        // The first line rides at the frame's top inset (FRAME_TITLE_Y).
+        assert!(ys[0] > 0.0);
+    }
 
     #[test]
     fn escape_covers_all_special_chars() {
@@ -1173,6 +1301,15 @@ mod tests {
     #[test]
     fn snapshot_infra() {
         assert_snapshot("infra", &render(include_str!("../../examples/infra.mmd")));
+    }
+
+    #[test]
+    fn snapshot_finance() {
+        // A larger real-world diagram exercising M9: a `User --> VPN` edge that
+        // must route around a peer `prd` node, plus a thick `User --> prd` edge
+        // and several `VPN --> cvm` edges sharing VPN's bottom side (port
+        // separation + lane separation) and a deep-target around-frame route.
+        assert_snapshot("finance", &render(include_str!("../../examples/finance.mmd")));
     }
 
     #[test]

@@ -88,19 +88,23 @@ use crate::text;
 /// Label font size. Public so the SVG renderer sizes its `<text>` to match
 /// the boxes laid out from these metrics.
 pub const FONT_SIZE: f32 = 14.0;
-/// Horizontal padding inside a node box, each side.
-const NODE_PAD_X: f32 = 12.0;
-/// Vertical padding inside a node box, each side.
-const NODE_PAD_Y: f32 = 7.0;
+/// Horizontal padding inside a node box, each side: 1.5 font heights of
+/// clearance beyond the label.
+const NODE_PAD_X: f32 = 1.5 * FONT_SIZE;
+/// Vertical padding inside a node box, each side. One font height per side
+/// around the label's em box makes a node `3 * FONT_SIZE` tall — three font
+/// heights total.
+const NODE_PAD_Y: f32 = FONT_SIZE;
 /// Minimum gap between two items in the same layer (edge to edge).
-const NODE_SEP: f32 = 30.0;
+const NODE_SEP: f32 = 45.0;
 /// Minimum gap between two consecutive layers (edge to edge).
-const RANK_GAP: f32 = 45.0;
+const RANK_GAP: f32 = 67.5;
 /// Page margin around the whole drawing (top level only).
 const MARGIN: f32 = 20.0;
-/// Smallest node size, so even tiny labels get a visible box.
-const MIN_NODE_W: f32 = 40.0;
-const MIN_NODE_H: f32 = 28.0;
+/// Smallest node size, so even tiny labels get a visible box. Match the
+/// per-node sizing: three font heights, wide and tall.
+const MIN_NODE_W: f32 = 3.0 * FONT_SIZE;
+const MIN_NODE_H: f32 = 3.0 * FONT_SIZE;
 /// Elliptical cap radius (the lid and base rim) for `cylinder` nodes, in
 /// pixels. Fixed (not scaled to the box) so that growing a cylinder's height
 /// actually buys the label more room instead of also growing the caps. Public
@@ -118,9 +122,10 @@ const CROSS_ITERS: usize = 24;
 // Frame (subgraph) sizing, in pixels. The frame is a labeled border drawn
 // around a subgraph's contents; these define the inset between the frame
 // edge and the inner content (the recursive layout's bounding box).
-const FRAME_PAD_X: f32 = 10.0;
+const FRAME_PAD_X: f32 = 1.5 * FONT_SIZE;
 const FRAME_PAD_Y: f32 = 8.0;
-/// Height reserved at the top of a frame for the title, when present.
+/// Height reserved at the top of a frame for the title, when present (one
+/// title line; multi-line titles grow the inset — see [`frame_insets`]).
 const FRAME_TITLE_H: f32 = 20.0;
 /// Inset of the title text from the frame's top-left corner, and the font
 /// size it is rendered at. Layout reads these only to detect when a
@@ -288,6 +293,10 @@ enum ItemRef {
     Sub(usize),
 }
 
+/// A level item paired with its absolute rect — the obstacle field for M9
+/// cross-boundary LCA routing.
+type LevelItem = (ItemRef, (f32, f32, f32, f32));
+
 /// Per-edge precomputed routing info.
 struct EdgeInfo {
     /// The LCA level that owns this edge (`None` = top level).
@@ -449,6 +458,152 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         direct_pts.insert(*ei, pts.clone());
     }
 
+    // Per-level items (nodes + direct-child frames), in absolute coordinates —
+    // the obstacle field for cross-boundary LCA routing (M9): an LCA segment
+    // avoids its level's other items so it never passes through a node.
+    let mut level_items: HashMap<Option<usize>, Vec<LevelItem>> = HashMap::new();
+    for (gi, nd) in diagram.nodes.iter().enumerate() {
+        let r = node_rect.get(&gi).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        level_items.entry(nd.group).or_default().push((ItemRef::Node(gi), r));
+    }
+    for (si, sg) in diagram.subgraphs.iter().enumerate() {
+        let r = frame_rect.get(&si).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        level_items.entry(sg.parent).or_default().push((ItemRef::Sub(si), r));
+    }
+
+    // ---- M9 pre-pass 1: port separation -----------------------------------
+    // Gather, for every edge endpoint that touches a node, the node side it
+    // uses and the other endpoint's centre cross-coordinate, so sides shared
+    // by more than one edge can fan their ports apart. Also remember each
+    // cross-boundary edge's LCA geometry for the lane pass.
+    let mut port_ends: Vec<PortEnd> = Vec::new();
+    let mut lane_geom: Vec<LaneGeom> = Vec::new();
+    for (ei, e) in diagram.edges.iter().enumerate() {
+        let lca = edge_infos.get(ei).map(|i| i.lca).unwrap_or(None);
+        let lca_dir = effective_direction(lca, diagram);
+        let fi = id_index[e.from.as_str()];
+        let ti = id_index[e.to.as_str()];
+        let from = node_rect.get(&fi).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let to = node_rect.get(&ti).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let info = edge_infos.get(ei);
+        let is_direct = info.map(|i| i.is_direct).unwrap_or(true);
+        let (from_side, to_side, rep_from_rect, rep_to_rect, from_chain, to_chain) =
+            if is_direct {
+                let raw = direct_pts.get(&ei);
+                let fs = raw
+                    .and_then(|r| r.first())
+                    .map(|&p| side_of_port(from, p))
+                    .unwrap_or(Side::Bottom);
+                let ts = raw
+                    .and_then(|r| r.last())
+                    .map(|&p| side_of_port(to, p))
+                    .unwrap_or(Side::Top);
+                (fs, ts, from, to, Vec::new(), Vec::new())
+            } else {
+                let from_chain =
+                    chain_to_lca(diagram.nodes[fi].group, lca, &diagram.subgraphs);
+                let to_chain =
+                    chain_to_lca(diagram.nodes[ti].group, lca, &diagram.subgraphs);
+                let rf = from_chain
+                    .last()
+                    .map(|&s| frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)))
+                    .unwrap_or(from);
+                let rt = to_chain
+                    .last()
+                    .map(|&s| frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)))
+                    .unwrap_or(to);
+                let (exit, entry) = sides_along(lca_dir, center(rf), center(rt));
+                (exit, entry, rf, rt, from_chain, to_chain)
+            };
+        // An around-target-frame edge enters its target from a perpendicular
+        // side (not the one [`sides_along`] picks), so its target port is not
+        // on this side. Exclude it from target-side port separation, which
+        // would otherwise move the entry point and suppress the around-route.
+        // The pierce test uses node-aligned (centre) geometry, matching
+        // `cross_boundary_path`.
+        let is_around_target = !is_direct
+            && to_chain.len() == 1
+            && from_chain.len() <= 1
+            && {
+                let sibs: Vec<(f32, f32, f32, f32)> = frame_children
+                    .get(&to_chain[0])
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .filter(|r| !rects_near(*r, to))
+                    .collect();
+                let cc = cross_of(center(to), to_side);
+                let crp = port_at_cross(rep_to_rect, to_side, cc);
+                let ctp = port(to, to_side);
+                sibs.iter().any(|sib| segment_intersects_rect(crp, ctp, *sib))
+            };
+        port_ends.push(PortEnd {
+            edge: ei,
+            is_from: true,
+            node_idx: fi,
+            node_rect: from,
+            side: from_side,
+            other_cross: cross_of(center(to), from_side),
+        });
+        if !is_around_target {
+            port_ends.push(PortEnd {
+                edge: ei,
+                is_from: false,
+                node_idx: ti,
+                node_rect: to,
+                side: to_side,
+                other_cross: cross_of(center(from), to_side),
+            });
+        }
+        if !is_direct
+            && let Some(info) = info
+        {
+            lane_geom.push(LaneGeom {
+                edge: ei,
+                rep_from: info.rep_from,
+                rep_to: info.rep_to,
+                from_side,
+                to_side,
+                rep_from_rect,
+                rep_to_rect,
+            });
+        }
+    }
+    let sep = separate_ports(&port_ends);
+
+    // ---- M9 pre-pass 2: lane separation ----------------------------------
+    let mut lane_edges: Vec<LaneEdge> = Vec::new();
+    for g in &lane_geom {
+        let from_cross = sep
+            .get(&(g.edge, true))
+            .copied()
+            .unwrap_or(cross_of(center(g.rep_from_rect), g.from_side));
+        // Band obstacles for the lane group: the source's peers at the LCA
+        // level (everything except the source rep). Targets sit at the gap's
+        // far end, outside the gap, so they do not intrude on the lane band;
+        // excluding only the source keeps this set shared across a gap group
+        // (whose edges share a source but may differ in target).
+        let lca = edge_infos.get(g.edge).map(|i| i.lca).unwrap_or(None);
+        let obstacles: Vec<(f32, f32, f32, f32)> = level_items
+            .get(&lca)
+            .into_iter()
+            .flatten()
+            .filter(|(it, _)| *it != g.rep_from)
+            .map(|(_, r)| *r)
+            .collect();
+        lane_edges.push(LaneEdge {
+            edge: g.edge,
+            rep_from: g.rep_from,
+            from_side: g.from_side,
+            rep_to: g.rep_to,
+            from_flow: side_flow_coord(g.rep_from_rect, g.from_side),
+            to_flow: side_flow_coord(g.rep_to_rect, g.to_side),
+            from_cross,
+            obstacles,
+        });
+    }
+    let lanes = assign_lanes(&lane_edges);
+
     let mut nodes_out = Vec::with_capacity(diagram.nodes.len());
     for (gi, n) in diagram.nodes.iter().enumerate() {
         let (x, y, w, h) = node_rect
@@ -466,49 +621,118 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
 
     let mut edges_out = Vec::with_capacity(diagram.edges.len());
     for (ei, e) in diagram.edges.iter().enumerate() {
-        // M7: every edge is finally orthogonalized along its level's flow
-        // axis (the rank axis in page space), so diagonal segments become
-        // right-angle bends. The flow axis is read from the edge's LCA-level
-        // effective direction — the same direction the (already transformed)
-        // waypoints were laid out under — so an edge inside a left-right
-        // subgraph jogs horizontally even in a top-down diagram.
+        // M9: each edge is routed along its level's flow axis (the rank axis in
+        // page space). Direct internal edges keep the flat engine's waypoints
+        // (with dummies) but fan their ports apart when a side carries several
+        // edges. Cross-boundary edges route through frame connection points;
+        // their within-frame stubs stay frame-aware (M5/M7) while their LCA
+        // segment is rerouted to avoid peer nodes and fan into its assigned
+        // lane, so no edge overlaps a sibling or passes through a node.
         let lca = edge_infos.get(ei).map(|i| i.lca).unwrap_or(None);
-        let flow = FlowAxis::from_direction(effective_direction(lca, diagram));
-        let raw = if let Some(pts) = direct_pts.get(&ei) {
-            pts.clone()
+        let lca_dir = effective_direction(lca, diagram);
+        let flow = FlowAxis::from_direction(lca_dir);
+        let fi = id_index[e.from.as_str()];
+        let ti = id_index[e.to.as_str()];
+        let from = node_rect.get(&fi).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let to = node_rect.get(&ti).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
+        let info = edge_infos.get(ei);
+        let is_direct = info.map(|i| i.is_direct).unwrap_or(true);
+
+        let points = if is_direct {
+            let mut raw = direct_pts.get(&ei).cloned().unwrap_or_default();
+            if raw.len() >= 2 {
+                if let Some(&p) = raw.first() {
+                    let side = side_of_port(from, p);
+                    if let Some(&c) = sep.get(&(ei, true)) {
+                        raw[0] = set_cross(p, side, c);
+                    }
+                }
+                if let Some(&p) = raw.last() {
+                    let side = side_of_port(to, p);
+                    if let Some(&c) = sep.get(&(ei, false)) {
+                        *raw.last_mut().unwrap() = set_cross(p, side, c);
+                    }
+                }
+            }
+            orthogonalize(&raw, flow)
         } else {
-            // Cross-boundary edge (M5): route through connection points on the
-            // subgraph frames it crosses, without disturbing the groups'
-            // internal layout. The LCA-level segment connects the two
-            // representatives' ports at the endpoint nodes' cross-coordinates
-            // on their frames' facing sides (not the frame centers); within-
-            // frame stubs run straight from each endpoint node to its
-            // representative's port, detouring past a title or around a
-            // pierced sibling as needed, and clipping at any intermediate
-            // (nested) frame boundaries. The resulting (possibly diagonal)
-            // segments are orthogonalized below.
-            let fi = id_index[e.from.as_str()];
-            let ti = id_index[e.to.as_str()];
-            let from = node_rect.get(&fi).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
-            let to = node_rect.get(&ti).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
-            let lca_dir = effective_direction(lca, diagram);
             let from_chain =
                 chain_to_lca(diagram.nodes[fi].group, lca, &diagram.subgraphs);
             let to_chain =
                 chain_to_lca(diagram.nodes[ti].group, lca, &diagram.subgraphs);
-            cross_boundary_path(from, to, &from_chain, &to_chain, lca_dir, &|s| {
-                frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0))
-            }, &|s| {
-                diagram
-                    .subgraphs
-                    .get(s)
-                    .and_then(|sg| sg.title.as_ref())
-                    .map(|t| text::measure(t, FRAME_TITLE_FONT_SIZE).width)
-            }, &|s| {
-                frame_children.get(&s).cloned().unwrap_or_default()
-            })
+            let rep_from_rect = from_chain
+                .last()
+                .map(|&s| frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)))
+                .unwrap_or(from);
+            let rep_to_rect = to_chain
+                .last()
+                .map(|&s| frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)))
+                .unwrap_or(to);
+            let (exit, entry) = sides_along(lca_dir, center(rep_from_rect), center(rep_to_rect));
+            let from_port = sep
+                .get(&(ei, true))
+                .map(|&c| port_at_cross(from, exit, c))
+                .unwrap_or_else(|| port(from, exit));
+            let to_port = sep
+                .get(&(ei, false))
+                .map(|&c| port_at_cross(to, entry, c))
+                .unwrap_or_else(|| port(to, entry));
+            let from_cross = cross_of(from_port, exit);
+            let to_cross = cross_of(to_port, entry);
+            let lane = lanes.get(&ei).copied().unwrap_or(jog_flow(
+                side_flow_coord(rep_from_rect, exit),
+                side_flow_coord(rep_to_rect, entry),
+            ));
+            let rep_from = info.map(|i| i.rep_from).unwrap_or(ItemRef::Node(fi));
+            let rep_to = info.map(|i| i.rep_to).unwrap_or(ItemRef::Node(ti));
+            let obstacles: Vec<(f32, f32, f32, f32)> = level_items
+                .get(&lca)
+                .into_iter()
+                .flatten()
+                .filter(|(it, _)| *it != rep_from && *it != rep_to)
+                .map(|(_, r)| *r)
+                .collect();
+            let cp = cross_boundary_path(
+                from,
+                to,
+                &from_chain,
+                &to_chain,
+                lca_dir,
+                from_port,
+                to_port,
+                from_cross,
+                to_cross,
+                lane,
+                &|s| frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)),
+                &|s| {
+                    diagram
+                        .subgraphs
+                        .get(s)
+                        .and_then(|sg| sg.title.as_ref())
+                        .map(|t| text::measure(t, FRAME_TITLE_FONT_SIZE).width)
+                },
+                &|s| frame_children.get(&s).cloned().unwrap_or_default(),
+            );
+            match cp {
+                CrossPath::Pieces {
+                    src_stub,
+                    lca,
+                    tgt_stub,
+                } => {
+                    let mut pts = Vec::new();
+                    pts.extend(ortho_chain(&src_stub, flow));
+                    pts.extend(route_lca(lca[0], lca[1], flow, lane, &obstacles));
+                    pts.extend(ortho_chain(&tgt_stub, flow));
+                    dedup_consecutive(&mut pts);
+                    pts
+                }
+                CrossPath::Around(route) => {
+                    let mut pts = route;
+                    dedup_consecutive(&mut pts);
+                    pts
+                }
+            }
         };
-        let points = orthogonalize(&raw, flow);
         edges_out.push(EdgePath {
             from: e.from.clone(),
             to: e.to.clone(),
@@ -593,7 +817,16 @@ fn layout_level(
         let child = child_outs.get(&cs).expect("child out just inserted");
         let (top_inset, bot_pad) =
             frame_insets(&diagram.subgraphs[cs], cross_subs.contains(&cs));
-        let frame_w = child.out.w + 2.0 * FRAME_PAD_X;
+        // The frame is at least wide enough for its contents plus side
+        // padding, but no narrower than its title: the title starts at
+        // [`FRAME_TITLE_X`] and gets the same clearance past its last glyph.
+        let title_w = diagram.subgraphs[cs]
+            .title
+            .as_ref()
+            .map(|t| text::measure(t, FRAME_TITLE_FONT_SIZE).width)
+            .unwrap_or(0.0);
+        let frame_w = (child.out.w + 2.0 * FRAME_PAD_X)
+            .max(title_w + 2.0 * FRAME_TITLE_X);
         let frame_h = child.out.h + top_inset + bot_pad;
         item_of.insert(ItemRef::Sub(cs), items.len());
         item_refs.push(ItemRef::Sub(cs));
@@ -801,11 +1034,17 @@ fn cross_boundary_subs(
 /// Both insets grow along the LCA-level flow axis, where the within-frame
 /// stubs jog, so the extra room clears the title (above the node) and the
 /// node's arrowhead (below the jog).
+///
+/// The top inset is a one-line title band ([`FRAME_TITLE_H`]) plus one
+/// [`text::line_height`] per *additional* title line, so a multi-line
+/// title's stacked lines stay inside the band.
 fn frame_insets(sg: &Subgraph, cross: bool) -> (f32, f32) {
-    let top = if sg.title.is_some() {
-        FRAME_TITLE_H
-    } else {
-        FRAME_PAD_Y
+    let top = match &sg.title {
+        Some(t) => {
+            FRAME_TITLE_H
+                + (text::line_count(t) - 1) as f32 * text::line_height(FRAME_TITLE_FONT_SIZE)
+        }
+        None => FRAME_PAD_Y,
     };
     if cross {
         (top + CROSS_FRAME_PAD, FRAME_PAD_Y + CROSS_FRAME_PAD)
@@ -817,7 +1056,7 @@ fn frame_insets(sg: &Subgraph, cross: bool) -> (f32, f32) {
 // ============ Cross-boundary edge routing (M5) ============
 
 /// One of the four sides of an axis-aligned rectangle.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Side {
     Top,
     Bottom,
@@ -1151,6 +1390,541 @@ fn orthogonalize(points: &[(f32, f32)], axis: FlowAxis) -> Vec<(f32, f32)> {
     ortho_chain(points, axis)
 }
 
+// ============ M9 — edge separation & obstacle-aware LCA routing ============
+//
+// Two failure modes the M7 midpoint-jog orthogonalizer could not avoid:
+//
+// 1. An edge passing *through* a node. The LCA-level segment of a cross-
+//    boundary edge runs between two representatives' ports; its midpoint jog
+//    can land inside a third node that sits between them (e.g. `User --> VPN`
+//    whose jog crosses `prd`, making it look as if `prd` connects to `VPN`).
+// 2. Parallel edges laying *on top of* each other. Several edges from one
+//    source to one target subgraph share the source's single port and the
+//    same jog lane, so their trunks overlap and their labels collide (e.g.
+//    the five `VPN --> cvm` edges, and `lb --> api1/api2` in `infra`).
+//
+// M9 adds, for cross-boundary LCA segments (and direct-edge endpoints):
+//   - **Port separation** — a node side carrying more than one edge fans the
+//     ports across the side (ordered by the other endpoint's position), so
+//     edges no longer all leave/enter at the centre. Single-edge sides keep
+//     the centre (the prior, tested behaviour).
+//   - **Lane separation** — parallel LCA segments sharing a source, side, and
+//     target representative run at distinct jog flow-coordinates in their
+//     gap, fanning without overlapping.
+//   - **Obstacle avoidance** — when an LCA segment's jog would cross a peer
+//     node, it is rerouted around it along a rectilinear track graph (Dijkstra
+//     over obstacle-edge tracks), so no edge passes through a node.
+//
+// Within-frame stubs (the frame-aware short runs from a node to its rep frame
+// port) keep the M5/M7 logic unchanged; only the inter-representative LCA
+// segment is rerouted. The M5 headline guarantee (a subgraph's internal
+// layout is never disturbed by a crossing edge) is preserved.
+
+/// Clearance kept between a routed LCA segment and any peer node/frame rect
+/// it must avoid (the track graph routes along the obstacle edges offset by
+/// this much; the simple-Z clear check inflates obstacles by it).
+const ROUTE_PAD: f32 = 6.0;
+/// Track-graph tracks are placed this far beyond each obstacle edge — a touch
+/// more than [`ROUTE_PAD`] so a route running along a track clears the
+/// [`ROUTE_PAD`]-inflated obstacle check (a segment exactly on an inflated
+/// edge reads as touching it).
+const TRACK_OFF: f32 = ROUTE_PAD + 2.0;
+/// A node port is inset this far from the corners of its side when several
+/// edges share the side, so fanned ports stay clear of the box corners.
+const PORT_INSET: f32 = 7.0;
+/// Minimum cross-coordinate spacing between fanned ports on the same side
+/// (and between parallel jog lanes), so adjacent edges read as distinct.
+const FAN_SEP: f32 = 10.0;
+/// A jog lane is inset this far from the edges of the gap it runs in.
+const LANE_INSET: f32 = 5.0;
+/// Bend penalty added per turn in the track-graph route, so a shortest path
+/// with fewer right-angle bends is preferred.
+const BEND_PENALTY: f32 = 12.0;
+
+/// The cross-axis coordinate of a point relative to a side: `x` for a
+/// Top/Bottom side, `y` for a Left/Right side.
+fn cross_of(p: (f32, f32), side: Side) -> f32 {
+    match side {
+        Side::Top | Side::Bottom => p.0,
+        Side::Left | Side::Right => p.1,
+    }
+}
+
+/// Return `p` with its cross-coordinate (the one [`cross_of`] reads) replaced
+/// by `c`, keeping the flow-coordinate. Used to move a port point onto its
+/// separated cross-coordinate along its own side.
+fn set_cross(p: (f32, f32), side: Side, c: f32) -> (f32, f32) {
+    match side {
+        Side::Top | Side::Bottom => (c, p.1),
+        Side::Left | Side::Right => (p.0, c),
+    }
+}
+
+/// The `(lo, hi)` cross-axis span of a node's `side` (the edge the ports sit
+/// on): the x-span for Top/Bottom, the y-span for Left/Right.
+fn side_cross_span(node: (f32, f32, f32, f32), side: Side) -> (f32, f32) {
+    let (x, y, w, _h) = node;
+    match side {
+        Side::Top | Side::Bottom => (x, x + w),
+        Side::Left | Side::Right => (y, y + node.3),
+    }
+}
+
+/// The flow-coordinate of a node's `side` (the side's position along the
+/// flow axis): y for Top/Bottom, x for Left/Right.
+fn side_flow_coord(node: (f32, f32, f32, f32), side: Side) -> f32 {
+    let (x, y, _w, h) = node;
+    match side {
+        Side::Top => y,
+        Side::Bottom => y + h,
+        Side::Left => x,
+        Side::Right => x + node.2,
+    }
+}
+
+/// Which side of `node` the port point `p` lies on (the nearest edge).
+fn side_of_port(node: (f32, f32, f32, f32), p: (f32, f32)) -> Side {
+    let (x, y, w, h) = node;
+    let (px, py) = p;
+    let dl = (px - x).abs();
+    let dr = (px - (x + w)).abs();
+    let dt = (py - y).abs();
+    let db = (py - (y + h)).abs();
+    let m = dl.min(dr).min(dt).min(db);
+    if (m - dl).abs() < 1e-4 {
+        Side::Left
+    } else if (m - dr).abs() < 1e-4 {
+        Side::Right
+    } else if (m - dt).abs() < 1e-4 {
+        Side::Top
+    } else {
+        Side::Bottom
+    }
+}
+
+/// One cross-boundary edge's LCA geometry gathered for the lane pass.
+struct LaneGeom {
+    edge: usize,
+    rep_from: ItemRef,
+    rep_to: ItemRef,
+    from_side: Side,
+    to_side: Side,
+    rep_from_rect: (f32, f32, f32, f32),
+    rep_to_rect: (f32, f32, f32, f32),
+}
+
+/// A port-separation endpoint: one side of one edge that touches one node.
+struct PortEnd {
+    edge: usize,
+    is_from: bool,
+    node_idx: usize,
+    node_rect: (f32, f32, f32, f32),
+    side: Side,
+    /// The other endpoint node's centre cross-coordinate along this side's
+    /// cross axis — used to order and place the fanned port.
+    other_cross: f32,
+}
+
+/// Assign fanned port cross-coordinates to node sides carrying more than one
+/// edge. Returns a map from `(edge, is_from)` to the assigned cross; sides
+/// with a single edge are absent (the caller keeps the node's centre).
+///
+/// Each edge's port is placed at its *other* endpoint's cross-coordinate
+/// projected onto this side (clamped to the side, inset from the corners), so
+/// an edge to a directly-aligned target stays straight; edges sharing a side
+/// are then nudged apart to at least [`FAN_SEP`].
+fn separate_ports(ends: &[PortEnd]) -> std::collections::HashMap<(usize, bool), f32> {
+    use std::collections::HashMap;
+    let mut groups: HashMap<(usize, Side), Vec<usize>> = HashMap::new();
+    for (k, e) in ends.iter().enumerate() {
+        groups.entry((e.node_idx, e.side)).or_default().push(k);
+    }
+    let mut out: HashMap<(usize, bool), f32> = HashMap::new();
+    for ((_node_idx, side), idxs) in &groups {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let rect = ends[idxs[0]].node_rect;
+        let (lo, hi) = side_cross_span(rect, *side);
+        let usable_lo = lo + PORT_INSET;
+        let usable_hi = hi - PORT_INSET;
+        if usable_hi <= usable_lo + 1e-3 {
+            continue;
+        }
+        // Sort by the other endpoint's cross-coordinate (a stable ordering
+        // that keeps fanned edges from crossing each other).
+        let mut order: Vec<usize> = idxs.clone();
+        order.sort_by(|&a, &b| ends[a].other_cross.total_cmp(&ends[b].other_cross));
+        // Desired port = the other endpoint's cross, clamped to the side.
+        let mut assigned: Vec<f32> = order
+            .iter()
+            .map(|&i| ends[i].other_cross.clamp(usable_lo, usable_hi))
+            .collect();
+        // Enforce minimum fan separation left-to-right, then clamp, then a
+        // right-to-left pass to restore separation if clamping bunched an end.
+        for i in 1..assigned.len() {
+            if assigned[i] - assigned[i - 1] < FAN_SEP {
+                assigned[i] = assigned[i - 1] + FAN_SEP;
+            }
+        }
+        for v in assigned.iter_mut() {
+            *v = v.clamp(usable_lo, usable_hi);
+        }
+        for i in (1..assigned.len()).rev() {
+            if assigned[i] - assigned[i - 1] < FAN_SEP {
+                assigned[i - 1] = assigned[i] - FAN_SEP;
+            }
+        }
+        for v in assigned.iter_mut() {
+            *v = v.clamp(usable_lo, usable_hi);
+        }
+        for (k, &i) in order.iter().enumerate() {
+            out.insert((ends[i].edge, ends[i].is_from), assigned[k]);
+        }
+    }
+    out
+}
+
+/// One cross-boundary edge's data for lane assignment.
+struct LaneEdge {
+    edge: usize,
+    rep_from: ItemRef,
+    from_side: Side,
+    rep_to: ItemRef,
+    from_flow: f32,
+    to_flow: f32,
+    /// The (separated) source port's cross-coordinate, for lane ordering.
+    from_cross: f32,
+    /// The source's peer obstacles at the LCA level (everything except the
+    /// source rep) — shared across a lane group, whose edges share a source
+    /// and gap. Used to keep the lane band clear of obstacles that intrude
+    /// into the gap.
+    obstacles: Vec<(f32, f32, f32, f32)>,
+}
+
+/// Assign distinct jog flow-coordinates (lanes) to parallel cross-boundary LCA
+/// segments that share a source, source side, and target representative, so
+/// they fan out in their shared gap instead of overlapping. Returns a map from
+/// edge index to its jog flow-coordinate. A lone edge in a group gets the gap
+/// midpoint (the prior behaviour).
+fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
+    use std::collections::HashMap;
+    // Group edges that share a source, source side, and gap (the flow span
+    // between the source's exit and the target's entry) — these are the
+    // edges whose horizontal jogs would land in the same band and overlap.
+    // (Grouping by target would leave same-gap edges like `api2 -> {db,cache,
+    // queue}` in separate single-edge groups, all defaulting to the same
+    // midpoint.) Flow-coordinates are rounded for the key so float noise
+    // from equal-rank placement still groups.
+    let mut groups: HashMap<(ItemRef, Side, i64, i64), Vec<usize>> = HashMap::new();
+    for (k, e) in edges.iter().enumerate() {
+        let key = (
+            e.rep_from,
+            e.from_side,
+            (e.from_flow * 10.0).round() as i64,
+            (e.to_flow * 10.0).round() as i64,
+        );
+        groups.entry(key).or_default().push(k);
+    }
+    let mut out: HashMap<usize, f32> = HashMap::new();
+    for idxs in groups.values() {
+        let mut order: Vec<usize> = idxs.clone();
+        order.sort_by(|&a, &b| edges[a].from_cross.total_cmp(&edges[b].from_cross));
+        // All edges in a group share the same source and gap, hence the same
+        // gap and the same source-side peers (the band obstacles, shared).
+        let (f0, t0) = (edges[order[0]].from_flow, edges[order[0]].to_flow);
+        let gap_lo = f0.min(t0);
+        let gap_hi = f0.max(t0);
+        let span = (gap_hi - gap_lo).max(0.0);
+        let mut usable_lo = gap_lo + LANE_INSET;
+        let mut usable_hi = gap_hi - LANE_INSET;
+        let n = order.len();
+        // Shrink the lane band away from obstacles that intrude into the gap
+        // (a horizontal jog at a lane inside an obstacle's flow-extent would
+        // cross it). Conservative: treat every source-peer obstacle as
+        // blocking the full gap width, so no edge is assigned a blocked lane
+        // (and the obstacle-aware router never falls back to a colliding
+        // midpoint). The band obstacles are the group's shared source-side
+        // peers (targets sit at the gap's far end, outside it).
+        for &o in &edges[order[0]].obstacles {
+            let (ox, oy, ow, oh) = o;
+            let (olo, ohi) = (oy, oy + oh);
+            let blo = olo - ROUTE_PAD - 1.0;
+            let bhi = ohi + ROUTE_PAD + 1.0;
+            if bhi > gap_lo + 1e-3 && blo < gap_hi - 1e-3 {
+                if blo <= gap_lo + LANE_INSET {
+                    usable_lo = usable_lo.max(bhi);
+                }
+                if bhi >= gap_hi - LANE_INSET {
+                    usable_hi = usable_hi.min(blo);
+                }
+            }
+            let _ = (ox, ow);
+        }
+        for (k, &i) in order.iter().enumerate() {
+            let lane = if n > 1 && usable_hi > usable_lo {
+                usable_lo + k as f32 * (usable_hi - usable_lo) / (n - 1) as f32
+            } else {
+                gap_lo + span / 2.0
+            };
+            out.insert(edges[i].edge, lane);
+        }
+    }
+    out
+}
+
+/// The simple orthogonal "Z" from `a` to `b` with its cross-segment at
+/// flow-coordinate `lane`: straight if the two ports share a cross-
+/// coordinate, otherwise `a -> (a.cross, lane) -> (b.cross, lane) -> b`.
+fn simple_z(a: (f32, f32), b: (f32, f32), axis: FlowAxis, lane: f32) -> Vec<(f32, f32)> {
+    let (ca, _fa) = cross_flow(a, axis);
+    let (cb, _fb) = cross_flow(b, axis);
+    if (ca - cb).abs() < 1e-3 {
+        return vec![a, b];
+    }
+    vec![
+        a,
+        with_flow(ca, lane, axis),
+        with_flow(cb, lane, axis),
+        b,
+    ]
+}
+
+/// Does the polyline `pts` stay clear of every (un-inflated) obstacle rect by
+/// at least [`ROUTE_PAD`]? (Obstacles are inflated for the test.)
+fn route_clear(pts: &[(f32, f32)], obstacles: &[(f32, f32, f32, f32)]) -> bool {
+    let inflated: Vec<(f32, f32, f32, f32)> = obstacles
+        .iter()
+        .map(|&(x, y, w, h)| (x - ROUTE_PAD, y - ROUTE_PAD, w + 2.0 * ROUTE_PAD, h + 2.0 * ROUTE_PAD))
+        .collect();
+    pts.windows(2)
+        .all(|w| !inflated.iter().any(|&o| segment_intersects_rect(w[0], w[1], o)))
+}
+
+/// A rectilinear shortest path (fewest bends among shortest) from `a` to `b`
+/// avoiding `obstacles`, routed along a track graph whose tracks are the
+/// obstacle edges ± [`ROUTE_PAD`] plus the two ports' coordinates. Used when
+/// the simple Z is blocked by a peer node; returns the polyline `a -> ... -> b`,
+/// or an empty vec if no route exists (caller falls back to the simple Z).
+fn track_route(a: (f32, f32), b: (f32, f32), obstacles: &[(f32, f32, f32, f32)]) -> Vec<(f32, f32)> {
+    // Vertical tracks (x) and horizontal tracks (y).
+    let mut vts = vec![a.0, b.0];
+    let mut hts = vec![a.1, b.1];
+    for &(x, y, w, h) in obstacles {
+        vts.push(x - TRACK_OFF);
+        vts.push(x + w + TRACK_OFF);
+        hts.push(y - TRACK_OFF);
+        hts.push(y + h + TRACK_OFF);
+    }
+    // Bound the routing region to the ports and obstacles (± pad), so the
+    // track graph stays small and routes don't wander far afield.
+    let (mut minx, mut maxx) = (a.0.min(b.0), a.0.max(b.0));
+    let (mut miny, mut maxy) = (a.1.min(b.1), a.1.max(b.1));
+    for &(x, y, w, h) in obstacles {
+        minx = minx.min(x - TRACK_OFF);
+        maxx = maxx.max(x + w + TRACK_OFF);
+        miny = miny.min(y - TRACK_OFF);
+        maxy = maxy.max(y + h + TRACK_OFF);
+    }
+    vts.sort_by(f32::total_cmp);
+    hts.sort_by(f32::total_cmp);
+    vts.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
+    hts.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
+    vts.retain(|&x| x >= minx - 1e-2 && x <= maxx + 1e-2);
+    hts.retain(|&y| y >= miny - 1e-2 && y <= maxy + 1e-2);
+    let nv = vts.len();
+    let nh = hts.len();
+    if nv == 0 || nh == 0 {
+        return Vec::new();
+    }
+    let n = nv * nh;
+    let ai = vts.iter().position(|&x| (x - a.0).abs() < 1e-2).unwrap();
+    let aj = hts.iter().position(|&y| (y - a.1).abs() < 1e-2).unwrap();
+    let bi = vts.iter().position(|&x| (x - b.0).abs() < 1e-2).unwrap();
+    let bj = hts.iter().position(|&y| (y - b.1).abs() < 1e-2).unwrap();
+    let start = ai * nh + aj;
+    let goal = bi * nh + bj;
+
+    // Clear check for a segment between two track intersections, against the
+    // original (un-inflated) obstacle rects: a track at an obstacle edge ± pad
+    // is just clear of it; a track inside an obstacle's span that crosses its
+    // other-axis extent is blocked.
+    let clear = |x0: f32, y0: f32, x1: f32, y1: f32| -> bool {
+        !obstacles
+            .iter()
+            .any(|&o| segment_intersects_rect((x0, y0), (x1, y1), o))
+    };
+    // Neighbours of node (i,j): the adjacent track intersections reachable by
+    // a clear orthogonal segment, with the direction of travel (for bend cost).
+    // dir: 0=+x,1=-x,2=+y,3=-y.
+    let neighbours = |i: usize, j: usize| -> Vec<(usize, usize, usize, f32)> {
+        let mut out = Vec::new();
+        let x = vts[i];
+        let y = hts[j];
+        if j + 1 < nh && clear(x, y, x, hts[j + 1]) {
+            out.push((i, j + 1, 2, (hts[j + 1] - y).abs()));
+        }
+        if j > 0 && clear(x, y, x, hts[j - 1]) {
+            out.push((i, j - 1, 3, (y - hts[j - 1]).abs()));
+        }
+        if i + 1 < nv && clear(x, y, vts[i + 1], y) {
+            out.push((i + 1, j, 0, (vts[i + 1] - x).abs()));
+        }
+        if i > 0 && clear(x, y, vts[i - 1], y) {
+            out.push((i - 1, j, 1, (x - vts[i - 1]).abs()));
+        }
+        out
+    };
+
+    // Dijkstra over (node, incoming_dir) states so a bend (direction change)
+    // can be penalised. 4 dirs; the start has no incoming dir (use 4 = none).
+    let n_states = n * 5;
+    let mut dist = vec![f32::INFINITY; n_states];
+    let mut prev = vec![(usize::MAX, usize::MAX); n_states];
+    let mut visited = vec![false; n_states];
+    let st = |node: usize, d: usize| node * 5 + d;
+    dist[st(start, 4)] = 0.0;
+    for _ in 0..n_states {
+        let mut u: Option<usize> = None;
+        let mut best = f32::INFINITY;
+        for s in 0..n_states {
+            if !visited[s] && dist[s] < best {
+                best = dist[s];
+                u = Some(s);
+            }
+        }
+        let u = match u {
+            Some(u) => u,
+            None => break,
+        };
+        if best.is_infinite() {
+            break;
+        }
+        visited[u] = true;
+        let node = u / 5;
+        let d_in = u % 5;
+        if node == goal {
+            break;
+        }
+        let i = node / nh;
+        let j = node % nh;
+        for (ni, nj, d_out, len) in neighbours(i, j) {
+            let v = ni * nh + nj;
+            let cost = len + if d_in != 4 && d_in != d_out { BEND_PENALTY } else { 0.0 };
+            let vs = st(v, d_out);
+            let nd = dist[u] + cost;
+            if nd < dist[vs] - 1e-6 {
+                dist[vs] = nd;
+                prev[vs] = (u, d_out);
+            }
+        }
+    }
+
+    // Reconstruct: pick the goal state (any dir) with the smallest distance.
+    let mut best_goal: Option<usize> = None;
+    let mut best = f32::INFINITY;
+    for d in 0..5 {
+        let s = st(goal, d);
+        if dist[s] < best {
+            best = dist[s];
+            best_goal = Some(s);
+        }
+    }
+    let mut s = match best_goal {
+        Some(s) if dist[s].is_finite() => s,
+        _ => return Vec::new(),
+    };
+    let mut path: Vec<(usize, usize)> = Vec::new();
+    while s != usize::MAX {
+        let node = s / 5;
+        path.push((node / nh, node % nh));
+        let (p, _d) = prev[s];
+        if p == usize::MAX {
+            break;
+        }
+        s = p;
+    }
+    path.reverse();
+    let mut pts: Vec<(f32, f32)> = path.iter().map(|&(i, j)| (vts[i], hts[j])).collect();
+    // Collapse collinear interior points (the path runs through some track
+    // intersections without turning).
+    collapse_collinear(&mut pts);
+    // Ensure the endpoints are exactly a and b (snap away float drift).
+    if !pts.is_empty() {
+        pts[0] = a;
+        *pts.last_mut().unwrap() = b;
+    }
+    pts
+}
+
+/// Drop interior points that lie on the straight line through their neighbours
+/// (collinear), leaving only the corners of the polyline.
+fn collapse_collinear(pts: &mut Vec<(f32, f32)>) {
+    if pts.len() < 3 {
+        return;
+    }
+    let mut kept: Vec<(f32, f32)> = Vec::with_capacity(pts.len());
+    kept.push(pts[0]);
+    for w in pts.windows(3) {
+        let (a, b, c) = (w[0], w[1], w[2]);
+        let cross = (b.0 - a.0) * (c.1 - a.1) - (b.1 - a.1) * (c.0 - a.0);
+        if cross.abs() > 1e-3 {
+            kept.push(b);
+        }
+    }
+    kept.push(*pts.last().unwrap());
+    *pts = kept;
+}
+
+/// Route an orthogonal LCA-level segment from port `a` to port `b` (page
+/// space) that avoids the peer `obstacles`. It prefers a simple Z at the
+/// assigned jog `lane`, then the midpoint, then — if both cross a node — a
+/// rectilinear around-route through the track graph. `axis` orients the flow
+/// axis so the cross-segment runs across the page perpendicular to it.
+fn route_lca(
+    a: (f32, f32),
+    b: (f32, f32),
+    axis: FlowAxis,
+    lane: f32,
+    obstacles: &[(f32, f32, f32, f32)],
+) -> Vec<(f32, f32)> {
+    if obstacles.is_empty() {
+        return simple_z(a, b, axis, lane);
+    }
+    let z = simple_z(a, b, axis, lane);
+    if route_clear(&z, obstacles) {
+        return z;
+    }
+    let mid = jog_flow(cross_flow(a, axis).1, cross_flow(b, axis).1);
+    let zm = simple_z(a, b, axis, mid);
+    if route_clear(&zm, obstacles) {
+        return zm;
+    }
+    let tr = track_route(a, b, obstacles);
+    if !tr.is_empty() && route_clear(&tr, obstacles) {
+        return tr;
+    }
+    // Last resort: the simple Z at the lane (may cross, but is shortest).
+    z
+}
+
+/// The structured routing of one cross-boundary edge: either the within-frame
+/// stubs plus an LCA segment to be routed by the caller ([`CrossPath::Pieces`]),
+/// or a pre-built around-target-frame route to use as-is ([`CrossPath::Around`]).
+enum CrossPath {
+    /// `src_stub` runs from the source node port to its rep frame port (raw,
+    /// pre-orthogonal); `lca` is the two rep-frame ports to be routed;
+    /// `tgt_stub` runs from the target rep frame port to the target node port.
+    Pieces {
+        src_stub: Vec<(f32, f32)>,
+        lca: [(f32, f32); 2],
+        tgt_stub: Vec<(f32, f32)>,
+    },
+    /// A complete pre-built route (already axis-aligned) for an edge whose
+    /// straight within-frame stub would pierce a sibling.
+    Around(Vec<(f32, f32)>),
+}
+
 /// A clean "around the target frame" route for a cross-boundary edge whose
 /// straight within-frame target stub would pierce the target frame's internal
 /// content — the target node sits beyond other members along the frame's
@@ -1174,7 +1948,7 @@ fn orthogonalize(points: &[(f32, f32)], axis: FlowAxis) -> Vec<(f32, f32)> {
 /// too.
 #[allow(clippy::too_many_arguments)]
 fn try_around_target_route(
-    from: (f32, f32, f32, f32),
+    _from: (f32, f32, f32, f32),
     to: (f32, f32, f32, f32),
     fb: (f32, f32, f32, f32),
     from_chain: &[usize],
@@ -1183,8 +1957,9 @@ fn try_around_target_route(
     entry: Side,
     siblings: &[(f32, f32, f32, f32)],
     frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
+    from_port: (f32, f32),
+    lane: f32,
 ) -> Option<Vec<(f32, f32)>> {
-    let from_port = port(from, exit);
     let (from_cc, from_ff) = cross_flow(from_port, axis);
     let (fb_clo, fb_chi) = cross_range(fb, axis);
     let (to_clo, to_chi) = cross_range(to, axis);
@@ -1222,7 +1997,7 @@ fn try_around_target_route(
             let fb_entry_flow = cross_flow(port(fb, entry), axis).1;
             let lo = src_exit_flow.min(fb_entry_flow);
             let hi = src_exit_flow.max(fb_entry_flow);
-            let gap_f = ((src_exit_flow + fb_entry_flow) / 2.0).clamp(lo, hi);
+            let gap_f = lane.clamp(lo, hi);
             cf.push((from_cc, gap_f));
             cf.push((ac, gap_f));
             cf.push((ac, to_fc));
@@ -1294,10 +2069,15 @@ fn cross_boundary_path(
     from_chain: &[usize],
     to_chain: &[usize],
     lca_dir: Direction,
+    from_port: (f32, f32),
+    to_port: (f32, f32),
+    from_cross: f32,
+    to_cross: f32,
+    lane: f32,
     frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
     frame_title_width: &dyn Fn(usize) -> Option<f32>,
     frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
-) -> Vec<(f32, f32)> {
+) -> CrossPath {
     let axis = FlowAxis::from_direction(lca_dir);
     let rep_from = if let Some(&s) = from_chain.last() {
         frame_rect(s)
@@ -1310,15 +2090,9 @@ fn cross_boundary_path(
         to
     };
     let (exit, entry) = sides_along(lca_dir, center(rep_from), center(rep_to));
-    let from_port = port(from, exit);
-    let to_port = port(to, entry);
-    // Node-aligned rep ports: at each endpoint node's cross-coordinate on its
-    // rep frame's facing side. (When the chain is empty the endpoint is its
-    // own rep, so this is just the node's own facing port.) This is what makes
-    // a within-frame stub straight and lets edges enter a subgraph lined up
-    // with their target node.
-    let from_cross = cross_flow(center(from), axis).0;
-    let to_cross = cross_flow(center(to), axis).0;
+    // Node-aligned rep ports at the (separated) endpoint node's cross-
+    // coordinate on its rep frame's facing side. When the chain is empty the
+    // endpoint is its own rep, so this is the node's own (separated) port.
     let rep_from_port_aligned = port_at_cross(rep_from, exit, from_cross);
     let rep_to_port_aligned = port_at_cross(rep_to, entry, to_cross);
 
@@ -1336,9 +2110,15 @@ fn cross_boundary_path(
             .into_iter()
             .filter(|r| !rects_near(*r, to))
             .collect();
+        // The pierce decision uses node-aligned (centre) geometry, not the
+        // (possibly port-separated) rep port, so port separation never
+        // suppresses an around-route that the target's position warrants.
+        let center_to_cross = cross_of(center(to), entry);
+        let center_rep_to_port = port_at_cross(rep_to, entry, center_to_cross);
+        let center_to_port = port(to, entry);
         let target_pierced = sibs
             .iter()
-            .any(|&sib| segment_intersects_rect(rep_to_port_aligned, to_port, sib));
+            .any(|&sib| segment_intersects_rect(center_rep_to_port, center_to_port, sib));
         if target_pierced
             && let Some(route) = try_around_target_route(
                 from,
@@ -1350,9 +2130,11 @@ fn cross_boundary_path(
                 entry,
                 &sibs,
                 frame_rect,
+                from_port,
+                lane,
             )
         {
-            return route;
+            return CrossPath::Around(route);
         }
     }
 
@@ -1372,12 +2154,13 @@ fn cross_boundary_path(
         None => rep_to_port_aligned,
     };
 
-    let mut pts = Vec::new();
-
     // Source stub: the endpoint node's port -> its representative's frame
-    // port, clipping at any intermediate (nested) source frame boundaries.
-    if !from_chain.is_empty() {
-        let stub = build_stub(
+    // port (raw, pre-orthogonal), clipping at any intermediate (nested)
+    // source frame boundaries. Empty when the endpoint is its own rep.
+    let src_stub = if from_chain.is_empty() {
+        Vec::new()
+    } else {
+        build_stub(
             from_port,
             rep_from_port,
             from_cross,
@@ -1386,17 +2169,14 @@ fn cross_boundary_path(
             axis,
             frame_rect,
             /* inward */ false,
-        );
-        pts.extend(ortho_chain(&stub, axis));
-    }
-
-    // LCA-level segment between the two representatives' ports, jogged at the
-    // midpoint (the inter-representative gap — clear of nodes and titles).
-    pts.extend(ortho_chain(&[rep_from_port, rep_to_port], axis));
+        )
+    };
 
     // Target stub: symmetric to the source stub.
-    if !to_chain.is_empty() {
-        let stub = build_stub(
+    let tgt_stub = if to_chain.is_empty() {
+        Vec::new()
+    } else {
+        build_stub(
             to_port,
             rep_to_port,
             to_cross,
@@ -1405,12 +2185,14 @@ fn cross_boundary_path(
             axis,
             frame_rect,
             /* inward */ true,
-        );
-        pts.extend(ortho_chain(&stub, axis));
-    }
+        )
+    };
 
-    dedup_consecutive(&mut pts);
-    pts
+    CrossPath::Pieces {
+        src_stub,
+        lca: [rep_from_port, rep_to_port],
+        tgt_stub,
+    }
 }
 
 /// A title detour for a within-frame stub: the cross-coordinate at which to
@@ -2520,9 +3302,9 @@ mod tests {
         let box_h = node_rect(&l, "box").h;
         let cyl_h = node_rect(&l, "cyl").h;
         assert!(cyl_h > box_h, "cylinder ({cyl_h}) should be taller than box ({box_h})");
-        // Concretely: box = text + 2·pad = 28; cylinder adds 2·CYL_PAD + 2·CYL_RY.
-        assert_eq!(box_h, 28.0);
-        assert_eq!(cyl_h, 28.0 + 2.0 * CYL_PAD + 2.0 * CYL_RY);
+        // Concretely: box = 3·FONT_SIZE = 42; cylinder adds 2·CYL_PAD + 2·CYL_RY.
+        assert_eq!(box_h, 42.0);
+        assert_eq!(cyl_h, 42.0 + 2.0 * CYL_PAD + 2.0 * CYL_RY);
         // The label clears the lid's lowest point (em box above it).
         let r = node_rect(&l, "cyl");
         let cy = r.y + r.h / 2.0;
@@ -2559,6 +3341,92 @@ mod tests {
             assert!(n.x > f.x + 1.0 && n.y > f.y + 1.0);
         }
         assert_all_finite(&l);
+    }
+
+    #[test]
+    fn frame_grows_to_fit_a_wider_title() {
+        // A long title on a narrow subgraph: the frame must widen so the
+        // title text fits, rather than the title spilling out of the frame.
+        let (d, l) = lay(
+            "diagram top-down\n\
+             subgraph \"A Very Long Cluster Title\"\n\
+             a\n\
+             end\n",
+        );
+        assert_eq!(l.subgraphs.len(), 1);
+        let f = sub_rect(&l, 0);
+        let title = d.subgraphs[0].title.as_deref().unwrap();
+        let m = text::measure(title, FRAME_TITLE_FONT_SIZE);
+        // Title starts at FRAME_TITLE_X and needs the same clearance past
+        // its last glyph.
+        assert!(
+            f.w >= m.width + 2.0 * FRAME_TITLE_X - 1e-2,
+            "frame ({}) too narrow for title (need {})",
+            f.w,
+            m.width + 2.0 * FRAME_TITLE_X
+        );
+        // The node still sits inside with a real inset.
+        let a = node_rect(&l, "a");
+        assert!(contains((f.x, f.y, f.w, f.h), (a.x, a.y, a.w, a.h)));
+        assert!(a.x > f.x + 1.0 && a.y > f.y + 1.0);
+        assert_all_finite(&l);
+    }
+
+    #[test]
+    fn multiline_label_sizes_the_node_box() {
+        // "Kubernetes\nCluster": the box spans the widest line and is tall
+        // enough for both lines (first em box + one line height).
+        let (_d, l) = lay("diagram top-down\napp \"Kubernetes\\nCluster\"\n");
+        let r = node_rect(&l, "app");
+        let wide = text::measure("Kubernetes", FONT_SIZE).width;
+        let m = text::measure("Kubernetes\nCluster", FONT_SIZE);
+        assert!(
+            (r.w - (wide + 2.0 * NODE_PAD_X)).abs() < 1e-2,
+            "box width should span the widest line: {} vs {}",
+            r.w,
+            wide + 2.0 * NODE_PAD_X
+        );
+        assert!(
+            (r.h - (m.height + 2.0 * NODE_PAD_Y)).abs() < 1e-2,
+            "box height should span both lines: {} vs {}",
+            r.h,
+            m.height + 2.0 * NODE_PAD_Y
+        );
+        assert!(r.h > 3.0 * FONT_SIZE, "two lines must be taller than one");
+    }
+
+    #[test]
+    fn multiline_title_grows_the_frame_top_inset() {
+        // A two-line title's frame is taller than the same diagram with a
+        // one-line title: the top inset grows by one title line height (the
+        // band the stacked lines ride in).
+        let (_d1, l1) = lay(
+            "diagram top-down\n\
+             subgraph \"Cluster\"\n\
+             a\n\
+             end\n",
+        );
+        let (_d2, l2) = lay(
+            "diagram top-down\n\
+             subgraph \"Kubernetes\\nCluster\"\n\
+             a\n\
+             end\n",
+        );
+        let f1 = sub_rect(&l1, 0);
+        let f2 = sub_rect(&l2, 0);
+        // Widths: the grown title is wider than "Cluster" — check both
+        // contain their widest line, and the multiline frame is at least as
+        // wide as its widest title line plus insets.
+        let title2_w = text::measure("Kubernetes", FRAME_TITLE_FONT_SIZE).width;
+        assert!(f2.w >= title2_w + 2.0 * FRAME_TITLE_X - 1e-2);
+        // Height: exactly one extra title line height.
+        let extra = text::line_height(FRAME_TITLE_FONT_SIZE);
+        assert!(
+            (f2.h - f1.h - extra).abs() < 1e-2,
+            "two-line title frame should be one line height taller: {} vs {}",
+            f2.h,
+            f1.h
+        );
     }
 
     #[test]
@@ -2991,24 +3859,28 @@ c --> sink
         let k8s = sub_rect(&l, 0);
         let e = edge_path(&l, "api2", "db");
         assert!(e.points.len() >= 3, "api2->db should route through K8s's frame");
-        // The K8s frame connection point: on K8s's bottom edge, at api2's
-        // center-x (the rep port lines up with the node, not the frame center).
-        let api2_cx = api2.x + api2.w / 2.0;
+        // The K8s frame connection point: on K8s's bottom edge, aligned with
+        // api2 (within its x-span — the rep port lines up with the node, not
+        // the frame center; M9 may fan it off the exact centre when api2 has
+        // several outgoing edges).
         let k8s_bot_y = k8s.y + k8s.h;
         let cp_idx = e
             .points
             .iter()
-            .position(|&p| {
-                (p.0 - api2_cx).abs() < 1e-2 && (p.1 - k8s_bot_y).abs() < 1e-2
-            })
-            .expect("no K8s bottom connection point at api2's x on api2->db");
+            .position(|&p| (p.1 - k8s_bot_y).abs() < 1e-2)
+            .expect("no K8s bottom connection point on api2->db");
+        let cp = e.points[cp_idx];
         assert!(
             cp_idx >= 1,
             "connection point should not be the first waypoint"
         );
+        assert!(
+            cp.0 >= api2.x - 1e-2 && cp.0 <= api2.x + api2.w + 1e-2,
+            "connection point {cp:?} not aligned with api2 {api2:?}"
+        );
         // Every segment of the stub (api2 port -> ... -> K8s connection point)
         // must miss api1.
-        for seg in e.points[..cp_idx].windows(2) {
+        for seg in e.points[..=cp_idx].windows(2) {
             assert!(
                 !segment_intersects_rect(seg[0], seg[1], rect_of(api1)),
                 "api2->db stub segment {:?}->{:?} crosses api1 {:?}",
@@ -3221,6 +4093,63 @@ end
     }
 
     #[test]
+    fn cross_boundary_multiline_title_grows_top_inset_further() {
+        // Same growth check as `cross_boundary_subgraph_grows_around_immediate_child`
+        // but with a two-line title: the title band itself grows by one title
+        // line height *before* the cross-boundary padding, so the stub's jog
+        // still lands below the whole title.
+        let one_line = lay(r#"diagram top-down
+src
+subgraph "Kubernetes Cluster"
+a
+end
+src --> a
+"#);
+        let two_lines = lay(r#"diagram top-down
+src
+subgraph "Kubernetes\nCluster"
+a
+end
+src --> a
+"#);
+        let f1 = sub_rect(&one_line.1, 0);
+        let f2 = sub_rect(&two_lines.1, 0);
+        let extra = text::line_height(FRAME_TITLE_FONT_SIZE);
+        assert!(
+            (f2.h - f1.h - extra).abs() < 1e-2,
+            "two-line title frame should be one title line height taller: {} vs {}",
+            f2.h,
+            f1.h
+        );
+        let _a1 = node_rect(&one_line.1, "a");
+        let a2 = node_rect(&two_lines.1, "a");
+        assert!(
+            (a2.y - f2.y - (FRAME_TITLE_H + extra + CROSS_FRAME_PAD)).abs() < 1e-2,
+            "top inset should be the two-line title band plus cross padding"
+        );
+        // The jog (STUB_JOG_CLEARANCE above the node's top) stays clear of
+        // the whole title: layout reserves a title band of FRAME_TITLE_H +
+        // one line height per extra line at the frame top, and the jog lands
+        // exactly at that band's bottom edge.
+        let e = edge_path(&two_lines.1, "src", "a");
+        let band_bottom = f2.y + FRAME_TITLE_H + extra;
+        // The stub's final horizontal approach (the jog) is the second-to-
+        // last point: last is a's top port.
+        let jog_y = e.points[e.points.len() - 2].1;
+        assert!(
+            (jog_y - (a2.y - STUB_JOG_CLEARANCE)).abs() < 1e-2,
+            "stub should jog STUB_JOG_CLEARANCE above the node: jog {jog_y} node top {}",
+            a2.y
+        );
+        assert!(
+            jog_y >= band_bottom - 1e-2,
+            "jog ({jog_y}) must clear the two-line title band (bottom {band_bottom})"
+        );
+        assert!(is_orthogonal(&e.points));
+        assert_all_finite(&two_lines.1);
+    }
+
+    #[test]
     fn cross_boundary_stub_jog_clears_title_region_and_arrowhead() {
         // The within-frame horizontal jog of a titled-top cross-boundary stub
         // must land in the clear padding *below* the frame's reserved title
@@ -3336,9 +4265,22 @@ src --> a
         let d = node_rect(&l, "d");
         assert!(cx(b) < cx(c), "b left of c");
         let bc_mid = (cx(b) + cx(c)) / 2.0;
-        assert!((cx(a) - bc_mid).abs() < 1e-2, "apex not centered over b/c");
+        // `a` centers on the b/c *block span* (edges), `d` centers exactly on
+        // the b/c *label centers*. These coincide only when b and c have
+        // equal widths; with per-label padding each box is `label +
+        // 2·NODE_PAD_X` wide, so tiny glyph-advance differences remain.
+        // Allow up to the full width mismatch — alignment is still visually
+        // exact for equal-width siblings.
+        let width_diff = (b.w - c.w).abs();
+        assert!(
+            (cx(a) - bc_mid).abs() <= width_diff / 4.0 + 1e-2,
+            "apex not centered over b/c"
+        );
         assert!((cx(d) - bc_mid).abs() < 1e-2, "sink not centered over b/c");
-        assert!((cx(a) - cx(d)).abs() < 1e-2, "apex and sink not aligned");
+        assert!(
+            (cx(a) - cx(d)).abs() <= width_diff / 4.0 + 1e-2,
+            "apex and sink not aligned"
+        );
     }
 
     #[test]
@@ -3616,6 +4558,146 @@ a --> b
         assert!(e.points.len() >= 2);
         for p in &e.points {
             assert!((p.1 - ay).abs() < 1e-2, "a->b point {p:?} not on the node center-y {ay:.2}");
+        }
+        assert!(is_orthogonal(&e.points));
+        assert_all_finite(&l);
+    }
+
+    // ================= M9 — edge separation & obstacle avoidance =================
+
+    /// Two axis-aligned segments share a collinear, overlapping span (i.e. the
+    /// edges would lay on top of each other) — the failure mode M9 eliminates.
+    fn segments_overlap(a0: (f32, f32), a1: (f32, f32), b0: (f32, f32), b1: (f32, f32)) -> bool {
+        let same_x = (a0.0 - a1.0).abs() < 1e-2 && (b0.0 - b1.0).abs() < 1e-2 && (a0.0 - b0.0).abs() < 1e-2;
+        let same_y = (a0.1 - a1.1).abs() < 1e-2 && (b0.1 - b1.1).abs() < 1e-2 && (a0.1 - b0.1).abs() < 1e-2;
+        if same_x {
+            let (l1, h1) = (a0.1.min(a1.1), a0.1.max(a1.1));
+            let (l2, h2) = (b0.1.min(b1.1), b0.1.max(b1.1));
+            return h1.min(h2) - l1.max(l2) > 1e-2;
+        }
+        if same_y {
+            let (l1, h1) = (a0.0.min(a1.0), a0.0.max(a1.0));
+            let (l2, h2) = (b0.0.min(b1.0), b0.0.max(b1.0));
+            return h1.min(h2) - l1.max(l2) > 1e-2;
+        }
+        false
+    }
+
+    /// Assert no two edges share a collinear overlapping segment, and no edge
+    /// segment passes through any node rect other than its own endpoints — the
+    /// two M9 guarantees — on the given layout.
+    fn assert_no_edge_overlaps_or_node_passage(d: &crate::ast::Diagram, l: &Layout) {
+        // edge index -> (from_idx, to_idx) by id.
+        let id_index: std::collections::HashMap<&str, usize> = d
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.id.as_str(), i))
+            .collect();
+        // No edge lays on top of another.
+        for i in 0..l.edges.len() {
+            for j in (i + 1)..l.edges.len() {
+                let ei = &l.edges[i];
+                let ej = &l.edges[j];
+                for k in 0..ei.points.len() - 1 {
+                    for m in 0..ej.points.len() - 1 {
+                        assert!(
+                            !segments_overlap(ei.points[k], ei.points[k + 1], ej.points[m], ej.points[m + 1]),
+                            "edges {}->{} and {}->{} overlap (seg {k} / {m})",
+                            ei.from, ei.to, ej.from, ej.to
+                        );
+                    }
+                }
+            }
+        }
+        // No edge passes through a node that is not one of its endpoints.
+        for (ei, e) in l.edges.iter().enumerate() {
+            let from_idx = id_index[e.from.as_str()];
+            let to_idx = id_index[e.to.as_str()];
+            let _ = ei;
+            for k in 0..e.points.len() - 1 {
+                let p0 = e.points[k];
+                let p1 = e.points[k + 1];
+                for (ni, n) in l.nodes.iter().enumerate() {
+                    if ni == from_idx || ni == to_idx {
+                        continue;
+                    }
+                    assert!(
+                        !segment_intersects_rect(p0, p1, (n.x, n.y, n.w, n.h)),
+                        "edge {}->{} segment {p0:?}->{p1:?} passes through node {}",
+                        e.from, e.to, n.id
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn infra_edges_do_not_overlap_or_pass_through_nodes() {
+        let (d, l) = lay(include_str!("../examples/infra.mmd"));
+        assert_all_finite(&l);
+        for e in &l.edges {
+            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+        }
+        assert_no_edge_overlaps_or_node_passage(&d, &l);
+    }
+
+    #[test]
+    fn subdirection_edges_do_not_overlap_or_pass_through_nodes() {
+        let (d, l) = lay(include_str!("../examples/subdirection.mmd"));
+        assert_all_finite(&l);
+        for e in &l.edges {
+            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+        }
+        assert_no_edge_overlaps_or_node_passage(&d, &l);
+    }
+
+    #[test]
+    fn finance_edges_do_not_overlap_or_pass_through_nodes() {
+        // The finance diagram: a User reaching a VPN (behind a peer `prd` node)
+        // and fanning out to many cvms — the two M9 stress cases. The thick
+        // `User --> prd` edge and the cross-boundary `User --> VPN` edge share
+        // User's bottom side, and five `VPN --> cvm` edges share VPN's bottom.
+        let (d, l) = lay(include_str!("../examples/finance.mmd"));
+        assert_all_finite(&l);
+        assert_eq!(d.edges.len(), l.edges.len());
+        for e in &l.edges {
+            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+        }
+        assert_no_edge_overlaps_or_node_passage(&d, &l);
+        // The User->VPN edge must not pass through the prd node (the headline
+        // fix); it routes around it.
+        let prd = node_rect(&l, "prddns");
+        let uv = edge_path(&l, "user", "vpn");
+        for w in uv.points.windows(2) {
+            assert!(
+                !segment_intersects_rect(w[0], w[1], rect_of(prd)),
+                "User->VPN passes through prd"
+            );
+        }
+    }
+
+    #[test]
+    fn cross_boundary_lca_routes_around_a_peer_node() {
+        // A cross-boundary edge whose LCA segment would jog through a peer
+        // node routes around it instead. Here `src` (top-level) -> `t` (in
+        // subgraph S, below) with `mid` (a peer) sitting between them on the
+        // same x as both endpoints, so a single midpoint jog cannot clear it.
+        let (_d, l) = lay(r#"diagram top-down
+src
+mid
+subgraph "S"
+t
+end
+src --> t
+"#);
+        let mid = node_rect(&l, "mid");
+        let e = edge_path(&l, "src", "t");
+        for w in e.points.windows(2) {
+            assert!(
+                !segment_intersects_rect(w[0], w[1], rect_of(mid)),
+                "src->t segment {w:?} passes through mid"
+            );
         }
         assert!(is_orthogonal(&e.points));
         assert_all_finite(&l);

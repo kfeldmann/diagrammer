@@ -1,0 +1,30 @@
+diagram top-down
+    prddns "prd.finance.example.com"
+    user "User"
+
+    subgraph "Tencent"
+#        subgraph "Public subnets" line="dotted"
+            pubclb "Public CLB"
+            vpn "VPN Endpoint"
+#        end
+        subgraph "Private subnets"
+            prvclb "Private CLB"
+            prdtechdns "prd-tech.finance.example.com"
+            cvm1 "Middleware"
+            cvm2 "Platform"
+            cvm3 "Application"
+            cvm4 "Algorithm"
+            cvm5 "MultiDim DB"
+            db "TDSQL DB" : cylinder
+        end
+    end
+
+    user --> vpn --> prdtechdns -- "443" --> prvclb -- "443" --> cvm2
+    user -- thick --> prddns -- thick "443" --> pubclb -- thick "8088" --> cvm1
+
+    vpn -- "22, 8088, 8080,\n30001, 1234" --> cvm1
+    vpn -- "22, 443" --> cvm2
+    vpn -- "22, 443" --> cvm3
+    vpn -- "22, 443" --> cvm4
+    vpn -- "22, 443" --> cvm5
+    vpn -- "3306" --> db

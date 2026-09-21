@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="201.60" height="228.00" viewBox="0 0 201.60 228.00">
+<svg xmlns="http://www.w3.org/2000/svg" width="252.60" height="315.00" viewBox="0 0 252.60 315.00">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -13,28 +13,28 @@
     </marker>
   </defs>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="100.80,48.00 100.80,70.50 57.57,70.50 57.57,89.00" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
-    <polyline points="100.80,48.00 100.80,70.50 153.37,70.50 153.37,89.00" stroke="#888" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-888)"/>
-    <polyline points="57.57,135.00 57.57,176.00" stroke="#888" stroke-width="3" marker-end="url(#arrow-888)"/>
+    <polyline points="91.65,62.00 91.65,95.75 66.57,95.75 66.57,125.50" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
+    <polyline points="160.95,62.00 160.95,95.75 195.37,95.75 195.37,125.50" stroke="#888" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-888)"/>
+    <polyline points="66.57,185.50 66.57,249.00" stroke="#888" stroke-width="3" marker-end="url(#arrow-888)"/>
   </g>
   <g fill="#fff" stroke="none">
-    <rect x="64.21" y="61.50" width="29.95" height="18.00"/>
-    <rect x="27.39" y="146.50" width="60.36" height="18.00"/>
+    <rect x="76.67" y="69.88" width="29.95" height="18.00"/>
+    <rect x="36.39" y="208.25" width="60.36" height="18.00"/>
   </g>
-  <g fill="#222" font-family="DejaVu Sans, Arial, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
-    <text x="79.19" y="70.50">polls</text>
-    <text x="57.57" y="155.50">replication</text>
+  <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
+    <text x="91.65" y="78.88">polls</text>
+    <text x="66.57" y="217.25">replication</text>
   </g>
   <g>
-    <rect x="68.15" y="20.00" width="65.31" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="100.80" y="34.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Source</text>
-    <path d="M20.00,98.00 L20.00,130.00 A37.57,5.00 0 0 0 95.14,130.00 L95.14,98.00 A37.57,5.00 0 0 0 20.00,98.00 Z" fill="#eef" stroke="#888" stroke-width="1.5"/>
-    <ellipse cx="57.57" cy="98.00" rx="37.57" ry="5.00" fill="#eef" stroke="#888" stroke-width="1.5"/>
-    <text x="57.57" y="118.42" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Postgres</text>
-    <path d="M125.14,98.00 L125.14,130.00 A28.23,5.00 0 0 0 181.60,130.00 L181.60,98.00 A28.23,5.00 0 0 0 125.14,98.00 Z" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <ellipse cx="153.37" cy="98.00" rx="28.23" ry="5.00" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="153.37" y="118.42" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Redis</text>
-    <rect x="32.79" y="180.00" width="49.56" height="28.00" rx="6" ry="6" fill="#cfe" stroke="#0a7" stroke-width="1.5"/>
-    <text x="57.57" y="194.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Sink</text>
+    <rect x="84.65" y="20.00" width="83.31" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="126.30" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Source</text>
+    <path d="M20.00,134.50 L20.00,180.50 A46.57,5.00 0 0 0 113.14,180.50 L113.14,134.50 A46.57,5.00 0 0 0 20.00,134.50 Z" fill="#eef" stroke="#888" stroke-width="1.5"/>
+    <ellipse cx="66.57" cy="134.50" rx="46.57" ry="5.00" fill="#eef" stroke="#888" stroke-width="1.5"/>
+    <text x="66.57" y="161.92" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Postgres</text>
+    <path d="M158.14,134.50 L158.14,180.50 A37.23,5.00 0 0 0 232.60,180.50 L232.60,134.50 A37.23,5.00 0 0 0 158.14,134.50 Z" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <ellipse cx="195.37" cy="134.50" rx="37.23" ry="5.00" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="195.37" y="161.92" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Redis</text>
+    <rect x="32.79" y="253.00" width="67.56" height="42.00" rx="6" ry="6" fill="#cfe" stroke="#0a7" stroke-width="1.5"/>
+    <text x="66.57" y="274.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Sink</text>
   </g>
 </svg>

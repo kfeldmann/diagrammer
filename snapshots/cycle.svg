@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="80.00" height="141.00" viewBox="0 0 80.00 141.00">
+<svg xmlns="http://www.w3.org/2000/svg" width="89.63" height="191.50" viewBox="0 0 89.63 191.50">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -8,13 +8,13 @@
     </marker>
   </defs>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="40.00,48.00 40.00,89.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="40.00,93.00 40.00,52.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="44.82,62.00 44.82,125.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="54.82,129.50 54.82,66.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g>
-    <rect x="20.00" y="20.00" width="40.00" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="40.00" y="34.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">a</text>
-    <rect x="20.00" y="93.00" width="40.00" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="40.00" y="107.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">b</text>
+    <rect x="20.13" y="20.00" width="49.37" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="44.82" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">a</text>
+    <rect x="20.00" y="129.50" width="49.63" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="44.82" y="150.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">b</text>
   </g>
 </svg>

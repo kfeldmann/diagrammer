@@ -27,7 +27,8 @@ source string
   → resolve.rs      validated Diagram (dedup nodes, strict attrs, subgraph
                     membership + containment tree, per-subgraph direction)
   → layout.rs       Layout (Sugiyama flat engine + compound recursion +
-                    cross-boundary frame routing)
+                    cross-boundary frame routing + M9 edge separation &
+                    obstacle-aware LCA routing)
   → render/svg.rs   self-contained SVG string
   → main.rs         CLI: `diagrammer <in.mmd> [-o <out.svg>]`
 ```
@@ -47,7 +48,8 @@ src/
   ast.rs         Raw* + resolved Diagram/Node/Edge/Subgraph + Shape/Style/Direction enums
   resolve.rs     raw → validated Diagram (dedup, attrs, subgraph membership)
   layout.rs      ★ biggest file: flat Sugiyama engine + compound (per-subgraph
-                 direction) + cross-boundary edge routing → Layout
+                 direction) + cross-boundary edge routing + M9 edge
+                 separation & obstacle-aware LCA routing → Layout
   text.rs        ab_glyph label measurement vs embedded DejaVu Sans
   error.rs       Error enum + line_of()
   render/
@@ -94,7 +96,13 @@ files (don't hand-edit them).
   `ARROW_BACKOFF` in `render/svg.rs`) so the stroke tucks under its same-color
   arrowhead — a thick line's round cap would otherwise poke past the tip and
   read as a blunt arrow — and the marker's `refX` is reduced by the same
-  amount so the tip stays on the node boundary.
+  amount so the tip stays on the node boundary. Text uses the
+  `FONT_FAMILY` stack in `render/svg.rs` — `Arial, Helvetica, Liberation
+  Sans, DejaVu Sans, sans-serif` — leading with the metric-compatible trio
+  so all viewers render near-identical glyphs; don't reorder it back to
+  DejaVu-first (that would make Linux viewers see ~10% wider text than
+  Windows/macOS ones). Measurement stays DejaVu-first (below), the wider
+  font, so boxes never under-size for any stack member.
 - **Deterministic output.** `fmt()` formats floats to exactly 2 decimals; text
   is measured against the **embedded** DejaVu Sans Regular (via the `dejavu`
   crate + `ab_glyph`), never a system font. Snapshots are byte-stable across

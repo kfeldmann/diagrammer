@@ -95,7 +95,9 @@ Double-quoted, with backslash escapes:
 string := '"' ( [^"\\] | '\' . )* '"'
 ```
 
-Recognized escapes: `\"` (literal quote), `\\` (literal backslash). Any
+Recognized escapes: `\"` (literal quote), `\\` (literal backslash), and
+`\n` (newline — makes a label or title multi-line; nodes, subgraph frames,
+and edge labels all size themselves for the tallest/widest line). Any
 other `\X` is a parse error for v0 (we may relax later). Strings are used
 for labels, titles, and attribute values. A `#` inside a quoted string is
 literal, e.g. `"API Server #1"`.

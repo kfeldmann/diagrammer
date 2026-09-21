@@ -68,7 +68,7 @@ fn hyphen_segment<'i>(i: &mut &'i str) -> ModalResult<&'i str> {
     Ok(seg)
 }
 
-/// Double-quoted string with `\"` and `\\` escapes.
+/// Double-quoted string with `\"`, `\\`, and `\n` escapes.
 pub fn string(i: &mut &str) -> ModalResult<String> {
     "\"".parse_next(i)?;
     let mut out = String::new();
@@ -84,6 +84,7 @@ pub fn string(i: &mut &str) -> ModalResult<String> {
             match esc {
                 '"' => out.push('"'),
                 '\\' => out.push('\\'),
+                'n' => out.push('\n'),
                 _ => return Err(esc_err("invalid escape sequence in string literal")),
             }
         } else {
@@ -96,4 +97,30 @@ fn esc_err(msg: &'static str) -> ErrMode<ContextError> {
     let mut e = ContextError::new();
     e.push(StrContext::Label(msg));
     ErrMode::Cut(e)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn newline_escape_produces_a_newline() {
+        let mut s = "\"Kubernetes\\nCluster\" rest";
+        let out = string(&mut s).expect("parse");
+        assert_eq!(out, "Kubernetes\nCluster");
+        assert_eq!(s, " rest");
+    }
+
+    #[test]
+    fn other_escapes_still_work() {
+        let mut s = "\"a\\\"b\\\\c\"";
+        let out = string(&mut s).expect("parse");
+        assert_eq!(out, "a\"b\\c");
+    }
+
+    #[test]
+    fn unknown_escape_is_an_error() {
+        let mut s = "\"a\\tb\"";
+        assert!(string(&mut s).is_err(), "\\t stays an error for v0");
+    }
 }

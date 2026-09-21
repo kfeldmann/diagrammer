@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="324.31" height="464.00" viewBox="0 0 324.31 464.00">
+<svg xmlns="http://www.w3.org/2000/svg" width="445.31" height="624.00" viewBox="0 0 445.31 624.00">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -8,35 +8,35 @@
     </marker>
   </defs>
   <g fill="none" stroke="#7a7a7a" stroke-width="1" stroke-linejoin="round">
-    <rect x="20.00" y="166.00" width="284.31" height="80.00" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
-    <rect x="111.46" y="291.00" width="101.39" height="153.00" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
+    <rect x="20.00" y="239.00" width="405.31" height="94.00" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
+    <rect x="151.96" y="400.50" width="141.39" height="203.50" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
   </g>
-  <g fill="#3a3a3a" font-family="DejaVu Sans, Arial, sans-serif" font-size="12.00">
-    <text x="30.00" y="170.00" text-anchor="start" dominant-baseline="hanging">Services</text>
-    <text x="121.46" y="295.00" text-anchor="start" dominant-baseline="hanging">Storage</text>
+  <g fill="#3a3a3a" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00">
+    <text x="30.00" y="243.00" text-anchor="start" dominant-baseline="hanging">Services</text>
+    <text x="161.96" y="404.50" text-anchor="start" dominant-baseline="hanging">Storage</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="82.19,212.00 123.19,212.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="184.87,212.00 225.87,212.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="162.16,351.00 162.16,392.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="162.16,48.00 162.16,89.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="162.16,121.00 162.16,143.50 79.47,143.50 79.47,166.00 79.47,186.00 56.09,186.00 56.09,194.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="262.09,226.00 262.09,410.00 212.85,410.00 206.85,410.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="111.19,292.00 174.69,292.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="254.37,292.00 317.87,292.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="222.66,474.50 222.66,538.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="222.66,62.00 222.66,125.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="222.66,171.50 222.66,205.25 79.47,205.25 79.47,239.00 79.47,259.00 76.09,259.00 76.09,267.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="363.09,313.00 363.09,563.00 293.35,563.00 276.35,563.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g>
-    <rect x="132.75" y="20.00" width="58.82" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="162.16" y="34.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Client</text>
-    <rect x="112.17" y="93.00" width="99.98" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="162.16" y="107.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">API Gateway</text>
-    <rect x="30.00" y="198.00" width="52.19" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="56.09" y="212.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Auth</text>
-    <rect x="127.19" y="198.00" width="57.68" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="156.03" y="212.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Users</text>
-    <rect x="229.87" y="198.00" width="64.44" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="262.09" y="212.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Orders</text>
-    <rect x="131.45" y="323.00" width="61.40" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="162.16" y="337.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Cache</text>
-    <rect x="121.46" y="396.00" width="81.39" height="28.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <text x="162.16" y="410.00" font-family="DejaVu Sans, Arial, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Database</text>
+    <rect x="184.25" y="20.00" width="76.82" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="222.66" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Client</text>
+    <rect x="163.67" y="129.50" width="117.98" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="222.66" y="150.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">API Gateway</text>
+    <rect x="41.00" y="271.00" width="70.19" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="76.09" y="292.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Auth</text>
+    <rect x="178.69" y="271.00" width="75.68" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="216.53" y="292.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Users</text>
+    <rect x="321.87" y="271.00" width="82.44" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="363.09" y="292.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Orders</text>
+    <rect x="182.95" y="432.50" width="79.40" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="222.66" y="453.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Cache</text>
+    <rect x="172.96" y="542.00" width="99.39" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="222.66" y="563.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Database</text>
   </g>
 </svg>

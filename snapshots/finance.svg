@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1116.72" height="747.50" viewBox="0 0 1116.72 747.50">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto"
+            markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#333"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="#7a7a7a" stroke-width="1" stroke-linejoin="round">
+    <rect x="20.00" y="239.00" width="1076.72" height="488.50" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
+    <rect x="41.00" y="380.50" width="1034.72" height="327.00" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
+  </g>
+  <g fill="#3a3a3a" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00">
+    <text x="30.00" y="243.00" text-anchor="start" dominant-baseline="hanging">Tencent</text>
+    <text x="51.00" y="384.50" text-anchor="start" dominant-baseline="hanging">Private subnets</text>
+  </g>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="586.07,62.00 663.92,62.00 663.92,239.00 638.01,239.00 638.01,267.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="583.10,313.00 583.10,320.00 174.91,320.00 174.91,380.50 174.91,415.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="174.91,461.50 174.91,532.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="174.91,578.00 174.91,641.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="558.36,62.00 558.36,125.50" stroke="#333" stroke-width="3" marker-end="url(#arrow)"/>
+    <polyline points="558.36,171.50 558.36,205.25 478.71,205.25 478.71,239.00 478.71,267.00" stroke="#333" stroke-width="3" marker-end="url(#arrow)"/>
+    <polyline points="478.71,313.00 478.71,346.75 426.83,346.75 426.83,380.50 426.83,415.50" stroke="#333" stroke-width="3" marker-end="url(#arrow)"/>
+    <polyline points="603.10,313.00 603.10,337.83 436.83,337.83 436.83,380.50 436.83,415.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="593.10,313.00 593.10,328.92 1075.72,328.92 1075.72,666.50 225.27,666.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="613.10,313.00 613.10,346.75 543.43,346.75 543.43,380.50 543.43,415.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="672.92,313.00 672.92,355.67 693.48,355.67 693.48,380.50 693.48,415.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="682.92,313.00 682.92,364.58 847.45,364.58 847.45,380.50 847.45,415.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="692.92,313.00 692.92,373.50 1002.85,373.50 1002.85,380.50 1002.85,408.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  </g>
+  <g fill="#fff" stroke="none">
+    <rect x="162.07" y="487.75" width="25.68" height="18.00"/>
+    <rect x="162.07" y="600.75" width="25.68" height="18.00"/>
+    <rect x="505.70" y="196.25" width="25.68" height="18.00"/>
+    <rect x="436.65" y="337.75" width="32.23" height="18.00"/>
+    <rect x="475.98" y="321.63" width="87.97" height="32.40"/>
+    <rect x="627.82" y="657.50" width="45.35" height="18.00"/>
+    <rect x="555.59" y="337.75" width="45.35" height="18.00"/>
+    <rect x="650.25" y="325.33" width="45.35" height="18.00"/>
+    <rect x="742.51" y="355.58" width="45.35" height="18.00"/>
+    <rect x="831.77" y="364.50" width="32.23" height="18.00"/>
+  </g>
+  <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
+    <text x="174.91" y="496.75">443</text>
+    <text x="174.91" y="609.75">443</text>
+    <text x="518.54" y="205.25">443</text>
+    <text x="452.77" y="346.75">8088</text>
+    <text x="519.96" y="330.63">22, 8088, 8080,<tspan x="519.96" y="345.03">30001, 1234</tspan></text>
+    <text x="650.49" y="666.50">22, 443</text>
+    <text x="578.26" y="346.75">22, 443</text>
+    <text x="672.92" y="334.33">22, 443</text>
+    <text x="765.19" y="364.58">22, 443</text>
+    <text x="847.89" y="373.50">3306</text>
+  </g>
+  <g>
+    <rect x="460.80" y="129.50" width="195.12" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="558.36" y="150.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">prd.finance.example.com</text>
+    <rect x="523.65" y="20.00" width="69.41" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="558.36" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">User</text>
+    <rect x="426.33" y="271.00" width="104.77" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="478.71" y="292.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Public CLB</text>
+    <rect x="576.10" y="271.00" width="123.83" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="638.01" y="292.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">VPN Endpoint</text>
+    <rect x="119.36" y="536.00" width="111.10" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="174.91" y="557.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Private CLB</text>
+    <rect x="62.00" y="419.50" width="225.81" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="174.91" y="440.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">prd-tech.finance.example.com</text>
+    <rect x="332.81" y="419.50" width="111.01" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="388.32" y="440.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Middleware</text>
+    <rect x="128.55" y="645.50" width="92.72" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="174.91" y="666.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Platform</text>
+    <rect x="488.83" y="419.50" width="109.20" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="543.43" y="440.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Application</text>
+    <rect x="643.03" y="419.50" width="100.90" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="693.48" y="440.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Algorithm</text>
+    <rect x="788.93" y="419.50" width="117.05" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="847.45" y="440.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">MultiDim DB</text>
+    <path d="M950.98,417.50 L950.98,463.50 A51.87,5.00 0 0 0 1054.72,463.50 L1054.72,417.50 A51.87,5.00 0 0 0 950.98,417.50 Z" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <ellipse cx="1002.85" cy="417.50" rx="51.87" ry="5.00" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="1002.85" y="444.92" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">TDSQL DB</text>
+  </g>
+</svg>

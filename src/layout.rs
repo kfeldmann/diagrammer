@@ -145,9 +145,11 @@ const FRAME_TITLE_FONT_SIZE: f32 = 12.0;
 /// clear of the node's arrowhead below the jog (see [`STUB_JOG_CLEARANCE`]).
 /// One subgraph-title font height each side — the title font is smaller than
 /// the node label font, so this is a modest growth; a subgraph with no such
-/// edges keeps the default geometry. Keep this in sync with the renderer's
-/// subgraph title font size (`FRAME_TITLE_SIZE` in `render/svg.rs`, 12 px):
-/// it is sized to one title-height of room.
+/// edges keeps the default frame geometry. Keep this in sync with the
+/// renderer's subgraph title font size (`FRAME_TITLE_SIZE` in
+/// `render/svg.rs`, 12 px): it is sized to one title-height of room. Its
+/// horizontal mirror — growing a title-sized frame's *width* so a title
+/// detour has an entry past the title — lives in [`layout_level`] (M10).
 const CROSS_FRAME_PAD: f32 = 12.0;
 /// Distance from a node's port at which a title-detour within-frame stub
 /// places its right-angle jog, along the flow axis toward the frame edge.
@@ -168,12 +170,44 @@ const CROSS_FRAME_PAD: f32 = 12.0;
 /// spirit as [`FONT_SIZE`] and [`CYL_RY`]; keep it in sync if the renderer's
 /// marker or backoff changes.
 const STUB_JOG_CLEARANCE: f32 = 12.0;
-/// How far a title-detour entry sits past the right edge of a subgraph's
-/// title text (see [`title_detour_clear_x`]). The within-frame entry runs
-/// along the frame's top band at this `x`, so it must clear the title's last
-/// glyph; this gap comfortably clears the 1.5 px stroke and a little
+/// Base clearance between a title-detour entry and a subgraph title's edge
+/// (see [`title_detour_clear_x`]). Applied to the title's **left** edge —
+/// which is anchored at [`FRAME_TITLE_X`] by the renderer and so cannot be
+/// widened by a viewer's font fallback — and, plus the fallback margins
+/// ([`TITLE_FALLBACK_PAD`] / [`TITLE_FALLBACK_PER_W`]), to the title's
+/// **right** edge. The gap clears the 1.5 px frame stroke and a little
 /// breathing room.
 const TITLE_CLEAR_GAP: f32 = 6.0;
+/// Fixed clearance added past a title's *right* edge beyond
+/// [`TITLE_CLEAR_GAP`] (see [`title_clear_gap`]). Text is measured with the
+/// embedded DejaVu Sans (determinism invariant), but the SVG is viewed in
+/// Firefox / GitHub READMEs / Confluence where DejaVu is often absent and
+/// the font stack falls back to a face of different width; the drawn title
+/// then extends past its measured right edge. A fixed [`TITLE_CLEAR_GAP`]
+/// alone is eaten by that difference — short titles get their last glyph
+/// touched, long ones crossed — so the right-edge clearance is a fixed bump
+/// plus a length-derived component ([`TITLE_FALLBACK_PER_W`]). The
+/// measurement font cannot change; the gap grows instead.
+const TITLE_FALLBACK_PAD: f32 = 12.0;
+/// Per-pixel-of-measured-title-width component of the right-edge clearance
+/// (see [`title_clear_gap`]): fallback faces differ from the measurement
+/// font by a roughly proportional amount, so a longer title needs a
+/// proportionally larger margin.
+const TITLE_FALLBACK_PER_W: f32 = 0.10;
+/// Minimum inset of a left-side title-detour entry from the frame's left
+/// edge (see [`title_detour_clear_x`]). The entry sits in the
+/// [`FRAME_TITLE_X`] band between the frame's left edge and the title's
+/// first glyph; this keeps it clear of the frame border stroke (1.5 px,
+/// half inside) with room to spare.
+const TITLE_LEFT_ENTRY_MIN: f32 = 4.0;
+
+/// The clearance a title-detour entry keeps past a title's *right* edge: the
+/// base gap ([`TITLE_CLEAR_GAP`]) plus a fixed bump and a length-derived
+/// component so a viewer's wider fallback font cannot eat the gap (see
+/// [`TITLE_FALLBACK_PAD`] / [`TITLE_FALLBACK_PER_W`]).
+fn title_clear_gap(title_width: f32) -> f32 {
+    TITLE_CLEAR_GAP + TITLE_FALLBACK_PAD + title_width * TITLE_FALLBACK_PER_W
+}
 
 // ---- Public output types (consumed by milestone 3 rendering) ----
 
@@ -358,7 +392,14 @@ pub fn layout(diagram: &Diagram) -> Layout {
     if diagram.nodes.is_empty() {
         // Still produce frames for any (empty) subgraphs, sized to their
         // padding, so they render as small labeled boxes rather than vanish.
-        let top = layout_level(diagram, None, diagram.direction, &[], &Default::default());
+        let top = layout_level(
+            diagram,
+            None,
+            diagram.direction,
+            &[],
+            &Default::default(),
+            &Default::default(),
+        );
         return assemble(diagram, top, &[]);
     }
 
@@ -391,14 +432,16 @@ pub fn layout(diagram: &Diagram) -> Layout {
         .collect();
 
     // Subgraphs that have a cross-boundary edge to an *immediate* child (a
-    // direct-child node the edge reaches by crossing the frame). These get
-    // extra frame padding ([`CROSS_FRAME_PAD`]) so the edge's within-frame
-    // stub has room to jog clear of the title and the node's arrowhead. A
-    // subgraph reached only through deeper descendants does not qualify:
-    // the stub's jog lives in the innermost frame's padding, not this one's.
-    let cross_subs = cross_boundary_subs(diagram, &edge_infos, &id_index);
+    // direct-child node the edge reaches by crossing the frame), and those
+    // child nodes themselves. The subgraphs get extra frame padding
+    // ([`CROSS_FRAME_PAD`]) so the edge's within-frame stub has room to jog
+    // clear of the title and the node's arrowhead; the node set feeds the
+    // M10 title-width growth pass in [`layout_level`]. A subgraph reached
+    // only through deeper descendants does not qualify: the stub's jog lives
+    // in the innermost frame's padding, not this one's.
+    let (cross_subs, cross_nodes) = cross_boundary_reach(diagram, &edge_infos, &id_index);
 
-    let top = layout_level(diagram, None, diagram.direction, &edge_infos, &cross_subs);
+    let top = layout_level(diagram, None, diagram.direction, &edge_infos, &cross_subs, &cross_nodes);
     assemble(diagram, top, &edge_infos)
 }
 
@@ -487,6 +530,10 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         let to = node_rect.get(&ti).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
         let info = edge_infos.get(ei);
         let is_direct = info.map(|i| i.is_direct).unwrap_or(true);
+        // M11: forced page-space sides (`from=` / `to=`); `None` keeps the
+        // implicit choice.
+        let forced_from = e.from_side.map(side_of_edge);
+        let forced_to = e.to_side.map(side_of_edge);
         let (from_side, to_side, rep_from_rect, rep_to_rect, from_chain, to_chain) =
             if is_direct {
                 let raw = direct_pts.get(&ei);
@@ -498,7 +545,17 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
                     .and_then(|r| r.last())
                     .map(|&p| side_of_port(to, p))
                     .unwrap_or(Side::Top);
-                (fs, ts, from, to, Vec::new(), Vec::new())
+                // A forced side overrides the implicit one (literal
+                // semantics) — including for port separation, which fans
+                // edges sharing the forced side.
+                (
+                    forced_from.unwrap_or(fs),
+                    forced_to.unwrap_or(ts),
+                    from,
+                    to,
+                    Vec::new(),
+                    Vec::new(),
+                )
             } else {
                 let from_chain =
                     chain_to_lca(diagram.nodes[fi].group, lca, &diagram.subgraphs);
@@ -513,15 +570,26 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
                     .map(|&s| frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)))
                     .unwrap_or(to);
                 let (exit, entry) = sides_along(lca_dir, center(rf), center(rt));
-                (exit, entry, rf, rt, from_chain, to_chain)
+                // M11: forced sides override the implicit rep-port sides.
+                (
+                    forced_from.unwrap_or(exit),
+                    forced_to.unwrap_or(entry),
+                    rf,
+                    rt,
+                    from_chain,
+                    to_chain,
+                )
             };
         // An around-target-frame edge enters its target from a perpendicular
         // side (not the one [`sides_along`] picks), so its target port is not
         // on this side. Exclude it from target-side port separation, which
         // would otherwise move the entry point and suppress the around-route.
         // The pierce test uses node-aligned (centre) geometry, matching
-        // `cross_boundary_path`.
-        let is_around_target = !is_direct
+        // `cross_boundary_path`. A forced `to` side disables the around-route
+        // (the forced side is honored literally), so its port joins the
+        // separation group normally.
+        let is_around_target = forced_to.is_none()
+            && !is_direct
             && to_chain.len() == 1
             && from_chain.len() <= 1
             && {
@@ -591,14 +659,27 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
             .filter(|(it, _)| *it != g.rep_from)
             .map(|(_, r)| *r)
             .collect();
+        let axis = FlowAxis::from_direction(
+            effective_direction(edge_infos.get(g.edge).map(|i| i.lca).unwrap_or(None), diagram),
+        );
         lane_edges.push(LaneEdge {
             edge: g.edge,
             rep_from: g.rep_from,
             from_side: g.from_side,
             rep_to: g.rep_to,
-            from_flow: side_flow_coord(g.rep_from_rect, g.from_side),
-            to_flow: side_flow_coord(g.rep_to_rect, g.to_side),
+            // Flow coordinates of the two rep ports ([`port_flow`], not
+            // [`side_flow_coord`]: a forced side can be perpendicular to the
+            // flow axis, in which case the port's own flow coordinate is the
+            // right band bound).
+            from_flow: port_flow(g.rep_from_rect, g.from_side, from_cross, axis),
+            to_flow: port_flow(
+                g.rep_to_rect,
+                g.to_side,
+                cross_of(center(g.rep_to_rect), g.to_side),
+                axis,
+            ),
             from_cross,
+            axis,
             obstacles,
         });
     }
@@ -637,24 +718,89 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         let to = node_rect.get(&ti).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
         let info = edge_infos.get(ei);
         let is_direct = info.map(|i| i.is_direct).unwrap_or(true);
+        // M11: forced page-space sides (`from=` / `to=`); `None` keeps the
+        // implicit choice.
+        let forced_from = e.from_side.map(side_of_edge);
+        let forced_to = e.to_side.map(side_of_edge);
 
         let points = if is_direct {
-            let mut raw = direct_pts.get(&ei).cloned().unwrap_or_default();
-            if raw.len() >= 2 {
-                if let Some(&p) = raw.first() {
-                    let side = side_of_port(from, p);
-                    if let Some(&c) = sep.get(&(ei, true)) {
-                        raw[0] = set_cross(p, side, c);
+            let raw = direct_pts.get(&ei).cloned().unwrap_or_default();
+            if raw.len() >= 2
+                && e.from == e.to
+                && (forced_from.is_some() || forced_to.is_some())
+            {
+                // M11: a self-loop with a forced side gets real loop routing
+                // — out of the `from` side, around, and back into the `to`
+                // side — instead of the fixed below-node stub.
+                let fs = forced_from
+                    .or_else(|| raw.first().map(|&p| side_of_port(from, p)))
+                    .unwrap_or(Side::Bottom);
+                let ts = forced_to
+                    .or_else(|| raw.last().map(|&p| side_of_port(from, p)))
+                    .unwrap_or(Side::Bottom);
+                let fc = sep
+                    .get(&(ei, true))
+                    .copied()
+                    .unwrap_or_else(|| cross_of(center(from), fs));
+                let tc = sep
+                    .get(&(ei, false))
+                    .copied()
+                    .unwrap_or_else(|| cross_of(center(from), ts));
+                self_loop_path(from, fs, ts, fc, tc, top.w, top.h)
+            } else if raw.len() >= 2
+                && (forced_from.is_some() || forced_to.is_some())
+                && (forced_from != raw.first().map(|&p| side_of_port(from, p))
+                    || forced_to != raw.last().map(|&p| side_of_port(to, p)))
+            {
+                // M11: a forced side contradicts the implicit choice —
+                // reroute the whole edge honoring the forced sides literally
+                // (the port lands on the requested side, no reversion). Each
+                // port escapes outward along its side; the `route_lca` ladder
+                // (simple Z → mid jog → track route → last-resort Z, bounded,
+                // never loops) finds a route that keeps the ports. The
+                // obstacle set includes both endpoint nodes, so the route
+                // cannot cut back through either box.
+                let fs = forced_from.unwrap_or_else(|| {
+                    raw.first().map(|&p| side_of_port(from, p)).unwrap_or(Side::Bottom)
+                });
+                let ts = forced_to
+                    .unwrap_or_else(|| raw.last().map(|&p| side_of_port(to, p)).unwrap_or(Side::Top));
+                let fp = sep
+                    .get(&(ei, true))
+                    .map(|&c| port_at_cross(from, fs, c))
+                    .unwrap_or_else(|| port(from, fs));
+                let tp = sep
+                    .get(&(ei, false))
+                    .map(|&c| port_at_cross(to, ts, c))
+                    .unwrap_or_else(|| port(to, ts));
+                let obstacles: Vec<(f32, f32, f32, f32)> = level_items
+                    .get(&lca)
+                    .into_iter()
+                    .flatten()
+                    .map(|(_, r)| *r)
+                    .chain(edges_out.iter().flat_map(|prev: &EdgePath| {
+                        prev.points.windows(2).map(|w| segment_rect(w[0], w[1], SEGMENT_OBSTACLE_PAD))
+                    }))
+                    .collect();
+                forced_direct_path(fp, fs, tp, ts, flow, &obstacles)
+            } else {
+                let mut raw = raw;
+                if raw.len() >= 2 {
+                    if let Some(&p) = raw.first() {
+                        let side = side_of_port(from, p);
+                        if let Some(&c) = sep.get(&(ei, true)) {
+                            raw[0] = set_cross(p, side, c);
+                        }
+                    }
+                    if let Some(&p) = raw.last() {
+                        let side = side_of_port(to, p);
+                        if let Some(&c) = sep.get(&(ei, false)) {
+                            *raw.last_mut().unwrap() = set_cross(p, side, c);
+                        }
                     }
                 }
-                if let Some(&p) = raw.last() {
-                    let side = side_of_port(to, p);
-                    if let Some(&c) = sep.get(&(ei, false)) {
-                        *raw.last_mut().unwrap() = set_cross(p, side, c);
-                    }
-                }
+                orthogonalize(&raw, flow)
             }
-            orthogonalize(&raw, flow)
         } else {
             let from_chain =
                 chain_to_lca(diagram.nodes[fi].group, lca, &diagram.subgraphs);
@@ -668,7 +814,13 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
                 .last()
                 .map(|&s| frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)))
                 .unwrap_or(to);
-            let (exit, entry) = sides_along(lca_dir, center(rep_from_rect), center(rep_to_rect));
+            let (exit_n, entry_n) =
+                sides_along(lca_dir, center(rep_from_rect), center(rep_to_rect));
+            // M11: forced sides override the implicit rep-port sides (literal
+            // semantics — honored for the node ports, the frame ports, and the
+            // LCA segment alike).
+            let exit = forced_from.unwrap_or(exit_n);
+            let entry = forced_to.unwrap_or(entry_n);
             let from_port = sep
                 .get(&(ei, true))
                 .map(|&c| port_at_cross(from, exit, c))
@@ -679,10 +831,12 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
                 .unwrap_or_else(|| port(to, entry));
             let from_cross = cross_of(from_port, exit);
             let to_cross = cross_of(to_port, entry);
-            let lane = lanes.get(&ei).copied().unwrap_or(jog_flow(
-                side_flow_coord(rep_from_rect, exit),
-                side_flow_coord(rep_to_rect, entry),
-            ));
+            let lane = lanes.get(&ei).copied().unwrap_or_else(|| {
+                jog_flow(
+                    port_flow(rep_from_rect, exit, cross_of(from_port, exit), flow),
+                    port_flow(rep_to_rect, entry, cross_of(to_port, entry), flow),
+                )
+            });
             let rep_from = info.map(|i| i.rep_from).unwrap_or(ItemRef::Node(fi));
             let rep_to = info.map(|i| i.rep_to).unwrap_or(ItemRef::Node(ti));
             let obstacles: Vec<(f32, f32, f32, f32)> = level_items
@@ -703,6 +857,10 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
                 from_cross,
                 to_cross,
                 lane,
+                exit,
+                entry,
+                forced_from.is_some(),
+                forced_to.is_some(),
                 &|s| frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)),
                 &|s| {
                     diagram
@@ -757,12 +915,76 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         });
     }
 
+    // ---- M11: canvas growth for forced-side excursions --------------------
+    // A forced side can route outside the laid-out content bounds (an
+    // excursion around a frame at the canvas edge, or an escape past the
+    // page margin). Grow — and, for negative excursions, translate — the
+    // canvas so every drawn point lies inside it; the renderer's viewBox
+    // comes straight from width/height. For an unforced diagram this is a
+    // no-op: content sits exactly [`MARGIN`] inside the canvas on every
+    // side, so nothing pokes out and the extents match to within float
+    // noise (hence the 1e-2 tolerance).
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for n in &nodes_out {
+        min_x = min_x.min(n.x);
+        min_y = min_y.min(n.y);
+        max_x = max_x.max(n.x + n.w);
+        max_y = max_y.max(n.y + n.h);
+    }
+    for s in &subgraphs_out {
+        min_x = min_x.min(s.x);
+        min_y = min_y.min(s.y);
+        max_x = max_x.max(s.x + s.w);
+        max_y = max_y.max(s.y + s.h);
+    }
+    for e in &edges_out {
+        for &(px, py) in &e.points {
+            min_x = min_x.min(px);
+            min_y = min_y.min(py);
+            max_x = max_x.max(px);
+            max_y = max_y.max(py);
+        }
+    }
+    if min_x < 0.0 || min_y < 0.0 {
+        let sx = if min_x < 0.0 { -min_x } else { 0.0 };
+        let sy = if min_y < 0.0 { -min_y } else { 0.0 };
+        for n in nodes_out.iter_mut() {
+            n.x += sx;
+            n.y += sy;
+        }
+        for s in subgraphs_out.iter_mut() {
+            s.x += sx;
+            s.y += sy;
+        }
+        for e in edges_out.iter_mut() {
+            for p in e.points.iter_mut() {
+                p.0 += sx;
+                p.1 += sy;
+            }
+        }
+        max_x += sx;
+        max_y += sy;
+    }
+    let width = if max_x + MARGIN > top.w + 1e-2 {
+        max_x + MARGIN
+    } else {
+        top.w
+    };
+    let height = if max_y + MARGIN > top.h + 1e-2 {
+        max_y + MARGIN
+    } else {
+        top.h
+    };
+
     Layout {
         nodes: nodes_out,
         edges: edges_out,
         subgraphs: subgraphs_out,
-        width: top.w,
-        height: top.h,
+        width,
+        height,
     }
 }
 
@@ -775,6 +997,7 @@ fn layout_level(
     dir: Direction,
     edge_infos: &[EdgeInfo],
     cross_subs: &std::collections::HashSet<usize>,
+    cross_nodes: &std::collections::HashSet<usize>,
 ) -> LevelOut {
     // Direct-child subgraphs of this level.
     let child_subs: Vec<usize> = diagram
@@ -790,7 +1013,14 @@ fn layout_level(
         std::collections::HashMap::new();
     for &cs in &child_subs {
         let child_dir = diagram.subgraphs[cs].direction.unwrap_or(dir);
-        let out = layout_level(diagram, Some(cs), child_dir, edge_infos, cross_subs);
+        let out = layout_level(
+            diagram,
+            Some(cs),
+            child_dir,
+            edge_infos,
+            cross_subs,
+            cross_nodes,
+        );
         let (top_inset, _bot_pad) =
             frame_insets(&diagram.subgraphs[cs], cross_subs.contains(&cs));
         let inner_ox = FRAME_PAD_X;
@@ -825,8 +1055,39 @@ fn layout_level(
             .as_ref()
             .map(|t| text::measure(t, FRAME_TITLE_FONT_SIZE).width)
             .unwrap_or(0.0);
-        let frame_w = (child.out.w + 2.0 * FRAME_PAD_X)
+        let mut frame_w = (child.out.w + 2.0 * FRAME_PAD_X)
             .max(title_w + 2.0 * FRAME_TITLE_X);
+        // M10: when the title determines the frame width, the margin past the
+        // title's right edge is only [`FRAME_TITLE_X`] — smaller than
+        // [`FRAME_PAD_X`] — so a title detour's entry would clamp *inside*
+        // the title and the detour gives up (the stub crosses the title).
+        // Mirror the [`CROSS_FRAME_PAD`] trick horizontally: when a
+        // cross-boundary edge reaches an immediate child that sits under the
+        // title's right half (where the detour enters — one under the left
+        // half uses the left-side entry, which needs no extra room), grow the
+        // frame's width so the clear band past the title exists. Growing
+        // sideways keeps the children anchored at the left/top insets, so
+        // the group's internal arrangement is untouched (the M5 guarantee).
+        // Like [`CROSS_FRAME_PAD`] this over-approximates: the growth does
+        // not know which side the edge will enter on, so a frame may widen
+        // for a detour that never arises.
+        if diagram.subgraphs[cs].title.is_some() {
+            let right_gap = title_clear_gap(title_w);
+            let title_x1 = FRAME_TITLE_X + title_w;
+            let need = title_x1 + right_gap + FRAME_PAD_X;
+            let title_mid = FRAME_TITLE_X + title_w / 2.0;
+            let under_right_half = child.out.nodes.iter().any(|&(gi, nx, _, nw, _)| {
+                // Node center x in frame-local coordinates: the child's
+                // contents are offset into the frame by `inner_ox`.
+                let ncx = FRAME_PAD_X + nx + nw / 2.0;
+                cross_nodes.contains(&gi)
+                    && ncx >= title_mid
+                    && ncx <= title_x1 + right_gap
+            });
+            if under_right_half && frame_w < need {
+                frame_w = need;
+            }
+        }
         let frame_h = child.out.h + top_inset + bot_pad;
         item_of.insert(ItemRef::Sub(cs), items.len());
         item_refs.push(ItemRef::Sub(cs));
@@ -999,33 +1260,41 @@ fn effective_direction(level: Option<usize>, diagram: &Diagram) -> Direction {
 
 /// The subgraphs that have at least one cross-boundary edge to an *immediate*
 /// child — a direct-child node the edge reaches by crossing the subgraph's
-/// frame. Such frames get extra padding ([`CROSS_FRAME_PAD`]) so the edge's
-/// within-frame stub has room to jog clear of the title and the node's
-/// arrowhead. A subgraph reached only through deeper descendants does not
-/// qualify: the stub's jog lives in the innermost frame's padding, not this
-/// one's.
+/// frame — and the set of those child nodes themselves. Such frames get
+/// extra padding ([`CROSS_FRAME_PAD`]) so the edge's within-frame stub has
+/// room to jog clear of the title and the node's arrowhead, and (M10) the
+/// frame-growth pass in [`layout_level`] widens a title-sized frame so a
+/// title detour has an entry. A subgraph reached only through deeper
+/// descendants does not qualify: the stub's jog lives in the innermost
+/// frame's padding, not this one's.
 ///
 /// `id_index` maps node ids to their index in `diagram.nodes`. An endpoint
 /// qualifies a subgraph `S` when the endpoint is a direct child of `S`
 /// (`node.group == Some(S)`) and the edge's LCA is a strict ancestor of `S`
 /// (`lca != Some(S)`) — i.e. the edge leaves `S` to reach the rest of the
 /// graph, rather than staying internal to `S`.
-fn cross_boundary_subs(
+#[allow(clippy::type_complexity)]
+fn cross_boundary_reach(
     diagram: &Diagram,
     edge_infos: &[EdgeInfo],
     id_index: &std::collections::HashMap<&str, usize>,
-) -> std::collections::HashSet<usize> {
+) -> (
+    std::collections::HashSet<usize>,
+    std::collections::HashSet<usize>,
+) {
     let mut subs = std::collections::HashSet::new();
+    let mut nodes = std::collections::HashSet::new();
     for (ei, e) in diagram.edges.iter().enumerate() {
         let Some(info) = edge_infos.get(ei) else { continue; };
         for nid in [e.from.as_str(), e.to.as_str()].map(|id| id_index[id]) {
             if let Some(group) = diagram.nodes[nid].group
                 && info.lca != Some(group) {
                     subs.insert(group);
+                    nodes.insert(nid);
                 }
         }
     }
-    subs
+    (subs, nodes)
 }
 
 /// `(top_inset, bottom_padding)` for a child subgraph's frame, adding the
@@ -1106,29 +1375,60 @@ fn port_at_cross(rect: (f32, f32, f32, f32), side: Side, cross: f32) -> (f32, f3
 ///
 /// A cross-boundary within-frame stub now runs straight at the endpoint
 /// node's `x` ([`port_at_cross`]). When that `x` falls under the frame's
-/// title text the stub would cross the title; this returns an entry `x` just
-/// past the title's right edge (in the clear part of the top band) so the
-/// stub can dive in there and jog across to the node below the title. `None`
-/// is returned — meaning "stay straight, no detour" — when the node's `x` is
-/// already clear of the title, or when the title is so wide there is no room
-/// past it inside the frame (the stub then crosses the title, no worse than
-/// the previous frame-center design which crossed it at the center).
+/// title text the stub would cross the title; this returns an entry `x` in
+/// the clear part of the top band so the stub can dive in there and jog
+/// across to the node below the title. Two entries exist:
+///
+/// * just past the title's **right** edge, at
+///   `title_x1 + title_clear_gap(title_width)` — the clearance includes the
+///   fixed + proportional fallback margins ([`title_clear_gap`]) because the
+///   drawn title can extend past its measured right edge in a viewer whose
+///   font stack falls back to a wider face;
+/// * just **left** of the title's first glyph, at
+///   `title_x0 - TITLE_CLEAR_GAP` — the title's left edge is anchored at
+///   [`FRAME_TITLE_X`] by the renderer, so no font fallback can widen it
+///   leftward and the small base gap is safe there.
+///
+/// The entry nearer the node (shorter jog) wins among the usable ones: a
+/// node under the title's left half enters left of the title, one under its
+/// right half past the right edge. `None` is returned — meaning "stay
+/// straight, no detour" — when the node's `x` is already clear of the title,
+/// or when neither entry fits (no room past the title and no room left of
+/// it): the frame-growth pass in [`layout_level`] should have widened the
+/// frame to make the right entry fit for any cross-boundary endpoint that
+/// gets here, so `None` is a last-resort fallback (the stub then crosses the
+/// title, no worse than the previous frame-center design which crossed it at
+/// the center).
 fn title_detour_clear_x(rep: (f32, f32, f32, f32), node_cross: f32, title_width: f32) -> Option<f32> {
     let (rx, _ry, rw, _rh) = rep;
     let title_x0 = rx + FRAME_TITLE_X;
     let title_x1 = rx + FRAME_TITLE_X + title_width;
+    let right_gap = title_clear_gap(title_width);
     // Node already clear of the title text (to either side)? Stay straight.
-    if node_cross < title_x0 - TITLE_CLEAR_GAP || node_cross > title_x1 + TITLE_CLEAR_GAP {
+    if node_cross < title_x0 - TITLE_CLEAR_GAP || node_cross > title_x1 + right_gap {
         return None;
     }
-    // Enter just past the title's right edge, kept inside the frame.
-    let clear_x = (title_x1 + TITLE_CLEAR_GAP).clamp(rx + FRAME_PAD_X, rx + rw - FRAME_PAD_X);
-    // If the title is so wide that even the clamped entry is still on/under
-    // it, there is no clear entry — give up the detour (fall back to straight).
-    if clear_x <= title_x1 + 1e-3 {
-        return None;
+    let right_x = title_x1 + right_gap;
+    let left_x = title_x0 - TITLE_CLEAR_GAP;
+    // A candidate is usable when it lands inside the frame: the right entry
+    // keeps [`FRAME_PAD_X`] of side padding (which the frame-growth pass
+    // guarantees by growing the width when the title determines it), the
+    // left entry keeps [`TITLE_LEFT_ENTRY_MIN`] inside the border.
+    let right_ok = right_x <= rx + rw - FRAME_PAD_X + 1e-3;
+    let left_ok = left_x >= rx + TITLE_LEFT_ENTRY_MIN;
+    // Prefer the nearer side: a node under the title's left half jogs less
+    // from a left entry, one under the right half from a right entry.
+    let prefer_left = node_cross < (title_x0 + title_x1) / 2.0;
+    for (x, ok) in if prefer_left {
+        [(left_x, left_ok), (right_x, right_ok)]
+    } else {
+        [(right_x, right_ok), (left_x, left_ok)]
+    } {
+        if ok {
+            return Some(x);
+        }
     }
-    Some(clear_x)
+    None
 }
 
 /// The exit/entry sides for a cross-boundary edge at a level laid out under
@@ -1440,6 +1740,22 @@ const LANE_INSET: f32 = 5.0;
 /// Bend penalty added per turn in the track-graph route, so a shortest path
 /// with fewer right-angle bends is preferred.
 const BEND_PENALTY: f32 = 12.0;
+/// How far a forced-side route escapes outward from a port (along the
+/// side's outward normal) before orthogonal routing begins (M11). Sized to
+/// clear the arrowhead's back-extent (`markerHeight`, 10) comfortably, and
+/// — being just past the top-level page margin ([`MARGIN`], 20) — to push a
+/// forced excursion at the canvas edge outside it, where the canvas-growth
+/// pass in [`assemble`] grows the viewBox instead of silently clipping.
+const SIDE_ESCAPE: f32 = 24.0;
+/// How far a forced self-loop's excursion runs beyond the node's sides
+/// (M11), before wrapping around to the entry side.
+const LOOP_OUT: f32 = 18.0;
+/// Thickness each side of an already-routed edge segment when it is turned
+/// into an obstacle for a later forced route (M11). Half the fan spacing
+/// ([`FAN_SEP`]) — enough that a parallel edge cannot lay collinearly on
+/// top of an earlier one (round caps bulge under half the stroke width,
+/// well inside this).
+const SEGMENT_OBSTACLE_PAD: f32 = FAN_SEP / 2.0;
 
 /// The cross-axis coordinate of a point relative to a side: `x` for a
 /// Top/Bottom side, `y` for a Left/Right side.
@@ -1480,6 +1796,47 @@ fn side_flow_coord(node: (f32, f32, f32, f32), side: Side) -> f32 {
         Side::Left => x,
         Side::Right => x + node.2,
     }
+}
+
+/// The page-space [`Side`] an edge's `from=` / `to=` attribute requests
+/// (M11). Sides are page-space in both the attribute and the assembled
+/// geometry, so this is the identity mapping.
+fn side_of_edge(s: crate::ast::EdgeSide) -> Side {
+    match s {
+        crate::ast::EdgeSide::Top => Side::Top,
+        crate::ast::EdgeSide::Bottom => Side::Bottom,
+        crate::ast::EdgeSide::Left => Side::Left,
+        crate::ast::EdgeSide::Right => Side::Right,
+    }
+}
+
+/// Push `p` outward from `side`'s plane by `d` (along the side's outward
+/// normal). Used by the M11 forced-side routers: a route's first move from
+/// a forced port must leave the node, so routing starts from an escaped
+/// point outside the box.
+fn escape_point(p: (f32, f32), side: Side, d: f32) -> (f32, f32) {
+    match side {
+        Side::Top => (p.0, p.1 - d),
+        Side::Bottom => (p.0, p.1 + d),
+        Side::Left => (p.0 - d, p.1),
+        Side::Right => (p.0 + d, p.1),
+    }
+}
+
+/// The flow-coordinate of the port on `rect`'s `side` at cross-axis
+/// coordinate `cross`, along `axis`. Unlike [`side_flow_coord`] — which
+/// assumes the side lies along the flow axis (the implicit choice always
+/// does) — this works for a forced side perpendicular to the flow too
+/// (e.g. `from="right"` on a vertical-flow edge: the flow coordinate is
+/// the port's y, not the frame's x). For an aligned side it equals
+/// [`side_flow_coord`].
+fn port_flow(
+    rect: (f32, f32, f32, f32),
+    side: Side,
+    cross: f32,
+    axis: FlowAxis,
+) -> f32 {
+    cross_flow(port_at_cross(rect, side, cross), axis).1
 }
 
 /// Which side of `node` the port point `p` lies on (the nearest edge).
@@ -1595,6 +1952,9 @@ struct LaneEdge {
     to_flow: f32,
     /// The (separated) source port's cross-coordinate, for lane ordering.
     from_cross: f32,
+    /// The flow axis of the edge's LCA level (obstacle band extents are
+    /// read along it).
+    axis: FlowAxis,
     /// The source's peer obstacles at the LCA level (everything except the
     /// source rep) — shared across a lane group, whose edges share a source
     /// and gap. Used to keep the lane band clear of obstacles that intrude
@@ -1640,15 +2000,17 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
         let mut usable_hi = gap_hi - LANE_INSET;
         let n = order.len();
         // Shrink the lane band away from obstacles that intrude into the gap
-        // (a horizontal jog at a lane inside an obstacle's flow-extent would
-        // cross it). Conservative: treat every source-peer obstacle as
-        // blocking the full gap width, so no edge is assigned a blocked lane
-        // (and the obstacle-aware router never falls back to a colliding
-        // midpoint). The band obstacles are the group's shared source-side
-        // peers (targets sit at the gap's far end, outside it).
+        // (a jog at a lane inside an obstacle's flow-extent would cross it).
+        // Conservative: treat every source-peer obstacle as blocking the full
+        // gap width, so no edge is assigned a blocked lane (and the
+        // obstacle-aware router never falls back to a colliding midpoint).
+        // The band obstacles are the group's shared source-side peers
+        // (targets sit at the gap's far end, outside it). Obstacle extents
+        // are read along the group's flow axis (generalized from the
+        // vertical-only y-extents, so a left-right LCA level's lanes are
+        // banded correctly too).
         for &o in &edges[order[0]].obstacles {
-            let (ox, oy, ow, oh) = o;
-            let (olo, ohi) = (oy, oy + oh);
+            let (olo, ohi) = flow_range(o, edges[order[0]].axis);
             let blo = olo - ROUTE_PAD - 1.0;
             let bhi = ohi + ROUTE_PAD + 1.0;
             if bhi > gap_lo + 1e-3 && blo < gap_hi - 1e-3 {
@@ -1659,7 +2021,6 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
                     usable_hi = usable_hi.min(blo);
                 }
             }
-            let _ = (ox, ow);
         }
         for (k, &i) in order.iter().enumerate() {
             let lane = if n > 1 && usable_hi > usable_lo {
@@ -1746,13 +2107,19 @@ fn track_route(a: (f32, f32), b: (f32, f32), obstacles: &[(f32, f32, f32, f32)])
     let goal = bi * nh + bj;
 
     // Clear check for a segment between two track intersections, against the
-    // original (un-inflated) obstacle rects: a track at an obstacle edge ± pad
-    // is just clear of it; a track inside an obstacle's span that crosses its
-    // other-axis extent is blocked.
+    // obstacle rects inflated by [`ROUTE_PAD`] — the same test [`route_clear`]
+    // applies to the result. (Tracks sit at obstacle edges ± [`TRACK_OFF`],
+    // just clear of even the inflated rects; but a track generated from one
+    // obstacle can sit within [`ROUTE_PAD`] of a *different* obstacle, so the
+    // check must use the inflated rects, else the route found here is rejected
+    // by the caller and the blocked simple Z is used as the last resort
+    // instead.)
     let clear = |x0: f32, y0: f32, x1: f32, y1: f32| -> bool {
         !obstacles
             .iter()
-            .any(|&o| segment_intersects_rect((x0, y0), (x1, y1), o))
+            .any(|&(x, y, w, h)| {
+                segment_intersects_rect((x0, y0), (x1, y1), (x - ROUTE_PAD, y - ROUTE_PAD, w + 2.0 * ROUTE_PAD, h + 2.0 * ROUTE_PAD))
+            })
     };
     // Neighbours of node (i,j): the adjacent track intersections reachable by
     // a clear orthogonal segment, with the direction of travel (for bend cost).
@@ -1908,6 +2275,181 @@ fn route_lca(
     z
 }
 
+// ---- M11 — forced edge sides (`from=` / `to=`) ----
+//
+// An edge may request the page-space side of each node it connects to. The
+// request is honored **literally**: the port lands on the requested side,
+// with no automatic reversion to the algorithm's choice (silently
+// second-guessing it would leave the user unable to tell whether it did
+// anything). A side that contradicts the approach direction is routed
+// around — the result may be ugly, and that is the user's cue to change or
+// drop the attribute — but it stays orthogonal, never passes through a node
+// interior (the `route_lca` ladder's bounded last resort excepted), and
+// ports sharing a forced side are still fanned apart (M9 port separation).
+
+/// Route a direct edge honoring forced sides (M11): each port escapes
+/// outward along its side's normal by [`SIDE_ESCAPE`], then the
+/// [`route_lca`] ladder (simple Z → mid jog → track route → last-resort Z)
+/// finds an orthogonal route between the two escaped points that avoids
+/// `obstacles` — which must include both endpoint nodes, so the route
+/// cannot cut back through either box. The result keeps the forced ports:
+/// it starts at `from_port` and ends at `to_port`, with the approach into
+/// each port coming from outside the node.
+fn forced_direct_path(
+    from_port: (f32, f32),
+    from_side: Side,
+    to_port: (f32, f32),
+    to_side: Side,
+    axis: FlowAxis,
+    obstacles: &[(f32, f32, f32, f32)],
+) -> Vec<(f32, f32)> {
+    let a = escape_point(from_port, from_side, SIDE_ESCAPE);
+    let b = escape_point(to_port, to_side, SIDE_ESCAPE);
+    let lane = jog_flow(cross_flow(a, axis).1, cross_flow(b, axis).1);
+    let mut pts = vec![from_port];
+    pts.extend(route_lca(a, b, axis, lane, obstacles));
+    pts.push(to_port);
+    dedup_consecutive(&mut pts);
+    pts
+}
+
+/// A real orthogonal loop route for a self-loop with a forced side (M11):
+/// out of the `from` side, around the node, and back into the `to` side,
+/// instead of the fixed below-node stub. `from_cross` / `to_cross` are the
+/// (fanned) port cross-coordinates on each side. Same sides make a
+/// rectangular loop hanging off that side; adjacent sides wrap their
+/// shared corner; opposite sides wrap a perpendicular corner — the side
+/// with more room to the canvas edge (deterministic). Geometry only: the
+/// loop's excursion runs [`LOOP_OUT`] beyond the node's sides and ignores
+/// other content (a forced loop is the user's explicit shape request).
+fn self_loop_path(
+    node: (f32, f32, f32, f32),
+    from_side: Side,
+    to_side: Side,
+    from_cross: f32,
+    to_cross: f32,
+    canvas_w: f32,
+    canvas_h: f32,
+) -> Vec<(f32, f32)> {
+    let p1 = port_at_cross(node, from_side, from_cross);
+    let p2 = port_at_cross(node, to_side, to_cross);
+    let (x, y, w, h) = node;
+    // The offset line of a side pushed `out` beyond the node: its
+    // coordinate value, and whether it constrains x (Left/Right) or y
+    // (Top/Bottom).
+    let line = |side: Side, out: f32| -> (f32, bool) {
+        match side {
+            Side::Top => (y - out, false),
+            Side::Bottom => (y + h + out, false),
+            Side::Left => (x - out, true),
+            Side::Right => (x + w + out, true),
+        }
+    };
+    let out = LOOP_OUT;
+    let (lf, xf) = line(from_side, out);
+    let (lt, xt) = line(to_side, out);
+    if from_side == to_side {
+        // A rectangular loop hanging off one side.
+        return vec![p1, escape_point(p1, from_side, out), escape_point(p2, to_side, out), p2];
+    }
+    if xf != xt {
+        // Adjacent sides: the two offset lines meet at the shared corner.
+        let c = if xf { (lf, lt) } else { (lt, lf) };
+        return vec![
+            p1,
+            escape_point(p1, from_side, out),
+            c,
+            escape_point(p2, to_side, out),
+            p2,
+        ];
+    }
+    // Opposite sides: wrap a perpendicular corner — the side with more
+    // room to the canvas edge.
+    let (k, k_is_x) = if xf {
+        // Left/Right pair: the corner line is horizontal (wrap over the
+        // top or under the bottom).
+        let top_room = y;
+        let bot_room = canvas_h - (y + h);
+        (if bot_room > top_room { y + h + out } else { y - out }, false)
+    } else {
+        // Top/Bottom pair: the corner line is vertical (wrap around the
+        // left or the right side).
+        let left_room = x;
+        let right_room = canvas_w - (x + w);
+        (if right_room > left_room { x + w + out } else { x - out }, true)
+    };
+    // The two corners where the perpendicular wrap line meets the from- and
+    // to-side offset lines.
+    let corner1 = if k_is_x { (k, lf) } else { (lf, k) };
+    let corner2 = if k_is_x { (k, lt) } else { (lt, k) };
+    vec![
+        p1,
+        escape_point(p1, from_side, out),
+        corner1,
+        corner2,
+        escape_point(p2, to_side, out),
+        p2,
+    ]
+}
+
+/// The thin axis-aligned rect covered by segment `s0`–`s1`, inflated by
+/// `t` on every side. Used to turn already-routed edges into obstacles for
+/// later forced-side routes (M11), so two forced excursions in one gap
+/// cannot lay collinearly on top of each other (the M9 invariant holds
+/// without a global router).
+fn segment_rect(
+    s0: (f32, f32),
+    s1: (f32, f32),
+    t: f32,
+) -> (f32, f32, f32, f32) {
+    (
+        s0.0.min(s1.0) - t,
+        s0.1.min(s1.1) - t,
+        (s1.0 - s0.0).abs() + 2.0 * t,
+        (s1.1 - s0.1).abs() + 2.0 * t,
+    )
+}
+
+/// A within-frame stub avoidance for a forced side (M11): the straight
+/// stub — both ports on the node's cross-coordinate of the forced side —
+/// may pierce a sibling sitting between the node and the frame border; a
+/// track route from the escaped node port around the siblings to the rep
+/// frame port fixes the common single-frame case. Returns the straight
+/// stub unchanged when it is already clear or no around-route exists (the
+/// bounded-ladder convention: the forced port is kept either way).
+fn force_stub_around_siblings(
+    node_port: (f32, f32),
+    rep_port: (f32, f32),
+    side: Side,
+    siblings: &[(f32, f32, f32, f32)],
+    inward: bool,
+) -> Vec<(f32, f32)> {
+    let (s0, s1) = if inward { (rep_port, node_port) } else { (node_port, rep_port) };
+    if !siblings
+        .iter()
+        .any(|&s| segment_intersects_rect(s0, s1, s))
+    {
+        return vec![s0, s1];
+    }
+    let a = escape_point(node_port, side, SIDE_ESCAPE);
+    let tr = if inward {
+        track_route(rep_port, a, siblings)
+    } else {
+        track_route(a, rep_port, siblings)
+    };
+    if !tr.is_empty() && route_clear(&tr, siblings) {
+        if inward {
+            let mut stub = tr;
+            stub.push(node_port);
+            return stub;
+        }
+        let mut stub = vec![node_port];
+        stub.extend(tr);
+        return stub;
+    }
+    vec![s0, s1]
+}
+
 /// The structured routing of one cross-boundary edge: either the within-frame
 /// stubs plus an LCA segment to be routed by the caller ([`CrossPath::Pieces`]),
 /// or a pre-built around-target-frame route to use as-is ([`CrossPath::Around`]).
@@ -2054,14 +2596,16 @@ fn try_around_target_route(
 /// cross the frame's title text when the node sits under the (top-left)
 /// title. In the common single-frame, top-down case — where the frame is grown
 /// ([`CROSS_FRAME_PAD`]) so there is a clear band below the title — the stub
-/// instead enters the frame just past the title's right edge
-/// ([`title_detour_clear_x`]) and jogs across to the node below the title
-/// ([`STUB_JOG_CLEARANCE`] above the node), keeping the title clear. When the
-/// node is already clear of the title (the usual case for a narrow title) the
-/// stub stays straight; deeper nesting, or a title too wide to clear, keeps
-/// the straight stub (crossing the title no worse than the prior frame-center
-/// design). The returned (possibly diagonal) segments are turned into
-/// right-angle bends by [`ortho_chain`] (M7).
+/// instead enters the frame beside the title (past its right edge, or left of
+/// its first glyph when that is nearer — [`title_detour_clear_x`]) and jogs
+/// across to the node below the title ([`STUB_JOG_CLEARANCE`] above the
+/// node), keeping the title clear. When the node is already clear of the
+/// title (the usual case for a narrow title) the stub stays straight; deeper
+/// nesting keeps the straight stub (crossing the title no worse than the
+/// prior frame-center design). When a title-sized frame leaves no room for
+/// either entry, [`layout_level`] grows the frame's width so the entry past
+/// the title exists (M10). The returned (possibly diagonal) segments are
+/// turned into right-angle bends by [`ortho_chain`] (M7).
 #[allow(clippy::too_many_arguments)]
 fn cross_boundary_path(
     from: (f32, f32, f32, f32),
@@ -2074,6 +2618,15 @@ fn cross_boundary_path(
     from_cross: f32,
     to_cross: f32,
     lane: f32,
+    // The edge's exit/entry sides at the LCA level, already overridden by
+    // any forced `from=` / `to=` side (M11) by the caller.
+    exit: Side,
+    entry: Side,
+    // Whether each side was forced (M11): a forced `to` side disables the
+    // around-target-frame reroute (the forced entry side is honored
+    // literally), and forced stubs get a sibling-avoidance ladder.
+    forced_from: bool,
+    forced_to: bool,
     frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
     frame_title_width: &dyn Fn(usize) -> Option<f32>,
     frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
@@ -2089,7 +2642,6 @@ fn cross_boundary_path(
     } else {
         to
     };
-    let (exit, entry) = sides_along(lca_dir, center(rep_from), center(rep_to));
     // Node-aligned rep ports at the (separated) endpoint node's cross-
     // coordinate on its rep frame's facing side. When the chain is empty the
     // endpoint is its own rep, so this is the node's own (separated) port.
@@ -2104,8 +2656,10 @@ fn cross_boundary_path(
     // the node. See [`try_around_target_route`]. The pierce test uses the
     // node-aligned rep port (the straight stub at the node's cross-coordinate);
     // only the common single-target-frame, single-or-zero-source-frame case is
-    // handled here; deeper nesting keeps the straight stub.
-    if to_chain.len() == 1 && from_chain.len() <= 1 {
+    // handled here; deeper nesting keeps the straight stub. A forced `to`
+    // side disables this: the forced entry side is honored literally, and the
+    // forced stub's own sibling-avoidance ladder takes over.
+    if to_chain.len() == 1 && from_chain.len() <= 1 && !forced_to {
         let sibs: Vec<(f32, f32, f32, f32)> = frame_children(to_chain[0])
             .into_iter()
             .filter(|r| !rects_near(*r, to))
@@ -2159,6 +2713,15 @@ fn cross_boundary_path(
     // source frame boundaries. Empty when the endpoint is its own rep.
     let src_stub = if from_chain.is_empty() {
         Vec::new()
+    } else if forced_from && from_chain.len() == 1 && from_detour.is_none() {
+        // M11: a forced side is honored literally; if the straight stub
+        // would pierce a sibling between the node and the frame border,
+        // route around it (single-frame chains only).
+        let sibs: Vec<(f32, f32, f32, f32)> = frame_children(from_chain[0])
+            .into_iter()
+            .filter(|r| !rects_near(*r, from))
+            .collect();
+        force_stub_around_siblings(from_port, rep_from_port, exit, &sibs, false)
     } else {
         build_stub(
             from_port,
@@ -2175,6 +2738,12 @@ fn cross_boundary_path(
     // Target stub: symmetric to the source stub.
     let tgt_stub = if to_chain.is_empty() {
         Vec::new()
+    } else if forced_to && to_chain.len() == 1 && to_detour.is_none() {
+        let sibs: Vec<(f32, f32, f32, f32)> = frame_children(to_chain[0])
+            .into_iter()
+            .filter(|r| !rects_near(*r, to))
+            .collect();
+        force_stub_around_siblings(to_port, rep_to_port, entry, &sibs, true)
     } else {
         build_stub(
             to_port,
@@ -4203,6 +4772,203 @@ src --> a
         assert!(jog_y < a.y, "jog {jog_y:.2} not above the node top {:.2}", a.y);
     }
 
+    // ================= M10 — title-detour robustness =================
+
+    #[test]
+    fn title_clear_gap_grows_with_title_length() {
+        // The right-edge clearance is a fixed bump plus a length-derived
+        // component: a viewer's fallback font can render a measured title
+        // wider, and the difference grows with the title's length, so a
+        // fixed gap would be eaten (short titles touched, long ones
+        // crossed).
+        let short = title_clear_gap(text::measure("S", FRAME_TITLE_FONT_SIZE).width);
+        let long = title_clear_gap(text::measure("A Very Long Subgraph Title Indeed", FRAME_TITLE_FONT_SIZE).width);
+        assert!(short > TITLE_CLEAR_GAP, "fixed bump missing: {short}");
+        assert!(long > short, "length-derived component missing: {long} vs {short}");
+        assert!(
+            long - short > 0.05 * (long_width_hint()),
+            "per-length component too small: {long} vs {short}"
+        );
+    }
+
+    /// Width of the long test title, for the proportional-gap assertion.
+    fn long_width_hint() -> f32 {
+        text::measure("A Very Long Subgraph Title Indeed", FRAME_TITLE_FONT_SIZE).width
+    }
+
+    /// A wide-titled single-frame subgraph with one small child `a`, plus a
+    /// cross-boundary edge `src --> a`. The frame's width is determined by
+    /// the title (the child is too narrow to widen it), and `a` sits under
+    /// the title's left half — the shape of the M10 left-side detour.
+    fn left_detour_setup() -> (crate::ast::Diagram, Layout) {
+        lay(r#"diagram top-down
+src
+subgraph "A Very Long Subgraph Title Indeed"
+a
+end
+src --> a
+"#)
+    }
+
+    /// The `x` at which the `src -> a` edge crosses the frame's top edge.
+    fn frame_top_entry_x(l: &Layout, s: &SubgraphRect, to: &str) -> f32 {
+        let e = edge_path(l, "src", to);
+        e.points
+            .iter()
+            .find(|p| (p.1 - s.y).abs() < 1e-2)
+            .unwrap_or_else(|| panic!("no connection point on the frame top: {:?}", e.points))
+            .0
+    }
+
+    /// The title text rect of a titled frame (top band, starting at
+    /// [`FRAME_TITLE_X`], the measured width wide, glyph height tall).
+    fn title_rect(s: &SubgraphRect, title: &str) -> (f32, f32, f32, f32) {
+        let tw = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
+        (
+            s.x + FRAME_TITLE_X,
+            s.y + 2.0,
+            tw,
+            FRAME_TITLE_H - 6.0,
+        )
+    }
+
+    #[test]
+    fn title_sized_frame_left_detour_when_node_sits_left_of_title() {
+        // No room past the title's right edge (the title determines the
+        // frame width, so the right margin is only FRAME_TITLE_X): the
+        // detour takes the left-side entry instead of giving up and running
+        // the stub straight through the title. The title's left edge is
+        // anchored at FRAME_TITLE_X, so the small base gap is safe there —
+        // no font fallback can widen it leftward.
+        let (_d, l) = left_detour_setup();
+        let a = node_rect(&l, "a");
+        let s = sub_rect(&l, 0);
+        // The node is under the title's left half.
+        let tw = text::measure("A Very Long Subgraph Title Indeed", FRAME_TITLE_FONT_SIZE).width;
+        let title_mid = s.x + FRAME_TITLE_X + tw / 2.0;
+        assert!(
+            cx(a) < title_mid,
+            "test shape changed: node center {:.2} not under the title's left half (< {:.2})",
+            cx(a),
+            title_mid
+        );
+        // The frame is title-sized and NOT grown: the left entry needs no
+        // extra width, so the group keeps its default frame geometry.
+        let natural = (tw + 2.0 * FRAME_TITLE_X).max(a.w + 2.0 * FRAME_PAD_X);
+        assert!((s.w - natural).abs() < 1e-2, "frame grew unnecessarily: {}", s.w);
+        // The entry is left of the title, TITLE_CLEAR_GAP past its first
+        // glyph.
+        let entry_x = frame_top_entry_x(&l, s, "a");
+        let want = s.x + FRAME_TITLE_X - TITLE_CLEAR_GAP;
+        assert!(
+            (entry_x - want).abs() < 1e-2,
+            "entry {entry_x:.2} not at the left-side detour point {want:.2}"
+        );
+        // And no segment of the edge touches the title text.
+        let e = edge_path(&l, "src", "a");
+        let tr = title_rect(s, "A Very Long Subgraph Title Indeed");
+        for w in e.points.windows(2) {
+            assert!(
+                !segment_intersects_rect(w[0], w[1], tr),
+                "edge segment {:?}->{:?} crosses the title rect {tr:?}",
+                w[0],
+                w[1]
+            );
+        }
+    }
+
+    #[test]
+    fn title_sized_frame_grows_width_for_right_half_detour() {
+        // A node under the title's RIGHT half of a title-sized frame: before
+        // M10 the detour gave up (no clear band past the title — the right
+        // margin is only FRAME_TITLE_X) and the straight stub ran through
+        // the title. Now the frame grows sideways so the entry past the
+        // title exists; growing keeps the children anchored at the left/top
+        // insets, so the group's internal arrangement is untouched.
+        let (_d, l) = lay(r#"diagram top-down
+src
+subgraph "A Very Long Subgraph Title Indeed"
+a
+b
+end
+src --> b
+"#);
+        let a = node_rect(&l, "a");
+        let b = node_rect(&l, "b");
+        let s = sub_rect(&l, 0);
+        let tw = long_width_hint();
+        let title_mid = s.x + FRAME_TITLE_X + tw / 2.0;
+        assert!(
+            cx(b) >= title_mid,
+            "test shape changed: node center {:.2} not under the title's right half (>= {:.2})",
+            cx(b),
+            title_mid
+        );
+        // The frame grew to fit a clear entry past the title plus side
+        // padding (the natural title-sized width is tw + 2·FRAME_TITLE_X).
+        let need = FRAME_TITLE_X + tw + title_clear_gap(tw) + FRAME_PAD_X;
+        assert!(
+            s.w >= need - 1e-2,
+            "frame width {:.2} did not grow to fit the detour entry (need {:.2})",
+            s.w,
+            need
+        );
+        assert!(s.w > tw + 2.0 * FRAME_TITLE_X, "frame not grown past natural");
+        // The entry sits past the title's right edge by the fallback-safe
+        // gap — not clamped inside the title as before.
+        let entry_x = frame_top_entry_x(&l, s, "b");
+        let want = s.x + FRAME_TITLE_X + tw + title_clear_gap(tw);
+        assert!(
+            (entry_x - want).abs() < 1e-2,
+            "entry {entry_x:.2} not past the title's right edge {want:.2}"
+        );
+        // No segment of the edge touches the title text.
+        let e = edge_path(&l, "src", "b");
+        let tr = title_rect(s, "A Very Long Subgraph Title Indeed");
+        for w in e.points.windows(2) {
+            assert!(
+                !segment_intersects_rect(w[0], w[1], tr),
+                "edge segment {:?}->{:?} crosses the title rect {tr:?}",
+                w[0],
+                w[1]
+            );
+        }
+        // The M5 guarantee: the children keep their internal arrangement
+        // (anchored at the left/top insets) — growth is sideways only.
+        assert!((b.x - s.x - (FRAME_PAD_X + a.w + NODE_SEP)).abs() < 1e-2);
+        assert_all_finite(&l);
+        assert_no_overlaps(&l);
+    }
+
+    #[test]
+    fn title_detour_entry_clears_measured_title_by_the_fallback_gap() {
+        // The detour entry past the title's right edge is placed
+        // `title_clear_gap` beyond the title's *measured* right edge — the
+        // gap now includes the fixed + proportional fallback margins, so a
+        // viewer rendering the title with a wider fallback face still does
+        // not reach the entry.
+        let (_d, l) = lay(include_str!("../examples/infra.mmd"));
+        let s = sub_rect(&l, 0);
+        let title = "Kubernetes Cluster";
+        let tw = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
+        let e = edge_path(&l, "lb", "api1");
+        let entry_x = e
+            .points
+            .iter()
+            .find(|p| (p.1 - s.y).abs() < 1e-2)
+            .expect("no connection point on the K8s frame top")
+            .0;
+        let want = s.x + FRAME_TITLE_X + tw + title_clear_gap(tw);
+        assert!(
+            (entry_x - want).abs() < 1e-2,
+            "entry {entry_x:.2} not a fallback-safe gap past the title's measured edge {want:.2}"
+        );
+        assert!(
+            entry_x - (s.x + FRAME_TITLE_X + tw) > TITLE_CLEAR_GAP + TITLE_FALLBACK_PAD - 1e-2,
+            "entry gap lost the fallback margins"
+        );
+    }
+
     // ================= M5.5 — centered block alignment =================
 
     /// Horizontal center of a node rect.
@@ -4701,5 +5467,218 @@ src --> t
         }
         assert!(is_orthogonal(&e.points));
         assert_all_finite(&l);
+    }
+
+    // ================= M11 — forced edge sides (`from=` / `to=`) =================
+
+    /// Is point `p` on `n`'s named page-space side (`"top"`, `"bottom"`,
+    /// `"left"`, `"right"`)? (Tests can't name the internal [`Side`] enum,
+    /// so sides are passed as strings.)
+    fn on_side(n: &NodeRect, p: (f32, f32), side: &str) -> bool {
+        let eps = 1e-2;
+        let (px, py) = p;
+        match side {
+            "top" => (py - n.y).abs() < eps,
+            "bottom" => (py - (n.y + n.h)).abs() < eps,
+            "left" => (px - n.x).abs() < eps,
+            "right" => (px - (n.x + n.w)).abs() < eps,
+            _ => panic!("bad side name {side}"),
+        }
+    }
+
+    #[test]
+    fn forced_from_side_is_honored_in_every_direction() {
+        // Each of the four sides, under each of the four directions: the
+        // edge's start lands on the requested (page-space) side of the
+        // source — whether it agrees with the implicit choice (no reroute)
+        // or contradicts it (routed around).
+        for dir in ["top-down", "bottom-up", "left-right", "right-left"] {
+            for side in ["top", "bottom", "left", "right"] {
+                let src = format!("diagram {dir}\na -- from=\"{side}\" --> b\n");
+                let (_d, l) = lay(&src);
+                let a = node_rect(&l, "a");
+                let e = edge_path(&l, "a", "b");
+                assert!(
+                    on_side(a, e.points[0], side),
+                    "{dir} from=\"{side}\": start {:?} not on a's {side} (a = {a:?})",
+                    e.points[0]
+                );
+                assert!(
+                    is_orthogonal(&e.points),
+                    "{dir} from=\"{side}\" not orthogonal: {:?}",
+                    e.points
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn forced_to_side_is_honored_in_every_direction() {
+        for dir in ["top-down", "bottom-up", "left-right", "right-left"] {
+            for side in ["top", "bottom", "left", "right"] {
+                let src = format!("diagram {dir}\na -- to=\"{side}\" --> b\n");
+                let (_d, l) = lay(&src);
+                let b = node_rect(&l, "b");
+                let e = edge_path(&l, "a", "b");
+                assert!(
+                    on_side(b, *e.points.last().unwrap(), side),
+                    "{dir} to=\"{side}\": end {:?} not on b's {side} (b = {b:?})",
+                    e.points.last().unwrap()
+                );
+                assert!(
+                    is_orthogonal(&e.points),
+                    "{dir} to=\"{side}\" not orthogonal: {:?}",
+                    e.points
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn contradictory_forced_side_routes_around_the_node() {
+        // a --> b (top-down) forced to leave a from its TOP, against the
+        // flow: the route wraps around a instead of falling back to a route
+        // that pierces it — the forced side is honored literally.
+        let (_d, l) = lay("diagram top-down\na -- from=\"top\" --> b\n");
+        let a = node_rect(&l, "a");
+        let e = edge_path(&l, "a", "b");
+        assert!(on_side(a, e.points[0], "top"), "start not on a's top");
+        assert!(is_orthogonal(&e.points));
+        for w in e.points.windows(2) {
+            assert!(
+                !segment_intersects_rect(w[0], w[1], (a.x, a.y, a.w, a.h)),
+                "a->b segment {w:?} passes through a (fell back, not routed around)"
+            );
+        }
+    }
+
+    #[test]
+    fn forced_sides_fan_edges_sharing_a_forced_side() {
+        // Two edges both forced out of a's bottom side: their ports fan
+        // apart across that side (M9 separation still applies to the
+        // forced side).
+        let (_d, l) = lay(
+            "diagram top-down\n\
+             a\n\
+             b \"B\"\n\
+             c \"C\"\n\
+             a -- from=\"bottom\" --> b\n\
+             a -- from=\"bottom\" --> c\n",
+        );
+        let a = node_rect(&l, "a");
+        let e1 = edge_path(&l, "a", "b");
+        let e2 = edge_path(&l, "a", "c");
+        assert!(on_side(a, e1.points[0], "bottom"));
+        assert!(on_side(a, e2.points[0], "bottom"));
+        let d = (e1.points[0].0 - e2.points[0].0).abs();
+        assert!(d >= FAN_SEP - 1e-2, "forced-side fan separation {d:.2} < FAN_SEP");
+    }
+
+    #[test]
+    fn forced_side_excursion_grows_the_canvas() {
+        // Forcing a side that points off the canvas edge (the page margin
+        // is 20, the escape [`SIDE_ESCAPE`] is 24) routes outside the
+        // laid-out content bounds; the canvas grows to contain every drawn
+        // point — the renderer's viewBox comes straight from width/height.
+        let (_d, l_nat) = lay("diagram top-down\na --> b\n");
+        let (_d, l) = lay("diagram top-down\na -- from=\"left\" --> b\n");
+        assert!(
+            l.width > l_nat.width + 1e-2,
+            "canvas did not grow for the forced excursion: {} vs {}",
+            l.width,
+            l_nat.width
+        );
+        // Everything drawn sits inside the (grown) canvas.
+        for e in &l.edges {
+            for &(px, py) in &e.points {
+                assert!(px >= -1e-3 && px <= l.width + 1e-3, "point x {px} outside canvas");
+                assert!(py >= -1e-3 && py <= l.height + 1e-3, "point y {py} outside canvas");
+            }
+        }
+        for n in &l.nodes {
+            assert!(n.x >= -1e-3 && n.x + n.w <= l.width + 1e-3);
+            assert!(n.y >= -1e-3 && n.y + n.h <= l.height + 1e-3);
+        }
+    }
+
+    #[test]
+    fn forced_self_loop_same_side_makes_a_bump_loop() {
+        // Same-side loop: a rectangular bump hanging off the right side,
+        // instead of the fixed below-node stub.
+        let (_d, l) = lay("diagram top-down\na -- from=\"right\" to=\"right\" --> a\n");
+        let a = node_rect(&l, "a");
+        let e = edge_path(&l, "a", "a");
+        assert!(on_side(a, e.points[0], "right"));
+        assert!(on_side(a, *e.points.last().unwrap(), "right"));
+        assert!(is_orthogonal(&e.points));
+        for &(px, _) in &e.points[1..e.points.len() - 1] {
+            assert!(px >= a.x + a.w - 1e-2, "loop interior point at {px} crosses a's body");
+        }
+    }
+
+    #[test]
+    fn forced_self_loop_opposite_sides_wraps_a_corner() {
+        // Opposite-side loop: out of the bottom, around one side, back into
+        // the top.
+        let (_d, l) = lay("diagram top-down\na -- from=\"bottom\" to=\"top\" --> a\n");
+        let a = node_rect(&l, "a");
+        let e = edge_path(&l, "a", "a");
+        assert!(on_side(a, e.points[0], "bottom"));
+        assert!(on_side(a, *e.points.last().unwrap(), "top"));
+        assert!(is_orthogonal(&e.points));
+        for w in e.points.windows(2) {
+            assert!(
+                !segment_intersects_rect(w[0], w[1], (a.x, a.y, a.w, a.h)),
+                "self-loop segment {w:?} passes through a"
+            );
+        }
+    }
+
+    #[test]
+    fn forced_side_on_cross_boundary_edge_enters_target_from_that_side() {
+        // `src --> t` where t sits inside a subgraph, forced to enter t at
+        // its RIGHT side: the LCA segment runs to the frame's right border
+        // at t's height, and the within-frame stub enters t's right side.
+        let (_d, l) = lay(
+            r#"diagram top-down
+src
+subgraph "S"
+t "Target"
+end
+src -- to="right" --> t
+"#,
+        );
+        let t = node_rect(&l, "t");
+        let e = edge_path(&l, "src", "t");
+        assert!(on_side(t, *e.points.last().unwrap(), "right"));
+        assert!(is_orthogonal(&e.points));
+        assert_all_finite(&l);
+    }
+
+    #[test]
+    #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
+    fn _dump_sides_for_inspection() {
+        let (_d, l) = lay(include_str!("../examples/sides.mmd"));
+        println!("canvas: {:.1} x {:.1}", l.width, l.height);
+        let mut nodes = l.nodes.clone();
+        nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
+        for n in &nodes {
+            println!("  {:<10} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
+        }
+        for e in &l.edges {
+            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+            println!("  {:<8} -> {:<8} : {}", e.from, e.to, pts.join(" "));
+        }
+    }
+
+    #[test]
+    fn forced_sides_keep_m9_invariants_on_the_example() {
+        let (d, l) = lay(include_str!("../examples/sides.mmd"));
+        assert_eq!(d.edges.len(), l.edges.len());
+        assert_all_finite(&l);
+        for e in &l.edges {
+            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+        }
+        assert_no_edge_overlaps_or_node_passage(&d, &l);
     }
 }

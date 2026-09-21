@@ -9,11 +9,12 @@
 //!   referencing it inside a `subgraph` body moves it into that group (this is
 //!   the common pattern).
 //! - Validate attributes strictly: unknown attributes and duplicate
-//!   attributes within a single declaration are errors. As of M7.5 the
+//!   attributes within a single declaration are errors. As of M11 the
 //!   recognized attributes are: nodes `color`/`fill`/`text`, edges
-//!   `color`/`text`, and subgraphs `color`/`fill`/`line`/`text` (where
-//!   `line` is a `solid`/`dotted`/`dashed`/`thick` border style, validated
-//!   against the [`Style`] set).
+//!   `color`/`text`/`from`/`to` (page-space side requests, validated
+//!   against the [`EdgeSide`] set), and subgraphs `color`/`fill`/`line`/
+//!   `text` (where `line` is a `solid`/`dotted`/`dashed`/`thick` border
+//!   style, validated against the [`Style`] set).
 //! - Record the subgraph containment tree (each subgraph's `parent` and
 //!   `children`) and carry each subgraph's optional per-subgraph `direction`
 //!   through to layout (M4).
@@ -175,13 +176,22 @@ impl Ctx {
         for (i, e) in nl.edges.iter().enumerate() {
             let from = nl.nodes[i].id.clone();
             let to = nl.nodes[i + 1].id.clone();
-            validate_attrs(&e.attrs, &["color", "text"], "edge")?;
+            // M11: `from` / `to` request the page-space side of the source /
+            // target node the edge connects to (values `top | bottom | left
+            // | right`, validated here so a typo like `from="rught"` fails
+            // loudly instead of silently falling back to the implicit
+            // choice).
+            validate_attrs(&e.attrs, &["color", "text", "from", "to"], "edge")?;
             let mut color = None;
             let mut text = None;
+            let mut from_side = None;
+            let mut to_side = None;
             for attr in &e.attrs {
                 match attr.name.as_str() {
                     "color" => color = Some(attr.value.clone()),
                     "text" => text = Some(attr.value.clone()),
+                    "from" => from_side = Some(parse_edge_side("from", &attr.value, attr.offset)?),
+                    "to" => to_side = Some(parse_edge_side("to", &attr.value, attr.offset)?),
                     _ => unreachable!("validate_attrs ensures only known edge attributes"),
                 }
             }
@@ -192,6 +202,8 @@ impl Ctx {
                 label: e.label.clone(),
                 color,
                 text,
+                from_side,
+                to_side,
             });
         }
         Ok(())
@@ -331,6 +343,20 @@ fn parse_line_style(value: &str, offset: usize) -> Result<Style, Error> {
         offset,
         message: format!(
             "subgraph `line` must be one of solid, dotted, dashed, thick; got `{value}`"
+        ),
+    })
+}
+
+/// Parse the value of an edge `from` / `to` attribute into an
+/// [`EdgeSide`]. The value is a quoted string (so `from="left"`, not the
+/// bare word), and must be one of the four page-space side names;
+/// anything else is a resolve error (the same strict-attribute convention
+/// as the subgraph `line` style).
+fn parse_edge_side(name: &str, value: &str, offset: usize) -> Result<EdgeSide, Error> {
+    EdgeSide::from_ident(value).ok_or_else(|| Error::Resolve {
+        offset,
+        message: format!(
+            "edge `{name}` must be one of top, bottom, left, right; got `{value}`"
         ),
     })
 }
@@ -717,5 +743,71 @@ mod tests {
         );
         assert_eq!(d.subgraphs[0].direction, Some(Direction::LeftRight));
         assert_eq!(d.subgraphs[0].members, ["a", "b"]);
+    }
+
+    // ---- M11: edge side attributes (`from=` / `to=`) ----
+
+    #[test]
+    fn edge_side_attributes_are_parsed() {
+        let d = ok("diagram top-down\na -- from=\"right\" to=\"top\" --> b\n");
+        assert_eq!(d.edges[0].from_side, Some(EdgeSide::Right));
+        assert_eq!(d.edges[0].to_side, Some(EdgeSide::Top));
+        // Unset sides stay None (the layout engine's implicit choice).
+        let d2 = ok("diagram top-down\na --> b\n");
+        assert_eq!(d2.edges[0].from_side, None);
+        assert_eq!(d2.edges[0].to_side, None);
+    }
+
+    #[test]
+    fn edge_side_accepts_all_sides() {
+        for (s, want) in [
+            ("top", EdgeSide::Top),
+            ("bottom", EdgeSide::Bottom),
+            ("left", EdgeSide::Left),
+            ("right", EdgeSide::Right),
+        ] {
+            let src = format!("diagram top-down\na -- from=\"{s}\" --> b\n");
+            let d = ok(&src);
+            assert_eq!(d.edges[0].from_side, Some(want), "from=\"{s}\"");
+            let src = format!("diagram top-down\na -- to=\"{s}\" --> b\n");
+            let d = ok(&src);
+            assert_eq!(d.edges[0].to_side, Some(want), "to=\"{s}\"");
+        }
+    }
+
+    #[test]
+    fn edge_side_invalid_value_is_an_error() {
+        let (e, line) = err("diagram top-down\na -- from=\"rught\" --> b\n");
+        assert_eq!(line, 2);
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("edge `from` must be one of") && message.contains("rught"))
+        );
+        let (e, line) = err("diagram top-down\na -- to=\"sideways\" --> b\n");
+        assert_eq!(line, 2);
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("edge `to` must be one of") && message.contains("sideways"))
+        );
+    }
+
+    #[test]
+    fn edge_side_duplicate_attribute_is_an_error() {
+        let (e, _line) = err("diagram top-down\na -- from=\"left\" from=\"right\" --> b\n");
+        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("duplicate attribute `from`")));
+    }
+
+    #[test]
+    fn edge_side_attributes_combine_with_other_edge_attrs() {
+        let d = ok(
+            "diagram top-down\n\
+             a -- thick \"sync\" color=\"#888\" from=\"left\" to=\"bottom\" --> b\n",
+        );
+        let e = &d.edges[0];
+        assert_eq!(e.style, Style::Thick);
+        assert_eq!(e.label.as_deref(), Some("sync"));
+        assert_eq!(e.color.as_deref(), Some("#888"));
+        assert_eq!(e.from_side, Some(EdgeSide::Left));
+        assert_eq!(e.to_side, Some(EdgeSide::Bottom));
     }
 }

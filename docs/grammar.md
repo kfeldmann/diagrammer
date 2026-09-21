@@ -174,6 +174,36 @@ stroke).
 Deferred. The natural form is `---` (no arrowhead) as the counterpart to
 `-->`, but it is out of scope for v0.
 
+### Edge sides (M11)
+
+An edge may request which side of each endpoint it connects to, via the
+`from` and `to` edge-body attributes:
+
+```
+A -- from="right" to="top" --> B      # leave A's right side, enter B's top
+api -- from="top" --> db              # only the source side is forced
+```
+
+Each value is one of `top | bottom | left | right`. Sides are
+**page-space** (as drawn): `top` always means the visual top of the box,
+regardless of the diagram's or any subgraph's layout direction — no
+translation between the attribute and the drawn result.
+
+The request is honored **literally**: the port lands on the requested side,
+with no automatic reversion to the layout algorithm's implicit choice.
+Silently second-guessing the attribute would leave the user unable to tell
+whether it did anything. When a forced side contradicts the approach
+direction (e.g. an edge flowing downward forced to leave the source's
+top side), the route is wrapped around the node instead. The result may
+be ugly — orthogonal detours, wide excursions — but stays valid: segments
+remain orthogonal, no route passes through a node interior, no two edges
+lie collinearly on top of each other, and several edges forced onto the
+same side of a node are fanned apart. An ugly route is the user's cue to
+change or drop the attribute.
+
+Unknown side values (e.g. `from="north"`) are resolve errors, like any
+unknown attribute value.
+
 ## Attributes
 
 ```
@@ -189,8 +219,10 @@ be eaten by the `#`-comment lexer.
 ### Attribute semantics
 
 Parsed in v0 and **rendered as of M6** (node `color`/`fill`, edge `color`
-and line styles, and edge labels) and **M7.5** (subgraph `color`/`fill`/
-`line`, and a `text` text-color attribute on nodes, edges, and subgraphs).
+and line styles, and edge labels), **M7.5** (subgraph `color`/`fill`/
+`line`, and a `text` text-color attribute on nodes, edges, and subgraphs),
+and **M11** (edge `from`/`to` side attributes; see
+[Edge sides](#edge-sides)).
 
 - **Nodes:**
   - `color` — border / stroke color.
@@ -201,6 +233,8 @@ and line styles, and edge labels) and **M7.5** (subgraph `color`/`fill`/
   - `color` — line and arrowhead color.
   - `text` — edge-label text color (M7.5). Applies only when the edge has
     a label.
+  - `from` / `to` — the page-space side of the source / target the edge
+    connects to (M11); see [Edge sides](#edge-sides).
 
 - **Subgraphs:**
   - `color` — frame border / stroke color (M7.5).

@@ -181,6 +181,46 @@ pub struct Edge {
     /// Color of the edge's label text (M7.5). `None` falls back to the
     /// renderer's default ink color. Applies only when `label` is present.
     pub text: Option<String>,
+    /// Page-space side of the source node this edge leaves from (M11);
+    /// `None` lets the layout engine choose. Honored literally — see
+    /// `docs/grammar.md`.
+    pub from_side: Option<EdgeSide>,
+    /// Page-space side of the target node this edge enters (M11); `None`
+    /// lets the layout engine choose. Honored literally.
+    pub to_side: Option<EdgeSide>,
+}
+
+/// Which page-space side of a node an edge connects to (M11). Sides are
+/// **page-space** (as drawn), so `top` always means the visual top of the
+/// drawn box, regardless of the diagram's or any subgraph's layout
+/// direction. Used by the edge `from=` / `to=` attributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeSide {
+    Top,
+    Bottom,
+    Left,
+    Right,
+}
+
+impl EdgeSide {
+    pub fn from_ident(s: &str) -> Option<Self> {
+        Some(match s {
+            "top" => EdgeSide::Top,
+            "bottom" => EdgeSide::Bottom,
+            "left" => EdgeSide::Left,
+            "right" => EdgeSide::Right,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EdgeSide::Top => "top",
+            EdgeSide::Bottom => "bottom",
+            EdgeSide::Left => "left",
+            EdgeSide::Right => "right",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

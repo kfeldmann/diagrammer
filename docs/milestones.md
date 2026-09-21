@@ -6,7 +6,7 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0–M7.5 and M9 are complete. **M10 (title-detour robustness) is next**, then M11 → M12 → M13; M8 (CLI polish) is deferred until after.
+**Current position:** M0–M7.5, M9, M10, and M11 are complete. **M12 (edges avoid frame outlines) is next**, then M13; M8 (CLI polish) is deferred until after.
 
 ---
 
@@ -468,53 +468,83 @@ addressed in M13.
 
 ---
 
-## ▶ M10 — Title-detour robustness
+## ✅ M10 — Title-detour robustness
 
-The M5.5 title detour has two verified failure modes that grow worse with
-longer subgraph titles:
+The M5.5 title detour had two verified failure modes that grow worse with
+longer subgraph titles; both are fixed.
 
-- [ ] **Entry gap eaten by viewer font fallback.** The detour enters exactly
-      `TITLE_CLEAR_GAP` (6 px) past the title's *measured* right edge. Text is
-      measured with the embedded DejaVu Sans (determinism invariant), but SVGs
-      are viewed in Firefox / GitHub READMEs / Confluence where DejaVu is
-      often absent and the font stack falls back to a wider face — the drawn
-      title extends past the measured end and eats the gap. The error is
-      proportional to title length: short titles get their last letter
-      touched, long titles get crossed. Fix with a larger gap (a fixed bump
-      plus a length-derived component), since the measurement font cannot
-      change.
-- [ ] **No room past the title on title-sized frames.** When the title
+- [x] **Entry gap eaten by viewer font fallback.** The detour used to enter
+      exactly `TITLE_CLEAR_GAP` (6 px) past the title's *measured* right
+      edge. Text is measured with the embedded DejaVu Sans (determinism
+      invariant), but SVGs are viewed in Firefox / GitHub READMEs / Confluence
+      where DejaVu is often absent and the font stack falls back to a
+      different-width face — the drawn title extends past the measured end
+      and eats the gap, proportionally to title length. The right-edge
+      clearance is now `title_clear_gap(title_w)` = base 6 px + a fixed 12 px
+      bump + 0.1 px per pixel of measured title width (`TITLE_FALLBACK_PAD` /
+      `TITLE_FALLBACK_PER_W`), since the measurement font cannot change.
+- [x] **No room past the title on title-sized frames.** When the title
       determines the frame width (`title_w + 2·FRAME_TITLE_X`), the right
-      margin past the title is only `FRAME_TITLE_X` (10 px) — smaller than
-      `FRAME_PAD_X` (21 px) — so the clamped entry point falls *inside* the
-      title, the `clear_x <= title_x1` guard gives up, and the straight stub
-      runs through the title. Fix by mirroring the `CROSS_FRAME_PAD` trick
-      horizontally: when a detour is needed and there is no clear band past
-      the title, grow the frame's width by side padding (this does not
-      disturb the group's internal arrangement — the M5 headline guarantee
-      holds). Also consider a left-side detour when the endpoint node sits
-      left of the title and the left band is clear.
+      margin past the title was only `FRAME_TITLE_X` (10 px), so the clamped
+      entry fell inside the title and the detour gave up (straight stub
+      through the title). Fixed by mirroring the `CROSS_FRAME_PAD` trick
+      horizontally: when a cross-boundary edge reaches an immediate child
+      that sits under the title's right half and the natural width leaves no
+      clear band past the title, `layout_level` grows the frame's width to
+      `title_w + FRAME_TITLE_X + gap + FRAME_PAD_X` — sideways growth keeps
+      the children anchored at the left/top insets, so the group's internal
+      arrangement is untouched (the M5 headline guarantee holds). Like
+      `CROSS_FRAME_PAD` it over-approximates (the entry side is not yet known
+      at frame-sizing time), so a frame may widen for a detour that never
+      arises.
+- [x] **Left-side detour.** `title_detour_clear_x` now considers two
+      entries and takes the one nearer the node: past the title's right edge
+      (fallback-safe gap), or just left of the title's first glyph
+      (`title_x0 - TITLE_CLEAR_GAP`) when the node sits under the title's
+      left half. The left edge is safe with the small base gap because the
+      renderer anchors the title at `FRAME_TITLE_X` — no font fallback can
+      widen it leftward — so the title-sized case with a left-half child
+      needs no growth at all; the right-half case is what triggers it.
+
+Implemented in `src/layout.rs`: the gap function `title_clear_gap` and the
+rewritten two-entry `title_detour_clear_x` (prefer the nearer side, fall
+back to the other, give up only if neither fits — the growth pass makes the
+give-up unreachable for cross-boundary endpoints), the `cross_boundary_subs`
+refactor into `cross_boundary_reach` (now also returns the cross-boundary
+*endpoint nodes*, threaded through `layout_level` as `cross_nodes`), and the
+horizontal growth pass in `layout_level`'s child-frame sizing. 4 new tests
+(`title_clear_gap_grows_with_title_length`,
+`title_sized_frame_left_detour_when_node_sits_left_of_title`,
+`title_sized_frame_grows_width_for_right_half_detour`,
+`title_detour_entry_clears_measured_title_by_the_fallback_gap` — the latter
+three assert the title rect is never crossed);
+`snapshots/infra.svg`, `snapshots/subdirection.svg`, and
+`snapshots/subgraph_style.svg` regenerated — the only change is that title
+-detour entries sit a fallback-safe gap further right of their titles (e.g.
+infra's `lb → api1` now enters the K8s frame at x = title-right + 27.8 px
+instead of + 6 px); no frame widths changed in the samples (none of them has
+a title-sized cross-reached frame).
 
 **Blocked by:** nothing (self-contained bug fix). **Blocks:** nothing, but it
 establishes the "grow the frame to make routing room" pattern M11–M13 may
 reuse.
 
-## ⬜ M11 — Edge side attributes (`from=` / `to=`)
+## ✅ M11 — Edge side attributes (`from=` / `to=`)
 
 Let an edge request which page-space side of each node it connects to:
 `A -- from="right" to="top" --> B` leaves A from its right side and enters B
 at its top. The algorithm already chooses sides implicitly; this makes them
 explicit to mitigate ugly routing.
 
-- [ ] Grammar + parser: `from` and `to` recognized as edge-body attributes;
+- [x] Grammar + parser: `from` and `to` recognized as edge-body attributes;
       values `top | bottom | left | right`; unknown values are resolve
       errors (strict-attribute convention).
-- [ ] Sides are **page-space** (as drawn), unambiguous regardless of the
+- [x] Sides are **page-space** (as drawn), unambiguous regardless of the
       diagram's or any subgraph's direction.
-- [ ] Resolved `Edge` carries `from_side` / `to_side`; layout honors them at
+- [x] Resolved `Edge` carries `from_side` / `to_side`; layout honors them at
       the two port-decision points — the flat engine's `edge_waypoints`
       (direct edges) and `sides_along` (cross-boundary LCA segments).
-- [ ] **Literal semantics** (decided): the forced side is **always honored** —
+- [x] **Literal semantics** (decided): the forced side is **always honored** —
       the port lands on the requested side, with no automatic reversion to the
       algorithm's choice. The attribute is an override; silently
       second-guessing it would leave the user unable to tell whether it did
@@ -523,7 +553,7 @@ explicit to mitigate ugly routing.
       that is the user's cue to change or drop the attribute. `grammar.md`
       will document this: *the attribute is honored literally; contradictory
       choices produce ugly (but valid, non-overlapping) routes.*
-- [ ] **Routing must always succeed.** Forced sides can push routes outside
+- [x] **Routing must always succeed.** Forced sides can push routes outside
       the current content bounds (e.g. an excursion around a wide subgraph);
       the track graph needs unbounded escape corridors and the viewBox grows
       to include them. What remains guaranteed even for contradictory
@@ -535,12 +565,40 @@ explicit to mitigate ugly routing.
       route that keeps the ports — the right shape for literal semantics;
       keep that ladder (bounded, never loops) and make sure forced-side
       routes use it.
-- [ ] Self-loops with forced sides (`A --> A` with `from`/`to`) need real
+- [x] Self-loops with forced sides (`A --> A` with `from`/`to`) need real
       loop routing, not the current fixed below-node stub.
-- [ ] Tests: each forced side in each direction; a contradictory side routes
+- [x] Tests: each forced side in each direction; a contradictory side routes
       around (not fall back); forced-side fan; forced-side excursion beyond
       the content bounds (viewBox grows); self-loop with forced sides;
       snapshots regenerated.
+
+Implemented across `src/resolve.rs` (`parse_edge_side` + `Edge.from_side`/
+`to_side` on the resolved edge) and `src/layout.rs`. Each forced port first
+**escapes** outward along its side's normal (`SIDE_ESCAPE`), then the
+`route_lca` ladder routes between the escaped points with the endpoint nodes
+and peer-edge segments (`SEGMENT_OBSTACLE_PAD`-inflated) as obstacles, so the
+route cannot cut back through either box nor stack collinearly on a
+neighbor. Three M11 routers sit on top of that: `forced_direct_path` for
+direct edges, `self_loop_path` for forced self-loops (same sides → a
+rectangular bump; adjacent/opposite sides → corner wraps), and the
+within-frame stub avoidance (`force_stub_around_siblings`); already-routed
+edges become obstacles via `segment_rect`, so two forced excursions in one
+gap cannot lie collinearly on top of each other. A
+canvas-growth pass in `assemble` grows — and, for negative excursions,
+translates — the canvas so every drawn point lands inside the viewBox.
+
+One latent M9 bug surfaced here and was fixed: `track_route` clear-checked
+its candidate segments against **un-inflated** obstacle rects while its
+caller (`route_clear`) inflates them by `ROUTE_PAD`; with node-rect-only
+obstacles the well-separated rects never tripped this, but the M11 peer-
+segment rects sit close to nodes, so `track_route` returned routes its own
+caller rejected and the blocked simple Z was used as the last resort —
+producing exactly the collinear stacking M11 forbids. `track_route` now
+clear-checks against `ROUTE_PAD`-inflated rects, matching `route_clear`.
+
+`examples/sides.mmd` is the canonical M11 sample (agreeable + contradictory
+sides, a forced self-loop, a forced cross-boundary edge in a left-right
+subgraph), with a golden `sides.svg` snapshot alongside the others.
 
 **Blocked by:** M9. **Blocks:** M12, M13 (they build on the final geometry so
 the cosmetic work is done once).

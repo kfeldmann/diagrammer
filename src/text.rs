@@ -140,14 +140,3 @@ mod tests {
         assert_eq!(line_count("one\n"), 2);
     }
 }
-
-#[cfg(test)]
-mod tmp_probe {
-    use super::*;
-    #[test]
-    fn tmp_print() {
-        for t in ["Group", "Kubernetes Cluster", "A Very Long Subgraph Title Indeed"] {
-            println!("{t:?} @12 -> {:.2}   @14 -> {:.2}", measure(t, 12.0).width, measure(t, 14.0).width);
-        }
-    }
-}

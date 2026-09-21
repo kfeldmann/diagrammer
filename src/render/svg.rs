@@ -1324,6 +1324,14 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_sides() {
+        // The M11 surface: forced page-space sides (`from=` / `to=`),
+        // agreeable and contradictory alike, a forced self-loop, and a
+        // forced side on a cross-boundary edge inside a left-right subgraph.
+        assert_snapshot("sides", &render(include_str!("../../examples/sides.mmd")));
+    }
+
+    #[test]
     fn snapshot_shapes_styles() {
         // The full M6 surface in one diagram: cylinder nodes, node color/fill,
         // edge styles (dotted/dashed/thick), edge color, and edge labels.

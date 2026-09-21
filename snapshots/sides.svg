@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="532.98" height="327.00" viewBox="0 0 532.98 327.00">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
+            markerWidth="10" markerHeight="10" orient="auto"
+            markerUnits="userSpaceOnUse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#333"/>
+    </marker>
+  </defs>
+  <g fill="none" stroke="#7a7a7a" stroke-width="1" stroke-linejoin="round">
+    <rect x="438.20" y="31.00" width="74.78" height="28.00" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
+  </g>
+  <g fill="#3a3a3a" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00">
+    <text x="448.20" y="35.00" text-anchor="start" dominant-baseline="hanging">Messaging</text>
+  </g>
+  <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <polyline points="211.67,66.00 211.67,99.75 172.41,99.75 172.41,129.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="179.41,154.50 203.41,154.50 203.41,212.75 13.00,212.75 13.00,271.00 33.00,271.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="118.38,154.50 94.38,154.50 0.00,154.50 0.00,307.00 284.79,307.00 284.79,271.00 264.79,271.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="125.38,133.50 125.38,109.50 125.38,164.25 86.69,164.25 86.69,219.00 86.69,239.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="211.67,24.00 211.67,0.00 253.79,0.00 253.79,125.50 216.41,125.50 216.41,199.50 266.59,199.50 266.59,179.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="308.78,154.50 326.78,154.50 326.78,164.50 312.78,164.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="393.20,45.00 417.20,45.00 417.20,99.75 329.78,99.75 329.78,154.50 349.78,154.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+  </g>
+  <g>
+    <rect x="177.56" y="24.00" width="68.22" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="211.67" y="45.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Web</text>
+    <rect x="118.38" y="133.50" width="61.03" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="148.89" y="154.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">API</text>
+    <path d="M37.00,248.00 L37.00,294.00 A49.69,5.00 0 0 0 136.39,294.00 L136.39,248.00 A49.69,5.00 0 0 0 37.00,248.00 Z" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <ellipse cx="86.69" cy="248.00" rx="49.69" ry="5.00" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="86.69" y="275.42" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Database</text>
+    <path d="M181.39,248.00 L181.39,294.00 A39.70,5.00 0 0 0 260.79,294.00 L260.79,248.00 A39.70,5.00 0 0 0 181.39,248.00 Z" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <ellipse cx="221.09" cy="248.00" rx="39.70" ry="5.00" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="221.09" y="275.42" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Cache</text>
+    <rect x="290.79" y="24.00" width="102.42" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="341.99" y="45.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Event Bus</text>
+    <rect x="353.78" y="133.50" width="81.51" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="394.53" y="154.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Queue</text>
+    <rect x="224.41" y="133.50" width="84.37" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <text x="266.59" y="154.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Worker</text>
+  </g>
+</svg>

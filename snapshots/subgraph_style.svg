@@ -14,7 +14,7 @@
     <text x="30.00" y="133.50" fill="#005" text-anchor="start" dominant-baseline="hanging">Group</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="66.71,62.00 66.71,95.75 67.38,95.75 67.38,129.50 67.38,149.50 66.20,149.50 66.20,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="66.71,62.00 66.71,95.75 82.52,95.75 82.52,129.50 82.52,149.50 66.20,149.50 66.20,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="161.95,62.00 161.95,95.75 162.03,95.75 162.03,129.50 162.03,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g fill="#fff" stroke="none">

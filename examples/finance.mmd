@@ -1,26 +1,26 @@
 diagram top-down
-    prddns "prd.finance.example.com"
-    user "User"
+#    prddns "prd.finance.example.com"
+    user "User" fill="#eef" color="#99f"
 
-    subgraph "Tencent"
+    subgraph "Tencent" fill="#ffe" color="#f99"
 #        subgraph "Public subnets" line="dotted"
-            pubclb "Public CLB"
-            vpn "VPN Endpoint"
+            pubclb "Public CLB" fill="#eef" color="#99f"
+            vpn "VPN Endpoint" fill="#eef" color="#99f"
 #        end
-        subgraph "Private subnets"
-            prvclb "Private CLB"
-            prdtechdns "prd-tech.finance.example.com"
-            cvm1 "Middleware"
-            cvm2 "Platform"
-            cvm3 "Application"
-            cvm4 "Algorithm"
-            cvm5 "MultiDim DB"
-            db "TDSQL DB" : cylinder
+        subgraph "Private subnets" fill="#fff" color="#f99"
+            prvclb "Private CLB" fill="#eef" color="#99f"
+#            prdtechdns "prd-tech.finance.example.com"
+            cvm1 "Middleware" fill="#eef" color="#99f"
+            cvm2 "Platform" fill="#eef" color="#99f"
+            cvm3 "Application" fill="#eef" color="#99f"
+            cvm4 "Algorithm" fill="#eef" color="#99f"
+            cvm5 "MultiDim DB" fill="#eef" color="#99f"
+            db "TDSQL DB" : cylinder fill="#eef" color="#99f"
         end
     end
 
-    user --> vpn --> prdtechdns -- "443" --> prvclb -- "443" --> cvm2
-    user -- thick --> prddns -- thick "443" --> pubclb -- thick "8088" --> cvm1
+    user --> vpn -- "tech.finance.example.com\n443" --> prvclb -- "443" --> cvm2
+    user -- thick "finance.example.com\n443" --> pubclb -- thick "8088" --> cvm1
 
     vpn -- "22, 8088, 8080,\n30001, 1234" --> cvm1
     vpn -- "22, 443" --> cvm2

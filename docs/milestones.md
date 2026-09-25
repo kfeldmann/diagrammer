@@ -6,7 +6,7 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0–M7.5, M9, M10, and M11 are complete. **M12 (edges avoid frame outlines) is next**, then M13; M8 (CLI polish) is deferred until after.
+**Current position:** M0–M7.5, M9, M10, and M11 are complete. **M11.5 (routing-layer refactor; absorbs M12) is next**, then M13; M8 (CLI polish) is deferred until after.
 
 ---
 
@@ -600,26 +600,80 @@ clear-checks against `ROUTE_PAD`-inflated rects, matching `route_clear`.
 sides, a forced self-loop, a forced cross-boundary edge in a left-right
 subgraph), with a golden `sides.svg` snapshot alongside the others.
 
-**Blocked by:** M9. **Blocks:** M12, M13 (they build on the final geometry so
+**Blocked by:** M9. **Blocks:** M11.5, M13 (they build on the final geometry so
 the cosmetic work is done once).
 
-## ⬜ M12 — Edges avoid frame outlines
+## ▶ M11.5 — Routing-layer refactor: one obstacle world, one routing regime
 
-The M9 obstacle model (`track_route`) contains node rects only; subgraph
-frames are invisible to the router, so an LCA jog or lane can run along a
-frame's border stroke and read as a connection to the group.
+Review of the routing layer found it structurally sound (the compound/LCA
+decomposition, the `(cross, flow)` vocabulary, the `route_lca` ladder, and the
+invariant tests are the part that works and everything downstream assumes it)
+but past the point where per-case tweaking is safe. The routing regime differs
+by edge kind, with different guarantees each: **direct edges** keep the flat
+engine's waypoints and orthogonalize blind (no obstacle check at all — only
+forced sides get the ladder — so a non-forced direct edge's midpoint jog can
+still pass through a peer node); **cross-boundary edges** route obstacle-aware
+through the M9 ladder against node rects only; **forced edges** additionally
+treat already-routed edges as obstacles, making route quality depend on
+declaration order. Meanwhile the special-case interlock conditions
+(`is_around_target` port-separation exclusion, the around-target / title-detour
+/ forced-stub gates) are scattered across `assemble` and
+`cross_boundary_path`, and `assemble` (~540 lines) derives the same per-edge
+context (forced sides, chains, rep rects) twice — once in the pre-pass, once in
+the routing loop — with agreement maintained by hand.
 
-- [ ] Extend the obstacle model to subgraph **frame perimeters**: unlike node
-      rects, a frame's interior is legal to pass through (crossing a nested
-      frame is intentional and recorded as a waypoint), so the forbidden
-      thing is the *border line itself* — collinear overlap with a frame edge
-      is barred except at the designated entry/exit crossing points.
-- [ ] Reused by M13: frame borders and titles become obstacles for label
-      placement too.
-- [ ] Tests: an LCA segment that used to run along a frame border reroutes;
-      legitimate frame crossings are unchanged; snapshots regenerated.
+This milestone restructures the routing layer into **one regime**: the same
+router and the same obstacle world for every edge kind, with edge-type
+knowledge confined to which obstacles and candidate routes each edge feeds it.
+It **absorbs M12** (edges avoid frame outlines), whose scope is step 1 below.
+Everything that works stays: the compound/LCA decomposition, the `(cross,
+flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
 
-**Blocked by:** M9, M11 (geometry is final first). **Blocks:** M13.
+- [ ] **One obstacle world (absorbs M12).** A single obstacle model used by
+      every router: node rects; subgraph **frame borders** as thin obstacles
+      that may only be crossed at designated connection points (collinear
+      overlap with a border barred except at an entry/exit crossing — a
+      frame's interior stays legal, since crossing a nested frame is
+      intentional and recorded as a waypoint); and **previously routed edge
+      segments** (`segment_rect`-inflated) as obstacles for *all* edges, not
+      only forced ones. `route_clear` / `track_route` clear-check against this
+      one (consistently inflated) world — eliminating the class of latent bug
+      M11 already hit once (mismatched inflation between the two checks).
+- [ ] **Every edge routes through the ladder.** Non-forced direct edges run the
+      same `route_lca` ladder (simple Z at the lane → mid jog → track route →
+      last-resort Z) instead of blind `orthogonalize`, closing the
+      pass-through-a-node hole; the simple Z remains the fast path when the
+      obstacle set is empty or the lane is clear.
+- [ ] **Deterministic routing order.** Edges are routed in one pass in a
+      deterministic priority (forced edges first, then declaration order), so
+      peer-segment obstacles no longer depend on an edge happening to be
+      forced.
+- [ ] **RouteContext hoist.** Extract a per-edge `RouteContext` built **once** —
+      endpoint rects, chains, rep rects, effective sides (implicit vs forced
+      resolved in *one* place), port-separation results, lane assignments,
+      level obstacles — and rebuild `assemble`'s edge loop to: build context →
+      generate candidate routes (straight Z / around-target / title-detour
+      stub / forced ladder / self-loop) → common clearance check → accept.
+      Each special-case *gate* moves from scattered booleans into its
+      candidate generator (each generator decides whether it applies); a
+      single dispatch point decides. The special cases keep their fallbacks —
+      the point is one dispatch, not fewer cases.
+- [ ] **No invariant regression.** The M5 headline guarantee (crossing edges
+      never disturb group internal layout), the M9 invariants (no collinear
+      stacking, no node pass-through, orthogonality), and the M11 literal
+      forced-side semantics all keep passing. The existing invariant test
+      suite is the definition of success; snapshots regenerate only where the
+      unified routing actually improves a route (e.g. a direct-edge jog that
+      used to cross a peer node).
+- [ ] **Decision point — global router? (evaluate, do not build).** After steps
+      1–2, evaluate on the samples plus adversarial cases: if the unified
+      regime still needs per-case fallbacks to satisfy the invariants, the
+      next move is a global routing pass (all edges against a shared occupancy
+      grid, deterministic priority) — not another per-case patch. Record the
+      verdict in this section; explicitly out of scope to build here.
+
+**Blocked by:** M11. **Blocks:** M13 (they build on the final geometry so the
+cosmetic work is done once).
 
 ## ⬜ M13 — Label placement engine + parallel-edge spacing
 
@@ -640,7 +694,7 @@ covers a neighboring edge.
       sizes so a labeled edge's knockout cannot cover a neighbor; bump
       `FAN_SEP` / `LANE_INSET` / `LABEL_PAD` as needed.
 
-**Blocked by:** M11, M12 (final geometry + obstacle model). Resolves M9's
+**Blocked by:** M11.5 (final geometry + unified obstacle model). Resolves M9's
 known limitation.
 
 ---
@@ -648,7 +702,7 @@ known limitation.
 ### Dependency graph
 
 ```
-M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M12 ── M13
+M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13
               │   │      └── M6 (interleaves)        │
               │   └──────── M8 (deferred) ───────────┘
               └── M5.5 ── M7 ─┘

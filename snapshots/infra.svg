@@ -20,7 +20,7 @@
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
     <polyline points="217.82,62.00 217.82,125.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="161.03,171.50 161.03,176.50 194.60,176.50 194.60,239.00 194.60,259.00 137.44,259.00 137.44,267.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="161.03,171.50 161.03,205.25 194.60,205.25 194.60,239.00 194.60,259.00 137.44,259.00 137.44,267.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="274.62,171.50 274.62,232.00 298.20,232.00 298.20,239.00 298.20,267.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="86.56,313.00 86.56,333.00 86.56,338.00 96.14,338.00 96.14,396.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="247.32,313.00 247.32,333.00 247.32,375.00 106.14,375.00 106.14,396.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>

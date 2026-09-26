@@ -53,7 +53,8 @@ diagram. Layout and rendering are stubbed (`todo!()`).
 Produce coordinates and a ranking for a single flat graph under one global
 direction. No groups yet.
 
-- [x] **Text measurement** (precise, via `ab_glyph`): node label → pixel
+- [x] **Text measurement** (precise, against baked DejaVu metrics): node
+      label → pixel
       width/height. Needed to size boxes before placing them.
 - [x] **Cycle removal** (break back-edges with a heuristic; restore later).
 - [x] **Layering** (assign each node to a rank along the chosen direction).
@@ -70,8 +71,8 @@ its parents' centroid; overlap-free — refined in M5.5) and per-rank band
 y-placement. Everything is computed in canonical top-down space
 then rigidly transformed into the requested direction, so edge ports stay
 glued to the correct side of each box in all four directions. Text is measured
-with `ab_glyph` against the DejaVu Sans Regular embedded via the `dejavu`
-crate (deterministic across machines). 16 layout tests + 4 measurement tests.
+against baked metrics generated from the DejaVu Sans Regular embedded via
+the `dejavu` crate (deterministic across machines). 16 layout tests + 4 measurement tests.
 
 **Blocked by:** nothing. **Blocks:** M3, M4.
 

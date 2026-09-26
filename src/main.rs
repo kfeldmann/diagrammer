@@ -15,6 +15,7 @@ mod ast;
 mod error;
 mod layout;
 mod lexer;
+mod metrics_table;
 mod parser;
 mod render;
 mod resolve;

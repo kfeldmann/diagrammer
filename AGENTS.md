@@ -34,8 +34,10 @@ source string
 ```
 
 `ast.rs` holds both layers: the `Raw*` syntactic types and the resolved
-`Diagram`/`Node`/`Edge`/`Group`. `text.rs` measures labels with `ab_glyph`
-against the embedded DejaVu Sans Regular (deterministic across machines).
+`Diagram`/`Node`/`Edge`/`Group`. `text.rs` measures labels against the baked
+DejaVu Sans metrics in `metrics_table.rs` — generated from the embedded font
+by `tools/gen-metrics-table` and verified against it by tests
+(deterministic across machines).
 `error.rs` is an offset-carrying `Error` enum → 1-based line numbers.
 
 ## src/ module map
@@ -51,7 +53,9 @@ src/
                  direction) + cross-boundary edge routing + M9 edge
                  separation & obstacle-aware LCA routing + M13 label
                  placement & label-aware fan/lane spacing → Layout
-  text.rs        ab_glyph label measurement vs embedded DejaVu Sans
+  text.rs        label measurement against the baked metrics table
+  metrics_table.rs  GENERATED baked DejaVu metrics — never hand-edit;
+                 regenerate: cargo run -p gen-metrics-table
   error.rs       Error enum + line_of()
   render/
     mod.rs       `pub mod svg;`
@@ -66,6 +70,7 @@ src/
 cargo test                            # full suite (incl. golden snapshots)
 cargo test -- --skip snapshot         # logic only, faster feedback
 UPDATE_SNAPSHOTS=1 cargo test         # regenerate golden .svg files (commit them)
+cargo run -p gen-metrics-table       # regenerate src/metrics_table.rs (font changes; commit it)
 cargo run -- examples/infra.dgmr -o out.svg   # render one diagram
 cargo run -- examples/infra.dgmr               # print a validation summary
 ```
@@ -108,12 +113,21 @@ files (don't hand-edit them).
   Windows/macOS ones). Measurement stays DejaVu-first (below), the wider
   font, so boxes never under-size for any stack member.
 - **Deterministic output.** `fmt()` formats floats to exactly 2 decimals; text
-  is measured against the **embedded** DejaVu Sans Regular (via the `dejavu`
-  crate + `ab_glyph`), never a system font. Snapshots are byte-stable across
+  is measured against the baked metrics of the **embedded** DejaVu Sans
+  Regular (`src/metrics_table.rs`), never a system font. Snapshots are byte-stable across
   machines — don't introduce nondeterminism (random ids, hashmap iteration
   order leaking into output, system fonts). Edge-label placement (M13) is a
   fixed-order greedy pass plus one refinement pass over candidate anchors —
   keep it that way (no randomness, no iteration-order dependence).
+- **Measurement is baked and verified.** `src/metrics_table.rs` is *generated*
+  — never hand-edit it; regenerate with `cargo run -p gen-metrics-table`
+  (and commit the result) when the bundled font changes. The
+  `font_verification` tests in `text.rs` prove the table is bit-identical to
+  live `ttf-parser` lookups over the whole Unicode range — keep them green.
+  Two load-bearing quirks (pinned by those tests): pixel scaling is
+  `font_size / (ascent − descent)` (the em box, **not** `units_per_em`), and
+  kerning is *first horizontal subtable wins* with zero-valued pairs treated
+  as absent.
 
 ## Shared constants across the layout/render boundary
 
@@ -172,9 +186,13 @@ breaks geometry):
 - `src/render/svg.rs` — unit checks + golden snapshots (`assert_snapshot`).
 - `src/layout.rs` — geometry/alignment/cross-boundary tests (the bulk).
 - `src/resolve.rs` — validation + error-case tests.
-- `src/text.rs` — measurement sanity tests.
+- `src/text.rs` — measurement sanity tests + `font_verification` (proves the
+  baked table ≡ live font lookups, exhaustively over all Unicode codepoints;
+  the slowest tests in the suite, ~20s).
 - `examples/infra.dgmr` and `examples/subdirection.dgmr` are the canonical
-  sample diagrams; `infra.dgmr` is loaded by tests via `include_str!`.
+  sample diagrams (`examples/` holds `.dgmr` input files only; the
+  metrics-table generator lives in the `tools/gen-metrics-table/` workspace
+  crate); `infra.dgmr` is loaded by tests via `include_str!`.
   Input files use the `.dgmr` extension (deliberately unique — unclaimed by
   other formats — so editor tooling like a vim syntax file can target the
   grammar unambiguously); don't rename examples back to `.mmd`/other

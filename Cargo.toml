@@ -3,10 +3,22 @@ name = "diagrammer"
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-winnow = "0.7"
-ab_glyph = "0.2"
+[workspace]
+members = ["tools/gen-metrics-table"]
+
+[workspace.dependencies]
+ttf-parser = { version = "0.25", default-features = false, features = ["std"] }
 dejavu = "2.37"
+
+[dependencies]
+winnow = { version = "0.7", default-features = false, features = ["alloc"] }
+
+# Font deps are NOT linked into the binary: measurement runs against the baked
+# metrics in `src/metrics_table.rs`. These are only used by the regeneration
+# tool (`tools/gen-metrics-table`) and the `font_verification` tests.
+[dev-dependencies]
+ttf-parser = { workspace = true }
+dejavu = { workspace = true }
 
 [[bin]]
 name = "diagrammer"

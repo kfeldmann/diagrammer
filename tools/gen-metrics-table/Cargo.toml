@@ -1,0 +1,9 @@
+[package]
+name = "gen-metrics-table"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+ttf-parser = { workspace = true }
+dejavu = { workspace = true }

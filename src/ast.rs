@@ -4,7 +4,7 @@
 //! - the **raw** (syntactic) AST produced by the parser, preserving every
 //!   declaration as written (including duplicate node occurrences);
 //! - the **resolved** [`Diagram`] produced by [`crate::resolve`], with
-//!   deduplicated nodes, validated attributes, and assigned subgraph
+//!   deduplicated nodes, validated attributes, and assigned group
 //!   membership.
 
 // ---- Shared enums ----
@@ -102,7 +102,7 @@ pub struct RawDiagram {
 #[derive(Debug, Clone)]
 pub enum RawStatement {
     NodeList(RawNodeList),
-    Subgraph(RawSubgraph),
+    Group(RawGroup),
 }
 
 /// A line of the form `nodespec (edge nodespec)*`. With no edges this is a
@@ -139,7 +139,7 @@ pub struct RawAttr {
 }
 
 #[derive(Debug, Clone)]
-pub struct RawSubgraph {
+pub struct RawGroup {
     pub direction: Option<Direction>,
     pub title: Option<String>,
     pub attrs: Vec<RawAttr>,
@@ -154,7 +154,7 @@ pub struct Diagram {
     pub direction: Direction,
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
-    pub subgraphs: Vec<Subgraph>,
+    pub groups: Vec<Group>,
 }
 
 #[derive(Debug, Clone)]
@@ -167,7 +167,7 @@ pub struct Node {
     /// Color of the node's label text (M7.5). `None` falls back to the
     /// renderer's default ink color.
     pub text: Option<String>,
-    /// Index into [`Diagram::subgraphs`]; `None` means top-level.
+    /// Index into [`Diagram::groups`]; `None` means top-level.
     pub group: Option<usize>,
 }
 
@@ -192,7 +192,7 @@ pub struct Edge {
 
 /// Which page-space side of a node an edge connects to (M11). Sides are
 /// **page-space** (as drawn), so `top` always means the visual top of the
-/// drawn box, regardless of the diagram's or any subgraph's layout
+/// drawn box, regardless of the diagram's or any group's layout
 /// direction. Used by the edge `from=` / `to=` attributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeSide {
@@ -224,23 +224,23 @@ impl EdgeSide {
 }
 
 #[derive(Debug, Clone)]
-pub struct Subgraph {
+pub struct Group {
     pub title: Option<String>,
-    /// Per-subgraph layout direction (M4). `None` means "inherit the
+    /// Per-group layout direction (M4). `None` means "inherit the
     /// effective direction of the enclosing level".
     pub direction: Option<Direction>,
-    /// Direct child node ids belonging to this subgraph, in declaration
-    /// order. (Deeper descendants belong to their own, inner subgraphs.)
+    /// Direct child node ids belonging to this group, in declaration
+    /// order. (Deeper descendants belong to their own, inner groups.)
     pub members: Vec<String>,
-    /// Indices of direct child subgraphs, in declaration order.
+    /// Indices of direct child groups, in declaration order.
     pub children: Vec<usize>,
-    /// Enclosing subgraph index; `None` means this subgraph is top-level.
+    /// Enclosing group index; `None` means this group is top-level.
     pub parent: Option<usize>,
     /// Border (line) color of the frame (M7.5). `None` falls back to the
     /// renderer's default frame stroke.
     pub color: Option<String>,
     /// Interior background fill of the frame (M7.5). `None` leaves the
-    /// frame transparent (the default, so edges behind a subgraph stay
+    /// frame transparent (the default, so edges behind a group stay
     /// visible through it).
     pub fill: Option<String>,
     /// Border line style of the frame (M7.5): `solid`/`dotted`/`dashed`/

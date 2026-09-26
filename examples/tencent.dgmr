@@ -1,15 +1,15 @@
 diagram top-down
 
-    subgraph "Tencent Cloud Platform"
+    group "Tencent Cloud Platform"
 
         vpn "VPN" fill="#99f"
         pub-clb "Public CLB" fill="#ccc"
 
-        subgraph left-right "Dev VPC" fill="#ddd"
-            subgraph "Dev/Digital\nSubnets" fill="#fff"
+        group left-right "Dev VPC" fill="#ddd"
+            group "Dev/Digital\nSubnets" fill="#fff"
                 prv-clb "Private CLB" fill="#ccc"
             end
-            subgraph "Dev/Shared Subnets" fill="#fff"
+            group "Dev/Shared Subnets" fill="#fff"
                 tke "TKE Cluster" fill="#f99"
             end
         end

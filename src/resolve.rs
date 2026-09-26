@@ -4,19 +4,19 @@
 //! Responsibilities:
 //! - Deduplicate node declarations, enforcing label / shape / attribute
 //!   consistency across redeclarations.
-//! - Assign subgraph membership. A node may be placed in at most one subgraph;
+//! - Assign group membership. A node may be placed in at most one group;
 //!   placing it in two is an error. Declaring a node at top level and later
-//!   referencing it inside a `subgraph` body moves it into that group (this is
+//!   referencing it inside a `group` body moves it into that group (this is
 //!   the common pattern).
 //! - Validate attributes strictly: unknown attributes and duplicate
 //!   attributes within a single declaration are errors. As of M11 the
 //!   recognized attributes are: nodes `color`/`fill`/`text`, edges
 //!   `color`/`text`/`from`/`to` (page-space side requests, validated
-//!   against the [`EdgeSide`] set), and subgraphs `color`/`fill`/`line`/
+//!   against the [`EdgeSide`] set), and groups `color`/`fill`/`line`/
 //!   `text` (where `line` is a `solid`/`dotted`/`dashed`/`thick` border
 //!   style, validated against the [`Style`] set).
-//! - Record the subgraph containment tree (each subgraph's `parent` and
-//!   `children`) and carry each subgraph's optional per-subgraph `direction`
+//! - Record the group containment tree (each group's `parent` and
+//!   `children`) and carry each group's optional per-group `direction`
 //!   through to layout (M4).
 
 use std::collections::HashMap;
@@ -31,22 +31,22 @@ struct NodeInfo {
     color: Option<String>,
     fill: Option<String>,
     text: Option<String>,
-    /// Current group: `None` = top level, `Some(idx)` = a subgraph.
+    /// Current group: `None` = top level, `Some(idx)` = a group.
     membership: Option<usize>,
-    /// Distinct subgraphs this node has been placed in. Length >= 2 is an
-    /// error ("appears in more than one subgraph").
-    placed_subgraphs: Vec<usize>,
+    /// Distinct groups this node has been placed in. Length >= 2 is an
+    /// error ("appears in more than one group").
+    placed_groups: Vec<usize>,
 }
 
-struct SubgraphInfo {
+struct GroupInfo {
     title: Option<String>,
     direction: Option<Direction>,
     color: Option<String>,
     fill: Option<String>,
     line: Option<Style>,
     text: Option<String>,
-    /// Enclosing subgraph index; `None` = top level. Captured when the
-    /// subgraph is opened so the resolved model can express nesting.
+    /// Enclosing group index; `None` = top level. Captured when the
+    /// group is opened so the resolved model can express nesting.
     parent: Option<usize>,
     #[allow(dead_code)]
     offset: usize,
@@ -56,7 +56,7 @@ struct Ctx {
     nodes: Vec<NodeInfo>,
     id_index: HashMap<String, usize>,
     edges: Vec<Edge>,
-    subgraphs: Vec<SubgraphInfo>,
+    groups: Vec<GroupInfo>,
 }
 
 pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
@@ -64,14 +64,14 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
         nodes: Vec::new(),
         id_index: HashMap::new(),
         edges: Vec::new(),
-        subgraphs: Vec::new(),
+        groups: Vec::new(),
     };
     for stmt in &raw.statements {
         ctx.process_statement(stmt, None)?;
     }
 
-    let subgraphs: Vec<Subgraph> = ctx
-        .subgraphs
+    let groups: Vec<Group> = ctx
+        .groups
         .iter()
         .enumerate()
         .map(|(idx, sg)| {
@@ -81,7 +81,7 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
                 .filter(|n| n.membership == Some(idx))
                 .map(|n| n.id.clone())
                 .collect();
-            Subgraph {
+            Group {
                 title: sg.title.clone(),
                 direction: sg.direction,
                 members,
@@ -94,11 +94,11 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
             }
         })
         .collect();
-    // Populate each subgraph's direct children (by parent link) in index order.
-    let mut subgraphs = subgraphs;
-    for (idx, sg) in ctx.subgraphs.iter().enumerate() {
+    // Populate each group's direct children (by parent link) in index order.
+    let mut groups = groups;
+    for (idx, sg) in ctx.groups.iter().enumerate() {
         if let Some(p) = sg.parent {
-            subgraphs[p].children.push(idx);
+            groups[p].children.push(idx);
         }
     }
 
@@ -120,7 +120,7 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
         direction: raw.direction,
         nodes,
         edges: ctx.edges,
-        subgraphs,
+        groups,
     })
 }
 
@@ -128,16 +128,16 @@ impl Ctx {
     fn process_statement(&mut self, stmt: &RawStatement, group: Option<usize>) -> Result<(), Error> {
         match stmt {
             RawStatement::NodeList(nl) => self.process_nodelist(nl, group),
-            RawStatement::Subgraph(sg) => self.process_subgraph(sg, group),
+            RawStatement::Group(sg) => self.process_group(sg, group),
         }
     }
 
-    fn process_subgraph(&mut self, sg: &RawSubgraph, parent: Option<usize>) -> Result<(), Error> {
-        // Per-subgraph direction is now honored by layout (M4); the grammar
+    fn process_group(&mut self, sg: &RawGroup, parent: Option<usize>) -> Result<(), Error> {
+        // Per-group direction is now honored by layout (M4); the grammar
         // already validates the direction token, so we only carry it through.
-        // Subgraph style attributes (M7.5): `color` (border), `fill`
+        // Group style attributes (M7.5): `color` (border), `fill`
         // (background), `line` (border line style), and `text` (title color).
-        validate_attrs(&sg.attrs, &["color", "fill", "line", "text"], "subgraph")?;
+        validate_attrs(&sg.attrs, &["color", "fill", "line", "text"], "group")?;
         let mut color = None;
         let mut fill = None;
         let mut line = None;
@@ -148,11 +148,11 @@ impl Ctx {
                 "fill" => fill = Some(attr.value.clone()),
                 "line" => line = Some(parse_line_style(&attr.value, attr.offset)?),
                 "text" => text = Some(attr.value.clone()),
-                _ => unreachable!("validate_attrs ensures only known subgraph attributes"),
+                _ => unreachable!("validate_attrs ensures only known group attributes"),
             }
         }
-        let idx = self.subgraphs.len();
-        self.subgraphs.push(SubgraphInfo {
+        let idx = self.groups.len();
+        self.groups.push(GroupInfo {
             title: sg.title.clone(),
             direction: sg.direction,
             color,
@@ -262,13 +262,13 @@ impl Ctx {
             if is_standalone {
                 match group {
                     Some(g) => {
-                        if !info.placed_subgraphs.contains(&g) {
-                            info.placed_subgraphs.push(g);
-                            if info.placed_subgraphs.len() >= 2 {
+                        if !info.placed_groups.contains(&g) {
+                            info.placed_groups.push(g);
+                            if info.placed_groups.len() >= 2 {
                                 return Err(Error::Resolve {
                                     offset: occ.offset,
                                     message: format!(
-                                        "node `{}` appears in more than one subgraph",
+                                        "node `{}` appears in more than one group",
                                         occ.id
                                     ),
                                 });
@@ -292,9 +292,9 @@ impl Ctx {
                     _ => unreachable!("validate_attrs ensures only known node attributes"),
                 }
             }
-            let mut placed_subgraphs = Vec::new();
+            let mut placed_groups = Vec::new();
             if let Some(g) = group {
-                placed_subgraphs.push(g);
+                placed_groups.push(g);
             }
             let idx = self.nodes.len();
             self.nodes.push(NodeInfo {
@@ -305,7 +305,7 @@ impl Ctx {
                 fill,
                 text,
                 membership: group,
-                placed_subgraphs,
+                placed_groups,
             });
             self.id_index.insert(occ.id.clone(), idx);
         }
@@ -333,7 +333,7 @@ fn merge_attr(
     }
 }
 
-/// Parse the value of a subgraph `line` attribute into a [`Style`]. The
+/// Parse the value of a group `line` attribute into a [`Style`]. The
 /// value is a quoted string (so `"dashed"`, not the bare contextual keyword
 /// an edge body uses), and must be one of the four style names; anything else
 /// is a resolve error so a typo like `line="wavy"` fails loudly instead of
@@ -342,7 +342,7 @@ fn parse_line_style(value: &str, offset: usize) -> Result<Style, Error> {
     Style::from_ident(value).ok_or_else(|| Error::Resolve {
         offset,
         message: format!(
-            "subgraph `line` must be one of solid, dotted, dashed, thick; got `{value}`"
+            "group `line` must be one of solid, dotted, dashed, thick; got `{value}`"
         ),
     })
 }
@@ -351,7 +351,7 @@ fn parse_line_style(value: &str, offset: usize) -> Result<Style, Error> {
 /// [`EdgeSide`]. The value is a quoted string (so `from="left"`, not the
 /// bare word), and must be one of the four page-space side names;
 /// anything else is a resolve error (the same strict-attribute convention
-/// as the subgraph `line` style).
+/// as the group `line` style).
 fn parse_edge_side(name: &str, value: &str, offset: usize) -> Result<EdgeSide, Error> {
     EdgeSide::from_ident(value).ok_or_else(|| Error::Resolve {
         offset,
@@ -426,13 +426,13 @@ mod tests {
 
     #[test]
     fn basic_counts() {
-        let d = ok(include_str!("../examples/infra.mmd"));
+        let d = ok(include_str!("../examples/infra.dgmr"));
         assert_eq!(d.direction, Direction::TopDown);
         assert_eq!(d.nodes.len(), 8);
         assert_eq!(d.edges.len(), 10);
-        assert_eq!(d.subgraphs.len(), 1);
-        assert_eq!(d.subgraphs[0].title.as_deref(), Some("Kubernetes Cluster"));
-        assert_eq!(d.subgraphs[0].members, ["api1", "api2"]);
+        assert_eq!(d.groups.len(), 1);
+        assert_eq!(d.groups[0].title.as_deref(), Some("Kubernetes Cluster"));
+        assert_eq!(d.groups[0].members, ["api1", "api2"]);
     }
 
     #[test]
@@ -487,23 +487,23 @@ mod tests {
     }
 
     #[test]
-    fn move_top_level_node_into_subgraph() {
+    fn move_top_level_node_into_group() {
         let d = ok(
             "diagram top-down\n\
              a \"A\"\n\
-             subgraph \"S\"\n\
+             group \"S\"\n\
              a\n\
              end\n",
         );
         assert_eq!(node(&d, "a").group, Some(0));
-        assert_eq!(d.subgraphs[0].members, ["a"]);
+        assert_eq!(d.groups[0].members, ["a"]);
     }
 
     #[test]
     fn cross_boundary_edge_does_not_relocate_node() {
         let d = ok(
             "diagram top-down\n\
-             subgraph \"S\"\n\
+             group \"S\"\n\
              a\n\
              end\n\
              b --> a\n",
@@ -516,42 +516,42 @@ mod tests {
     }
 
     #[test]
-    fn nested_subgraphs_record_containment() {
+    fn nested_groups_record_containment() {
         let d = ok(
             "diagram top-down\n\
-             subgraph \"Outer\"\n\
-             subgraph \"Inner\"\n\
+             group \"Outer\"\n\
+             group \"Inner\"\n\
              a\n\
              end\n\
              end\n",
         );
-        assert_eq!(d.subgraphs.len(), 2);
+        assert_eq!(d.groups.len(), 2);
         assert_eq!(node(&d, "a").group, Some(1)); // innermost
         // Containment tree: Outer contains Inner; both are top-level siblings'
         // parent links.
-        assert_eq!(d.subgraphs[0].parent, None);
-        assert_eq!(d.subgraphs[0].children, [1]);
-        assert_eq!(d.subgraphs[1].parent, Some(0));
-        assert!(d.subgraphs[1].children.is_empty());
-        assert_eq!(d.subgraphs[0].members, Vec::<String>::new());
-        assert_eq!(d.subgraphs[1].members, ["a"]);
+        assert_eq!(d.groups[0].parent, None);
+        assert_eq!(d.groups[0].children, [1]);
+        assert_eq!(d.groups[1].parent, Some(0));
+        assert!(d.groups[1].children.is_empty());
+        assert_eq!(d.groups[0].members, Vec::<String>::new());
+        assert_eq!(d.groups[1].members, ["a"]);
     }
 
     // ---- error cases ----
 
     #[test]
-    fn node_in_two_subgraphs_is_an_error() {
+    fn node_in_two_groups_is_an_error() {
         let (e, line) = err(
             "diagram top-down\n\
-             subgraph \"A\"\n\
+             group \"A\"\n\
              a\n\
              end\n\
-             subgraph \"B\"\n\
+             group \"B\"\n\
              a\n\
              end\n",
         );
         assert_eq!(line, 6);
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("appears in more than one subgraph")));
+        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("appears in more than one group")));
     }
 
     #[test]
@@ -587,24 +587,24 @@ mod tests {
     }
 
     #[test]
-    fn subgraph_direction_is_accepted() {
-        // M4: per-subgraph direction is now honored, not rejected.
+    fn group_direction_is_accepted() {
+        // M4: per-group direction is now honored, not rejected.
         let d = ok(
             "diagram top-down\n\
-             subgraph left-right \"S\"\n\
+             group left-right \"S\"\n\
              a\n\
              end\n",
         );
-        assert_eq!(d.subgraphs.len(), 1);
-        assert_eq!(d.subgraphs[0].direction, Some(Direction::LeftRight));
-        // A subgraph with no direction inherits at layout time (stored as None).
+        assert_eq!(d.groups.len(), 1);
+        assert_eq!(d.groups[0].direction, Some(Direction::LeftRight));
+        // A group with no direction inherits at layout time (stored as None).
         let d2 = ok(
             "diagram top-down\n\
-             subgraph \"T\"\n\
+             group \"T\"\n\
              b\n\
              end\n",
         );
-        assert_eq!(d2.subgraphs[0].direction, None);
+        assert_eq!(d2.groups[0].direction, None);
     }
 
     #[test]
@@ -634,18 +634,18 @@ mod tests {
         assert!(matches!(e, Error::Parse { ref message, .. } if message.contains("unexpected `end`")));
     }
 
-    // ---- M7.5: subgraph color/fill/line/text and text-color attributes ----
+    // ---- M7.5: group color/fill/line/text and text-color attributes ----
 
     #[test]
-    fn subgraph_style_attributes_are_parsed() {
+    fn group_style_attributes_are_parsed() {
         let d = ok(
             "diagram top-down\n\
-             subgraph \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
+             group \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
              a\n\
              end\n",
         );
-        assert_eq!(d.subgraphs.len(), 1);
-        let sg = &d.subgraphs[0];
+        assert_eq!(d.groups.len(), 1);
+        let sg = &d.groups[0];
         assert_eq!(sg.color.as_deref(), Some("#888"));
         assert_eq!(sg.fill.as_deref(), Some("#eef"));
         assert_eq!(sg.line, Some(Style::Dashed));
@@ -653,51 +653,51 @@ mod tests {
     }
 
     #[test]
-    fn subgraph_line_accepts_all_styles() {
+    fn group_line_accepts_all_styles() {
         for (s, want) in [
             ("solid", Style::Solid),
             ("dotted", Style::Dotted),
             ("dashed", Style::Dashed),
             ("thick", Style::Thick),
         ] {
-            let src = format!("diagram top-down\nsubgraph \"S\" line=\"{s}\"\na\nend\n");
+            let src = format!("diagram top-down\ngroup \"S\" line=\"{s}\"\na\nend\n");
             let d = ok(&src);
-            assert_eq!(d.subgraphs[0].line, Some(want), "line=\"{s}\"");
+            assert_eq!(d.groups[0].line, Some(want), "line=\"{s}\"");
         }
     }
 
     #[test]
-    fn subgraph_invalid_line_style_is_an_error() {
+    fn group_invalid_line_style_is_an_error() {
         let (e, line) = err(
             "diagram top-down\n\
-             subgraph \"S\" line=\"wavy\"\n\
+             group \"S\" line=\"wavy\"\n\
              a\n\
              end\n",
         );
         assert_eq!(line, 2);
         assert!(
             matches!(e, Error::Resolve { ref message, .. }
-                if message.contains("subgraph `line` must be one of") && message.contains("wavy"))
+                if message.contains("group `line` must be one of") && message.contains("wavy"))
         );
     }
 
     #[test]
-    fn subgraph_unknown_attribute_is_an_error() {
+    fn group_unknown_attribute_is_an_error() {
         let (e, line) = err(
             "diagram top-down\n\
-             subgraph \"S\" bogus=\"x\"\n\
+             group \"S\" bogus=\"x\"\n\
              a\n\
              end\n",
         );
         assert_eq!(line, 2);
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("unknown subgraph attribute `bogus`")));
+        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("unknown group attribute `bogus`")));
     }
 
     #[test]
-    fn subgraph_duplicate_attribute_is_an_error() {
+    fn group_duplicate_attribute_is_an_error() {
         let (e, _line) = err(
             "diagram top-down\n\
-             subgraph \"S\" color=\"x\" color=\"y\"\n\
+             group \"S\" color=\"x\" color=\"y\"\n\
              a\n\
              end\n",
         );
@@ -731,18 +731,18 @@ mod tests {
     }
 
     #[test]
-    fn subgraph_style_attrs_do_not_perturb_structure() {
+    fn group_style_attrs_do_not_perturb_structure() {
         // Style attributes are render-only; they must not change the resolved
         // structural fields (direction, members, containment).
         let d = ok(
             "diagram top-down\n\
-             subgraph left-right \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
+             group left-right \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
              a\n\
              b\n\
              end\n",
         );
-        assert_eq!(d.subgraphs[0].direction, Some(Direction::LeftRight));
-        assert_eq!(d.subgraphs[0].members, ["a", "b"]);
+        assert_eq!(d.groups[0].direction, Some(Direction::LeftRight));
+        assert_eq!(d.groups[0].members, ["a", "b"]);
     }
 
     // ---- M11: edge side attributes (`from=` / `to=`) ----

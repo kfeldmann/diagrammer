@@ -5,15 +5,15 @@ SVG output. It exists to:
 
 - avoid round-tripping through the Mermaid website to preview/tune diagrams,
   and
-- give more control over subgraph layout direction than Mermaid (which ignores
-  per-subgraph direction when edges cross group boundaries).
+- give more control over group layout direction than Mermaid (which ignores
+  a `subgraph`'s direction when edges cross group boundaries).
 
 ## Status
 
 v0: the input language is **parsed, validated, laid out, and rendered to
-SVG end to end**, including **compound layout with per-subgraph direction**
-(M4), **cross-boundary edge routing through subgraph frames** (M5), and
-**shape/style/color rendering** (M6) — subgraphs render as labeled frames,
+SVG end to end**, including **compound layout with per-group direction**
+(M4), **cross-boundary edge routing through group frames** (M5), and
+**shape/style/color rendering** (M6) — groups render as labeled frames,
 size to fit their contents, each may declare its own `direction` independent
 of the diagram's, and edges crossing a group boundary route to connection
 points on the frames without disturbing the groups' internal layout. Nodes
@@ -23,10 +23,10 @@ sit at the edge midpoint. Orthogonal edge routing (M7) is the next milestone
 (see the plan in `docs/milestones.md`).
 
 ```console
-$ cargo run -- examples/infra.mmd
-ok: 8 nodes, 10 edges, 1 subgraphs (direction top-down)
+$ cargo run -- examples/infra.dgmr
+ok: 8 nodes, 10 edges, 1 groups (direction top-down)
 
-$ cargo run -- examples/infra.mmd -o examples/infra.svg
+$ cargo run -- examples/infra.dgmr -o examples/infra.svg
 wrote examples/infra.svg
 ```
 
@@ -36,8 +36,13 @@ external references).
 ## Usage
 
 ```
-diagrammer <input.mmd> [-o <output.svg>]
+diagrammer <input.dgmr> [-o <output.svg>]
 ```
+
+Input files use the `.dgmr` extension — a deliberately unique extension
+(unclaimed by other formats) so editor tooling, like a vim syntax file, can
+target diagrammer's grammar unambiguously. A vim syntax file matching the v0
+grammar ships in [`contrib/vim`](contrib/vim).
 
 Without `-o`, `diagrammer` parses and validates the input and prints a
 one-line summary. With `-o <output.svg>`, it lays the diagram out and writes a
@@ -57,19 +62,19 @@ lb --> api2
 api1 -- dotted --> cache
 db "Postgres" : cylinder
 
-subgraph "Kubernetes Cluster"
+group "Kubernetes Cluster"
     api1
     api2
 end
 ```
 
-See [`examples/subdirection.mmd`](examples/subdirection.mmd) for a diagram
-that puts two subgraphs with *different* directions in one diagram.
+See [`examples/subdirection.dgmr`](examples/subdirection.dgmr) for a diagram
+that puts two groups with *different* directions in one diagram.
 
 Highlights:
 
 - `diagram top-down | bottom-up | left-right | right-left`.
-- `subgraph [direction] "title" ... end` — visual grouping; the optional
+- `group [direction] "title" ... end` — visual grouping; the optional
   direction lays the group out independently of the diagram's direction.
 - Nodes: `id` (label defaults to the id) or `id "Label"`, optional `: shape`
   (`box`, `cylinder`), and attributes (`color="..."`, `fill="..."`).

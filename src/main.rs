@@ -1,12 +1,12 @@
 //! diagrammer — a small DSL for infrastructure diagrams.
 //!
 //! v0 status: the input language is parsed and semantically validated end to
-//! end, laid out (Sugiyama-style, including compound subgraphs with
-//! per-subgraph direction), and rendered to a self-contained SVG. Rendering
+//! end, laid out (Sugiyama-style, including compound groups with
+//! per-group direction), and rendered to a self-contained SVG. Rendering
 //! (M6) honors the `cylinder` shape, per-node `color`/`fill`, the
 //! `dotted`/`dashed`/`thick` edge styles, per-edge `color`, and edge labels;
-//! M7.5 adds per-subgraph `color`/`fill`/`line` (border style) and a `text`
-//! text-color attribute on nodes, edges, and subgraphs.
+//! M7.5 adds per-group `color`/`fill`/`line` (border style) and a `text`
+//! text-color attribute on nodes, edges, and groups.
 //! See [`docs/grammar.md`](../docs/grammar.md) and the milestone plan in
 //! [`docs/milestones.md`](../docs/milestones.md).
 #![allow(dead_code)]
@@ -84,10 +84,10 @@ fn run(source: &str, output: Option<&Path>) -> Result<RunOutcome, error::Error> 
     let diagram = resolve::resolve(&raw)?;
     match output {
         None => Ok(RunOutcome::Summary(format!(
-            "ok: {} nodes, {} edges, {} subgraphs (direction {})",
+            "ok: {} nodes, {} edges, {} groups (direction {})",
             diagram.nodes.len(),
             diagram.edges.len(),
-            diagram.subgraphs.len(),
+            diagram.groups.len(),
             diagram.direction.as_str(),
         ))),
         Some(path) => {
@@ -144,7 +144,7 @@ fn parse_args(args: &[String]) -> Result<Cli, String> {
 
 fn usage(prog: &str) -> String {
     format!(
-        "usage: {prog} <input.mmd> [-o <output.svg>]\n\
+        "usage: {prog} <input.dgmr> [-o <output.svg>]\n\
          \n\
          Parses and validates a diagram. Without `-o` it prints a summary to\n\
          stdout; with `-o <output.svg>` it lays out the diagram and writes a\n\

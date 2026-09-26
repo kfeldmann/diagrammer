@@ -2,7 +2,7 @@
 #
 # An edge may request which page-space side of each node it connects to.
 # Sides are page-space (as drawn): `top` is always the visual top of the
-# box, whatever the diagram's or a subgraph's layout direction. The request
+# box, whatever the diagram's or a group's layout direction. The request
 # is honored literally — the port lands on the requested side even when it
 # contradicts the approach direction, in which case the route is routed
 # around (ugly, but valid: orthogonal, never through a node).
@@ -29,6 +29,6 @@ web -- from="top" to="bottom" --> worker
 # a forced self-loop: out of the right side, around, back into the right side
 worker -- from="right" to="right" --> worker
 
-subgraph left-right "Messaging"
+group left-right "Messaging"
     bus -- from="right" to="left" --> queue
 end

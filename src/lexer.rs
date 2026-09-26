@@ -1,7 +1,7 @@
 //! Low-level token recognizers used by the structural parser.
 //!
 //! These operate directly on `&str`: whitespace/comments, line endings,
-//! identifiers, and quoted strings. Structural rules (nodes, edges, subgraphs)
+//! identifiers, and quoted strings. Structural rules (nodes, edges, groups)
 //! live in [`crate::parser`].
 
 use winnow::ascii::line_ending;

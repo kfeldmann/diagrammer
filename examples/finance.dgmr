@@ -2,12 +2,12 @@ diagram top-down
 #    prddns "prd.finance.example.com"
     user "User" fill="#c0e1fc" color="#2196F3"
 
-    subgraph "Tencent" fill="#f2f8f4" color="#88BDA4"
-#        subgraph "Public subnets" line="dotted"
+    group "Tencent" fill="#f2f8f4" color="#88BDA4"
+#        group "Public subnets" line="dotted"
             pubclb "Public CLB" fill="#c0e1fc" color="#2196F3"
             vpn "VPN Endpoint" fill="#c0e1fc" color="#2196F3"
 #        end
-        subgraph "Private subnets" fill="#f2f8f4" color="#88BDA4"
+        group "Private subnets" fill="#f2f8f4" color="#88BDA4"
             prvclb "Private CLB" fill="#c0e1fc" color="#2196F3"
 #            prdtechdns "prd-tech.finance.example.com"
             cvm1 "Middleware" fill="#c0e1fc" color="#2196F3"

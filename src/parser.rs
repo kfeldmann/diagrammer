@@ -226,12 +226,12 @@ fn nodelist(i: &mut &str, base: usize) -> ModalResult<RawNodeList> {
     Ok(RawNodeList { nodes, edges })
 }
 
-// ---------- subgraphs ----------
+// ---------- groups ----------
 
-fn subgraph(i: &mut &str, base: usize) -> ModalResult<RawSubgraph> {
+fn group(i: &mut &str, base: usize) -> ModalResult<RawGroup> {
     lexer::ws(i)?;
     let off = here(i, base);
-    keyword(i, "subgraph")?;
+    keyword(i, "group")?;
     lexer::ws(i)?;
     let direction = opt(direction_soft).parse_next(i)?;
     lexer::ws(i)?;
@@ -240,14 +240,14 @@ fn subgraph(i: &mut &str, base: usize) -> ModalResult<RawSubgraph> {
     let attrs: Vec<RawAttr> = repeat(0.., |i: &mut &str| attr(i, base)).parse_next(i)?;
     lexer::ws(i)?;
     cut_err(lexer::eol)
-        .context(StrContext::Label("end of line after `subgraph` header"))
+        .context(StrContext::Label("end of line after `group` header"))
         .parse_next(i)?;
 
     let mut statements = Vec::new();
     loop {
         lexer::ws(i)?;
         if i.is_empty() {
-            return fail_cut("expected `end` to close `subgraph`");
+            return fail_cut("expected `end` to close `group`");
         }
         if opt(line_ending).parse_next(i)?.is_some() {
             continue;
@@ -255,7 +255,7 @@ fn subgraph(i: &mut &str, base: usize) -> ModalResult<RawSubgraph> {
         if peek_keyword(i, "end") {
             keyword(i, "end")?;
             // The enclosing statement loop consumes this line's ending.
-            return Ok(RawSubgraph {
+            return Ok(RawGroup {
                 direction,
                 title,
                 attrs,
@@ -263,8 +263,8 @@ fn subgraph(i: &mut &str, base: usize) -> ModalResult<RawSubgraph> {
                 offset: off,
             });
         }
-        if peek_keyword(i, "subgraph") {
-            statements.push(RawStatement::Subgraph(subgraph(i, base)?));
+        if peek_keyword(i, "group") {
+            statements.push(RawStatement::Group(group(i, base)?));
         } else {
             statements.push(RawStatement::NodeList(nodelist(i, base)?));
         }
@@ -300,10 +300,10 @@ fn diagram(i: &mut &str, base: usize) -> ModalResult<RawDiagram> {
             continue; // blank line
         }
         if peek_keyword(i, "end") {
-            return fail_cut("unexpected `end` (no matching `subgraph`)");
+            return fail_cut("unexpected `end` (no matching `group`)");
         }
-        if peek_keyword(i, "subgraph") {
-            statements.push(RawStatement::Subgraph(subgraph(i, base)?));
+        if peek_keyword(i, "group") {
+            statements.push(RawStatement::Group(group(i, base)?));
         } else {
             statements.push(RawStatement::NodeList(nodelist(i, base)?));
         }

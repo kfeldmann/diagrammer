@@ -1,5 +1,5 @@
 //! Layered (Sugiyama-style) layout, extended for **compound graphs** with
-//! per-subgraph direction (milestones 2 and 4).
+//! per-group direction (milestones 2 and 4).
 //!
 //! The flat engine is the classic four-phase framework, unchanged from M2:
 //!
@@ -21,13 +21,13 @@
 //!
 //! ## Compound layout (M4)
 //!
-//! Subgraphs form a containment tree (each node belongs to at most one
-//! subgraph; subgraphs nest). Layout is **recursive**: each level (the
-//! top-level diagram, or a subgraph) is laid out as a flat graph whose
+//! Groups form a containment tree (each node belongs to at most one
+//! group; groups nest). Layout is **recursive**: each level (the
+//! top-level diagram, or a group) is laid out as a flat graph whose
 //! "items" are the level's direct-child real nodes plus its direct-child
-//! subgraphs (treated as opaque compound boxes). A subgraph box is sized to
+//! groups (treated as opaque compound boxes). A group box is sized to
 //! fit its own recursively-laid-out contents plus a labeled frame. Each
-//! level uses its own effective direction (a subgraph's direction, or the
+//! level uses its own effective direction (a group's direction, or the
 //! direction inherited from its enclosing level).
 //!
 //! Each original edge is assigned to the **lowest common ancestor (LCA)**
@@ -35,8 +35,8 @@
 //! (recursively). At that level the edge is represented between the two
 //! endpoints' *representatives* — the direct child of the LCA that is an
 //! ancestor-or-self of each endpoint. So an edge between a top-level node and
-//! a node deep inside a subgraph becomes, at the top level, an edge between
-//! that node and the subgraph's compound box. This keeps compound boxes
+//! a node deep inside a group becomes, at the top level, an edge between
+//! that node and the group's compound box. This keeps compound boxes
 //! positioned relative to their connected neighbors without dragging the
 //! inner nodes' internal arrangement around — the Mermaid/dagre failure mode
 //! this tool exists to escape.
@@ -48,12 +48,12 @@
 //!   waypoints, in absolute coordinates.
 //! - Any other edge (at least one representative is a compound box) is a
 //!   **cross-boundary** edge. It is routed through **connection points on the
-//!   subgraph frames** it crosses, without disturbing the groups' internal
+//!   group frames** it crosses, without disturbing the groups' internal
 //!   layout (the M5 headline guarantee — the failure mode this tool exists to
 //!   escape). The LCA-level segment connects the two representatives' *ports*:
 //!   each rep port sits at the **endpoint node's** cross-coordinate on its
 //!   frame's facing side (not the frame's center), so a within-frame stub runs
-//!   straight along the node's own axis and edges entering a subgraph line up
+//!   straight along the node's own axis and edges entering a group line up
 //!   with their target node rather than all converging on the frame's midpoint.
 //!   When that point falls under the frame's (top-left) title the stub detours
 //!   just past the title and jogs below it; a stub that would pierce a sibling
@@ -91,7 +91,7 @@
 //! knockouts do not cover neighbor lines where the room exists. See the M13
 //! section below.
 
-use crate::ast::{Diagram, Direction, Subgraph};
+use crate::ast::{Diagram, Direction, Group};
 use crate::text;
 
 // ---- Tunable constants (pixels) ----
@@ -152,8 +152,8 @@ const CYL_PAD: f32 = 2.0;
 /// generously for small graphs.
 const CROSS_ITERS: usize = 24;
 
-// Frame (subgraph) sizing, in pixels. The frame is a labeled border drawn
-// around a subgraph's contents; these define the inset between the frame
+// Frame (group) sizing, in pixels. The frame is a labeled border drawn
+// around a group's contents; these define the inset between the frame
 // edge and the inner content (the recursive layout's bounding box).
 const FRAME_PAD_X: f32 = 1.5 * FONT_SIZE;
 const FRAME_PAD_Y: f32 = 8.0;
@@ -176,16 +176,16 @@ const FRAME_TITLE_FONT_SIZE: f32 = 12.0;
 /// title text occupies `y ∈ [frame.y + FRAME_TITLE_TOP, … + lines *
 /// line_height]`.
 const FRAME_TITLE_TOP: f32 = 4.0;
-/// Extra padding added to a subgraph frame's top inset *and* bottom padding
+/// Extra padding added to a group frame's top inset *and* bottom padding
 /// when a cross-boundary edge connects to one of the frame's *immediate*
 /// children (a direct-child node the edge reaches by crossing the frame).
 /// It grows the frame along the LCA-level flow axis so the edge's within-
 /// frame stub has room to jog: clear of the title text above the node and
 /// clear of the node's arrowhead below the jog (see [`STUB_JOG_CLEARANCE`]).
-/// One subgraph-title font height each side — the title font is smaller than
-/// the node label font, so this is a modest growth; a subgraph with no such
+/// One group-title font height each side — the title font is smaller than
+/// the node label font, so this is a modest growth; a group with no such
 /// edges keeps the default frame geometry. Keep this in sync with the
-/// renderer's subgraph title font size (`FRAME_TITLE_SIZE` in
+/// renderer's group title font size (`FRAME_TITLE_SIZE` in
 /// `render/svg.rs`, 12 px): it is sized to one title-height of room. Its
 /// horizontal mirror — growing a title-sized frame's *width* so a title
 /// detour has an entry past the title — lives in [`layout_level`] (M10).
@@ -209,7 +209,7 @@ const CROSS_FRAME_PAD: f32 = 12.0;
 /// spirit as [`FONT_SIZE`] and [`CYL_RY`]; keep it in sync if the renderer's
 /// marker or backoff changes.
 const STUB_JOG_CLEARANCE: f32 = 12.0;
-/// Base clearance between a title-detour entry and a subgraph title's edge
+/// Base clearance between a title-detour entry and a group title's edge
 /// (see [`title_detour_clear_x`]). Applied to the title's **left** edge —
 /// which is anchored at [`FRAME_TITLE_X`] by the renderer and so cannot be
 /// widened by a viewer's font fallback — and, plus the fallback margins
@@ -250,15 +250,15 @@ fn title_clear_gap(title_width: f32) -> f32 {
 
 // ---- Public output types (consumed by milestone 3 rendering) ----
 
-/// A laid-out diagram: node rectangles, edge polylines, subgraph frames, and
+/// A laid-out diagram: node rectangles, edge polylines, group frames, and
 /// the canvas size. Nodes and edges correspond by index to the resolved
-/// [`Diagram`] (declaration order); subgraphs correspond by index to
-/// `diagram.subgraphs`.
+/// [`Diagram`] (declaration order); groups correspond by index to
+/// `diagram.groups`.
 #[derive(Debug, Clone)]
 pub struct Layout {
     pub nodes: Vec<NodeRect>,
     pub edges: Vec<EdgePath>,
-    pub subgraphs: Vec<SubgraphRect>,
+    pub groups: Vec<GroupRect>,
     pub width: f32,
     pub height: f32,
 }
@@ -289,14 +289,14 @@ pub struct EdgePath {
     pub label_at: Option<(f32, f32)>,
 }
 
-/// A subgraph's frame rectangle, in absolute (page) coordinates. The
+/// A group's frame rectangle, in absolute (page) coordinates. The
 /// frame's style (title, border color/fill/line, title text color) lives on
-/// the resolved [`crate::ast::Subgraph`]; the renderer zips `diagram.subgraphs`
-/// with `layout.subgraphs` (they correspond by index) so this struct only
+/// the resolved [`crate::ast::Group`]; the renderer zips `diagram.groups`
+/// with `layout.groups` (they correspond by index) so this struct only
 /// carries geometry.
 #[derive(Debug, Clone, PartialEq)]
-pub struct SubgraphRect {
-    /// Index into `Diagram::subgraphs`.
+pub struct GroupRect {
+    /// Index into `Diagram::groups`.
     pub index: usize,
     pub x: f32,
     pub y: f32,
@@ -364,8 +364,8 @@ struct FlatEdgeOut {
 // ---- Compound-layout support ----
 
 /// Identifies an item at a level: a direct-child real node, or a direct-child
-/// subgraph (compound box). Carries the *global* index into `Diagram::nodes`
-/// or `Diagram::subgraphs`.
+/// group (compound box). Carries the *global* index into `Diagram::nodes`
+/// or `Diagram::groups`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 enum ItemRef {
     Node(usize),
@@ -388,13 +388,13 @@ struct EdgeInfo {
 }
 
 /// The laid-out contents of a single level, in that level's local coordinate
-/// system. For the top level, "local" is page coordinates. For a subgraph,
-/// "local" is the subgraph's inner content space (origin at the frame's
+/// system. For the top level, "local" is page coordinates. For a group,
+/// "local" is the group's inner content space (origin at the frame's
 /// content top-left); the parent translates it into place.
 struct LevelOut {
     /// `(global node index, x, y, w, h)` for every descendant real node.
     nodes: Vec<(usize, f32, f32, f32, f32)>,
-    /// `(global subgraph index, x, y, w, h)` for every descendant frame.
+    /// `(global group index, x, y, w, h)` for every descendant frame.
     frames: Vec<(usize, f32, f32, f32, f32)>,
     /// `(global edge index, waypoints)` for direct internal edges (rendered
     /// via flat waypoints). Cross-boundary edges are filled in later.
@@ -404,7 +404,7 @@ struct LevelOut {
     h: f32,
 }
 
-/// A recursively-laid-out child subgraph, pending placement into its parent.
+/// A recursively-laid-out child group, pending placement into its parent.
 struct ChildOut {
     out: LevelOut,
     inner_ox: f32,
@@ -431,11 +431,11 @@ fn cyl_height(shape: crate::ast::Shape, text_height: f32) -> f32 {
     }
 }
 
-/// Lay out a resolved [`Diagram`], honoring subgraph containment and
-/// per-subgraph direction.
+/// Lay out a resolved [`Diagram`], honoring group containment and
+/// per-group direction.
 pub fn layout(diagram: &Diagram) -> Layout {
     if diagram.nodes.is_empty() {
-        // Still produce frames for any (empty) subgraphs, sized to their
+        // Still produce frames for any (empty) groups, sized to their
         // padding, so they render as small labeled boxes rather than vanish.
         let top = layout_level(
             diagram,
@@ -463,7 +463,7 @@ pub fn layout(diagram: &Diagram) -> Layout {
         .map(|e| {
             let fi = id_index[e.from.as_str()];
             let ti = id_index[e.to.as_str()];
-            let lca = lca_level(diagram.nodes[fi].group, diagram.nodes[ti].group, &diagram.subgraphs);
+            let lca = lca_level(diagram.nodes[fi].group, diagram.nodes[ti].group, &diagram.groups);
             let rep_from = rep_of(fi, lca, diagram);
             let rep_to = rep_of(ti, lca, diagram);
             let is_direct = matches!(rep_from, ItemRef::Node(_)) && matches!(rep_to, ItemRef::Node(_));
@@ -476,12 +476,12 @@ pub fn layout(diagram: &Diagram) -> Layout {
         })
         .collect();
 
-    // Subgraphs that have a cross-boundary edge to an *immediate* child (a
+    // Groups that have a cross-boundary edge to an *immediate* child (a
     // direct-child node the edge reaches by crossing the frame), and those
-    // child nodes themselves. The subgraphs get extra frame padding
+    // child nodes themselves. The groups get extra frame padding
     // ([`CROSS_FRAME_PAD`]) so the edge's within-frame stub has room to jog
     // clear of the title and the node's arrowhead; the node set feeds the
-    // M10 title-width growth pass in [`layout_level`]. A subgraph reached
+    // M10 title-width growth pass in [`layout_level`]. A group reached
     // only through deeper descendants does not qualify: the stub's jog lives
     // in the innermost frame's padding, not this one's.
     let (cross_subs, cross_nodes) = cross_boundary_reach(diagram, &edge_infos, &id_index);
@@ -497,8 +497,8 @@ struct Geometry<'a> {
     id_index: std::collections::HashMap<&'a str, usize>,
     node_rect: std::collections::HashMap<usize, (f32, f32, f32, f32)>,
     frame_rect: std::collections::HashMap<usize, (f32, f32, f32, f32)>,
-    /// Immediate children (real-node rects + nested subgraph frame rects, in
-    /// absolute coordinates) per subgraph index — used by cross-boundary
+    /// Immediate children (real-node rects + nested group frame rects, in
+    /// absolute coordinates) per group index — used by cross-boundary
     /// routing to detect when a within-frame stub would pierce a sibling and
     /// to route around the frame when it would.
     frame_children: std::collections::HashMap<usize, Vec<(f32, f32, f32, f32)>>,
@@ -524,10 +524,10 @@ impl<'a> Geometry<'a> {
         self.frame_children.get(&s).cloned().unwrap_or_default()
     }
 
-    /// The rendered width of a subgraph's title (`None` when untitled).
+    /// The rendered width of a group's title (`None` when untitled).
     fn title_width(&self, s: usize) -> Option<f32> {
         self.diagram
-            .subgraphs
+            .groups
             .get(s)
             .and_then(|sg| sg.title.as_ref())
             .map(|t| text::measure(t, FRAME_TITLE_FONT_SIZE).width)
@@ -629,8 +629,8 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
                 .unwrap_or(Side::Top);
             (raw, Vec::new(), Vec::new(), fs, ts, from, to)
         } else {
-            let from_chain = chain_to_lca(diagram.nodes[fi].group, lca, &diagram.subgraphs);
-            let to_chain = chain_to_lca(diagram.nodes[ti].group, lca, &diagram.subgraphs);
+            let from_chain = chain_to_lca(diagram.nodes[fi].group, lca, &diagram.groups);
+            let to_chain = chain_to_lca(diagram.nodes[ti].group, lca, &diagram.groups);
             let rf = from_chain.last().map(|&s| geom.frame(s)).unwrap_or(from);
             let rt = to_chain.last().map(|&s| geom.frame(s)).unwrap_or(to);
             let (exit, entry) = sides_along(lca_dir, center(rf), center(rt));
@@ -711,7 +711,7 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         node_rect.insert(*gi, (*x, *y, *w, *h));
     }
 
-    // Absolute frame rect per subgraph index, for cross-boundary routing.
+    // Absolute frame rect per group index, for cross-boundary routing.
     let frame_rect: HashMap<usize, (f32, f32, f32, f32)> = top
         .frames
         .iter()
@@ -727,7 +727,7 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
                 .push(node_rect.get(&gi).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)));
         }
     }
-    for (si, sg) in diagram.subgraphs.iter().enumerate() {
+    for (si, sg) in diagram.groups.iter().enumerate() {
         if let Some(p) = sg.parent {
             frame_children
                 .entry(p)
@@ -746,7 +746,7 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         let r = node_rect.get(&gi).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
         level_items.entry(nd.group).or_default().push((ItemRef::Node(gi), r));
     }
-    for (si, sg) in diagram.subgraphs.iter().enumerate() {
+    for (si, sg) in diagram.groups.iter().enumerate() {
         let r = frame_rect.get(&si).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
         level_items.entry(sg.parent).or_default().push((ItemRef::Sub(si), r));
     }
@@ -939,10 +939,10 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
     // `EdgePath`; the renderer draws the knockout rect + text at the anchor.
     let paths: Vec<Vec<(f32, f32)>> = edges_out.iter().map(|e| e.points.clone()).collect();
     let mut label_frames: Vec<(f32, f32, f32, f32)> = Vec::new();
-    for s in 0..diagram.subgraphs.len() {
+    for s in 0..diagram.groups.len() {
         let r = geom.frame(s);
         label_frames.extend(border_bands(r));
-        if let Some(title) = diagram.subgraphs[s].title.as_deref() {
+        if let Some(title) = diagram.groups[s].title.as_deref() {
             label_frames.push(title_text_rect(r, title));
         }
     }
@@ -968,10 +968,10 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         });
     }
 
-    let mut subgraphs_out = Vec::with_capacity(diagram.subgraphs.len());
-    for gi in 0..diagram.subgraphs.len() {
+    let mut groups_out = Vec::with_capacity(diagram.groups.len());
+    for gi in 0..diagram.groups.len() {
         let (x, y, w, h) = geom.frame(gi);
-        subgraphs_out.push(SubgraphRect {
+        groups_out.push(GroupRect {
             index: gi,
             x,
             y,
@@ -1001,7 +1001,7 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         max_x = max_x.max(n.x + n.w);
         max_y = max_y.max(n.y + n.h);
     }
-    for s in &subgraphs_out {
+    for s in &groups_out {
         min_x = min_x.min(s.x);
         min_y = min_y.min(s.y);
         max_x = max_x.max(s.x + s.w);
@@ -1038,7 +1038,7 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
             n.x += sx;
             n.y += sy;
         }
-        for s in subgraphs_out.iter_mut() {
+        for s in groups_out.iter_mut() {
             s.x += sx;
             s.y += sy;
         }
@@ -1069,7 +1069,7 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
     Layout {
         nodes: nodes_out,
         edges: edges_out,
-        subgraphs: subgraphs_out,
+        groups: groups_out,
         width,
         height,
     }
@@ -1333,7 +1333,7 @@ fn lca_segment(
     pts
 }
 
-/// Lay out one level (the top level `None`, or a subgraph index) and all of
+/// Lay out one level (the top level `None`, or a group index) and all of
 /// its descendants. Returns the level's contents in its local coordinate
 /// system.
 fn layout_level(
@@ -1344,20 +1344,20 @@ fn layout_level(
     cross_subs: &std::collections::HashSet<usize>,
     cross_nodes: &std::collections::HashSet<usize>,
 ) -> LevelOut {
-    // Direct-child subgraphs of this level.
+    // Direct-child groups of this level.
     let child_subs: Vec<usize> = diagram
-        .subgraphs
+        .groups
         .iter()
         .enumerate()
         .filter(|(_, sg)| sg.parent == level)
         .map(|(i, _)| i)
         .collect();
 
-    // Recurse into each child subgraph first (bottom-up sizing).
+    // Recurse into each child group first (bottom-up sizing).
     let mut child_outs: std::collections::HashMap<usize, ChildOut> =
         std::collections::HashMap::new();
     for &cs in &child_subs {
-        let child_dir = diagram.subgraphs[cs].direction.unwrap_or(dir);
+        let child_dir = diagram.groups[cs].direction.unwrap_or(dir);
         let out = layout_level(
             diagram,
             Some(cs),
@@ -1367,14 +1367,14 @@ fn layout_level(
             cross_nodes,
         );
         let (top_inset, _bot_pad) =
-            frame_insets(&diagram.subgraphs[cs], cross_subs.contains(&cs));
+            frame_insets(&diagram.groups[cs], cross_subs.contains(&cs));
         let inner_ox = FRAME_PAD_X;
         let inner_oy = top_inset;
         child_outs.insert(cs, ChildOut { out, inner_ox, inner_oy });
     }
 
     // Build this level's flat items: direct-child real nodes, then child
-    // subgraphs (as opaque compound boxes).
+    // groups (as opaque compound boxes).
     let mut items: Vec<FlatItem> = Vec::new();
     let mut item_refs: Vec<ItemRef> = Vec::new();
     let mut item_of: std::collections::HashMap<ItemRef, usize> = std::collections::HashMap::new();
@@ -1391,11 +1391,11 @@ fn layout_level(
     for &cs in &child_subs {
         let child = child_outs.get(&cs).expect("child out just inserted");
         let (top_inset, bot_pad) =
-            frame_insets(&diagram.subgraphs[cs], cross_subs.contains(&cs));
+            frame_insets(&diagram.groups[cs], cross_subs.contains(&cs));
         // The frame is at least wide enough for its contents plus side
         // padding, but no narrower than its title: the title starts at
         // [`FRAME_TITLE_X`] and gets the same clearance past its last glyph.
-        let title_w = diagram.subgraphs[cs]
+        let title_w = diagram.groups[cs]
             .title
             .as_ref()
             .map(|t| text::measure(t, FRAME_TITLE_FONT_SIZE).width)
@@ -1416,7 +1416,7 @@ fn layout_level(
         // Like [`CROSS_FRAME_PAD`] this over-approximates: the growth does
         // not know which side the edge will enter on, so a frame may widen
         // for a detour that never arises.
-        if diagram.subgraphs[cs].title.is_some() {
+        if diagram.groups[cs].title.is_some() {
             let right_gap = title_clear_gap(title_w);
             let title_x1 = FRAME_TITLE_X + title_w;
             let need = title_x1 + right_gap + FRAME_PAD_X;
@@ -1475,7 +1475,7 @@ fn layout_level(
         h: flat.height,
     };
 
-    // Place items. Real nodes record their rect; subgraph boxes record the
+    // Place items. Real nodes record their rect; group boxes record the
     // frame rect and then translate their already-computed contents into
     // this level's local space.
     for (item_idx, &(rx, ry, rw, rh)) in flat.rects.iter().enumerate() {
@@ -1519,12 +1519,12 @@ fn layout_level(
 
 /// Ancestor chain of a node's container, innermost first, ending with the
 /// root (`None` = top level). Used to find the LCA level of two nodes.
-fn ancestors(group: Option<usize>, subgraphs: &[crate::ast::Subgraph]) -> Vec<Option<usize>> {
+fn ancestors(group: Option<usize>, groups: &[crate::ast::Group]) -> Vec<Option<usize>> {
     let mut out = Vec::new();
     let mut cur = group;
     while let Some(idx) = cur {
         out.push(cur);
-        cur = subgraphs[idx].parent;
+        cur = groups[idx].parent;
     }
     out.push(None);
     out
@@ -1534,10 +1534,10 @@ fn ancestors(group: Option<usize>, subgraphs: &[crate::ast::Subgraph]) -> Vec<Op
 fn lca_level(
     a: Option<usize>,
     b: Option<usize>,
-    subgraphs: &[crate::ast::Subgraph],
+    groups: &[crate::ast::Group],
 ) -> Option<usize> {
-    let ca = ancestors(a, subgraphs);
-    let cb = ancestors(b, subgraphs);
+    let ca = ancestors(a, groups);
+    let cb = ancestors(b, groups);
     for x in &ca {
         if cb.contains(x) {
             return *x;
@@ -1556,23 +1556,23 @@ fn rep_of(node_idx: usize, level: Option<usize>, diagram: &Diagram) -> ItemRef {
     }
     let mut cur = g;
     while let Some(idx) = cur {
-        if diagram.subgraphs[idx].parent == level {
+        if diagram.groups[idx].parent == level {
             return ItemRef::Sub(idx);
         }
-        cur = diagram.subgraphs[idx].parent;
+        cur = diagram.groups[idx].parent;
     }
     // `level` was not an ancestor of the node — should be unreachable.
     ItemRef::Node(node_idx)
 }
 
-/// The subgraph frames containing `node_group`, innermost first, up to (but
+/// The group frames containing `node_group`, innermost first, up to (but
 /// excluding) `lca` — i.e. the frames a cross-boundary edge crosses on this
 /// side. An empty result means `node_group == lca`, so the node is a direct
 /// child of the LCA and is its own representative.
 fn chain_to_lca(
     node_group: Option<usize>,
     lca: Option<usize>,
-    subgraphs: &[Subgraph],
+    groups: &[Group],
 ) -> Vec<usize> {
     let mut chain = Vec::new();
     let mut cur = node_group;
@@ -1580,7 +1580,7 @@ fn chain_to_lca(
         match cur {
             Some(idx) => {
                 chain.push(idx);
-                cur = subgraphs[idx].parent;
+                cur = groups[idx].parent;
             }
             None => break,
         }
@@ -1597,24 +1597,24 @@ fn chain_to_lca(
 fn effective_direction(level: Option<usize>, diagram: &Diagram) -> Direction {
     match level {
         None => diagram.direction,
-        Some(idx) => diagram.subgraphs[idx]
+        Some(idx) => diagram.groups[idx]
             .direction
-            .unwrap_or_else(|| effective_direction(diagram.subgraphs[idx].parent, diagram)),
+            .unwrap_or_else(|| effective_direction(diagram.groups[idx].parent, diagram)),
     }
 }
 
-/// The subgraphs that have at least one cross-boundary edge to an *immediate*
-/// child — a direct-child node the edge reaches by crossing the subgraph's
+/// The groups that have at least one cross-boundary edge to an *immediate*
+/// child — a direct-child node the edge reaches by crossing the group's
 /// frame — and the set of those child nodes themselves. Such frames get
 /// extra padding ([`CROSS_FRAME_PAD`]) so the edge's within-frame stub has
 /// room to jog clear of the title and the node's arrowhead, and (M10) the
 /// frame-growth pass in [`layout_level`] widens a title-sized frame so a
-/// title detour has an entry. A subgraph reached only through deeper
+/// title detour has an entry. A group reached only through deeper
 /// descendants does not qualify: the stub's jog lives in the innermost
 /// frame's padding, not this one's.
 ///
 /// `id_index` maps node ids to their index in `diagram.nodes`. An endpoint
-/// qualifies a subgraph `S` when the endpoint is a direct child of `S`
+/// qualifies a group `S` when the endpoint is a direct child of `S`
 /// (`node.group == Some(S)`) and the edge's LCA is a strict ancestor of `S`
 /// (`lca != Some(S)`) — i.e. the edge leaves `S` to reach the rest of the
 /// graph, rather than staying internal to `S`.
@@ -1642,9 +1642,9 @@ fn cross_boundary_reach(
     (subs, nodes)
 }
 
-/// `(top_inset, bottom_padding)` for a child subgraph's frame, adding the
+/// `(top_inset, bottom_padding)` for a child group's frame, adding the
 /// cross-boundary extra padding ([`CROSS_FRAME_PAD`]) to both when `cross`
-/// is true (the subgraph has a cross-boundary edge to an immediate child).
+/// is true (the group has a cross-boundary edge to an immediate child).
 /// Both insets grow along the LCA-level flow axis, where the within-frame
 /// stubs jog, so the extra room clears the title (above the node) and the
 /// node's arrowhead (below the jog).
@@ -1652,7 +1652,7 @@ fn cross_boundary_reach(
 /// The top inset is a one-line title band ([`FRAME_TITLE_H`]) plus one
 /// [`text::line_height`] per *additional* title line, so a multi-line
 /// title's stacked lines stay inside the band.
-fn frame_insets(sg: &Subgraph, cross: bool) -> (f32, f32) {
+fn frame_insets(sg: &Group, cross: bool) -> (f32, f32) {
     let top = match &sg.title {
         Some(t) => {
             FRAME_TITLE_H
@@ -1701,9 +1701,9 @@ fn port(rect: (f32, f32, f32, f32), side: Side) -> (f32, f32) {
 /// vertical flow (top-down / bottom-up) the cross axis is `x` and the sides
 /// are [`Side::Top`] / [`Side::Bottom`]; for a horizontal flow it is `y` and
 /// the sides are [`Side::Left`] / [`Side::Right`]. Used by [`cross_boundary_path`]
-/// to place a subgraph frame's connection point at the *endpoint node's*
+/// to place a group frame's connection point at the *endpoint node's*
 /// cross-coordinate (not the frame center), so a within-frame stub runs
-/// straight along the node's own axis and edges entering a subgraph line up
+/// straight along the node's own axis and edges entering a group line up
 /// with their target node rather than all converging on the frame's midpoint.
 fn port_at_cross(rect: (f32, f32, f32, f32), side: Side, cross: f32) -> (f32, f32) {
     let (x, y, w, h) = rect;
@@ -1812,7 +1812,7 @@ fn sides_along(dir: Direction, rep_from_c: (f32, f32), rep_to_c: (f32, f32)) -> 
 /// When `a` is inside `r` and `b` outside, this is the *exit* point; when `a`
 /// is outside and `b` inside, it is the *entry* point. Used to insert
 /// connection points where a cross-boundary stub crosses an intermediate
-/// (nested) subgraph frame.
+/// (nested) group frame.
 fn line_rect_exit(a: (f32, f32), b: (f32, f32), r: (f32, f32, f32, f32)) -> Option<(f32, f32)> {
     let (rx, ry, rw, rh) = r;
     let (ax, ay) = a;
@@ -2066,7 +2066,7 @@ fn orthogonalize(points: &[(f32, f32)], axis: FlowAxis) -> Vec<(f32, f32)> {
 //    can land inside a third node that sits between them (e.g. `User --> VPN`
 //    whose jog crosses `prd`, making it look as if `prd` connects to `VPN`).
 // 2. Parallel edges laying *on top of* each other. Several edges from one
-//    source to one target subgraph share the source's single port and the
+//    source to one target group share the source's single port and the
 //    same jog lane, so their trunks overlap and their labels collide (e.g.
 //    the five `VPN --> cvm` edges, and `lb --> api1/api2` in `infra`).
 //
@@ -2084,7 +2084,7 @@ fn orthogonalize(points: &[(f32, f32)], axis: FlowAxis) -> Vec<(f32, f32)> {
 //
 // Within-frame stubs (the frame-aware short runs from a node to its rep frame
 // port) keep the M5/M7 logic unchanged; only the inter-representative LCA
-// segment is rerouted. The M5 headline guarantee (a subgraph's internal
+// segment is rerouted. The M5 headline guarantee (a group's internal
 // layout is never disturbed by a crossing edge) is preserved.
 
 /// Clearance kept between a routed LCA segment and any peer node/frame rect
@@ -2142,7 +2142,7 @@ const SEGMENT_OBSTACLE_PAD: f32 = FAN_SEP / 2.0;
 // decomposition, the `(cross, flow)` vocabulary, the ladder, and all
 // existing invariants.
 
-/// Half-thickness of the thin band that stands for a subgraph frame's drawn
+/// Half-thickness of the thin band that stands for a group frame's drawn
 /// outline: the renderer strokes the frame with 1.5 px centered on the
 /// rect's edge line, so the band covers exactly the stroke.
 const BORDER_HALF: f32 = 0.75;
@@ -2178,7 +2178,7 @@ struct Obstacles {
     /// regardless of which edge happened to be forced. Checked at the same
     /// [`ROUTE_PAD`] inflation as nodes, with no touch exemption.
     segments: Vec<(f32, f32, f32, f32)>,
-    /// Thin bands centered on subgraph frames' drawn outlines (absorbed
+    /// Thin bands centered on group frames' drawn outlines (absorbed
     /// M12). A route keeps only [`BORDER_PAD`] clear of a band, and may
     /// touch/cross one only at a designated crossing: a segment end lying
     /// on the outline, perpendicular to it. Riding along an outline
@@ -3219,7 +3219,7 @@ struct CrossPieces {
 /// A clean "around the target frame" route for a cross-boundary edge whose
 /// straight within-frame target stub would pierce the target frame's internal
 /// content — the target node sits beyond other members along the frame's
-/// internal flow axis (e.g. a top-down Storage subgraph entered from the top
+/// internal flow axis (e.g. a top-down Storage group entered from the top
 /// to reach its bottom-most Database node, with Cache in between). The
 /// straight stub would run straight through Cache and then exactly overlap
 /// the Cache→Database edge.
@@ -3336,12 +3336,12 @@ fn try_around_target_route(
 /// Frame-aware path for a cross-boundary edge from `from` to `to` (absolute
 /// node rects).
 ///
-/// `from_chain` / `to_chain` list the subgraph frames containing each endpoint,
+/// `from_chain` / `to_chain` list the group frames containing each endpoint,
 /// innermost first, ending with the representative at the LCA level (the
 /// outermost frame the edge crosses on that side). An empty chain means the
 /// endpoint is a direct child of the LCA, so the endpoint node *is* its own
 /// representative. `frame_rect(i)` returns the absolute frame rect;
-/// `frame_title_width(i)` returns the rendered width of that subgraph's title
+/// `frame_title_width(i)` returns the rendered width of that group's title
 /// (or `None` if it has none).
 ///
 /// The path runs:
@@ -3351,7 +3351,7 @@ fn try_around_target_route(
 /// representatives' ports. Each rep port sits at the **endpoint node's**
 /// cross-coordinate on its frame's facing side ([`port_at_cross`]) — not the
 /// frame's center — so a within-frame stub runs straight along the node's own
-/// axis and edges entering a subgraph line up with their target node instead
+/// axis and edges entering a group line up with their target node instead
 /// of all converging on the frame's midpoint (which read as every edge
 /// reaching every member). Intermediate nested frames are clipped at their
 /// boundaries.
@@ -4288,7 +4288,7 @@ fn lane_label_cover(axis: FlowAxis, size: Option<(f32, f32)>) -> f32 {
     }
 }
 
-/// The rect a subgraph's rendered title text occupies (M13 — the label
+/// The rect a group's rendered title text occupies (M13 — the label
 /// placement engine keeps knockouts off it): `x ∈ [frame.x + FRAME_TITLE_X,
 /// … + measured width]`, `y ∈ [frame.y + FRAME_TITLE_TOP, … + lines *
 /// line_height]` — matching the renderer's hanging-baseline title block.
@@ -4338,7 +4338,7 @@ const FRAME_OVERLAP_FLAT: f32 = 40.0;
 const TAP_W: f32 = 6.0;
 const OFFSET_W: f32 = 8.0;
 
-/// The static obstacles a label must dodge (M13): node interiors, subgraph
+/// The static obstacles a label must dodge (M13): node interiors, group
 /// frame border bands (see [`border_bands`]), and title rects. Peer edge
 /// segments and other labels' knockouts are handled separately — the former
 /// per-edge (a label is *supposed* to break its own line), the latter by the
@@ -4612,11 +4612,11 @@ mod tests {
             .unwrap_or_else(|| panic!("no edge `{from}->{to}` in layout"))
     }
 
-    fn sub_rect(l: &Layout, idx: usize) -> &SubgraphRect {
-        l.subgraphs
+    fn sub_rect(l: &Layout, idx: usize) -> &GroupRect {
+        l.groups
             .iter()
             .find(|s| s.index == idx)
-            .unwrap_or_else(|| panic!("no subgraph frame #{idx}"))
+            .unwrap_or_else(|| panic!("no group frame #{idx}"))
     }
 
     /// Do two axis-aligned rectangles overlap (with a tiny epsilon)?
@@ -4671,8 +4671,8 @@ mod tests {
                 assert!(ax.is_finite() && ay.is_finite(), "{}->{} label anchor", e.from, e.to);
             }
         }
-        for s in &l.subgraphs {
-            assert!(s.w > 0.0 && s.h > 0.0, "subgraph {} has zero size", s.index);
+        for s in &l.groups {
+            assert!(s.w > 0.0 && s.h > 0.0, "group {} has zero size", s.index);
         }
         assert!(l.width.is_finite() && l.height.is_finite());
         assert!(l.width > 0.0 && l.height > 0.0);
@@ -4680,10 +4680,10 @@ mod tests {
 
     #[test]
     fn infra_example_layouts() {
-        let (_d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
         assert_eq!(l.nodes.len(), 8);
         assert_eq!(l.edges.len(), 10);
-        assert_eq!(l.subgraphs.len(), 1);
+        assert_eq!(l.groups.len(), 1);
         assert_all_finite(&l);
         assert_no_overlaps(&l);
     }
@@ -4691,15 +4691,15 @@ mod tests {
     #[test]
     #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
     fn _dump_subdirection_for_inspection() {
-        let (d, l) = lay(include_str!("../examples/subdirection.mmd"));
+        let (d, l) = lay(include_str!("../examples/subdirection.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
         nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
         for n in &nodes {
             println!("  {:<14} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
         }
-        for s in &l.subgraphs {
-            println!("  subgraph #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.subgraphs[s.index].title, s.x, s.y, s.w, s.h);
+        for s in &l.groups {
+            println!("  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h);
         }
         for e in &l.edges {
             let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
@@ -4710,15 +4710,15 @@ mod tests {
     #[test]
     #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
     fn _dump_infra_for_inspection() {
-        let (d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (d, l) = lay(include_str!("../examples/infra.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
         nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
         for n in &nodes {
             println!("  {:<14} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
         }
-        for s in &l.subgraphs {
-            println!("  subgraph #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.subgraphs[s.index].title, s.x, s.y, s.w, s.h);
+        for s in &l.groups {
+            println!("  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h);
         }
         for e in &l.edges {
             let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.0},{:.0})", x, y)).collect();
@@ -4728,7 +4728,7 @@ mod tests {
 
     #[test]
     fn every_node_has_a_rect() {
-        let (d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (d, l) = lay(include_str!("../examples/infra.dgmr"));
         for n in &d.nodes {
             assert!(l.nodes.iter().any(|r| r.id == n.id), "missing rect for {}", n.id);
         }
@@ -4993,18 +4993,18 @@ mod tests {
     // ================= Compound layout (M4) =================
 
     #[test]
-    fn subgraph_frame_contains_its_members() {
+    fn group_frame_contains_its_members() {
         let (d, l) = lay(
             "diagram top-down\n\
-             subgraph \"Cluster\"\n\
+             group \"Cluster\"\n\
              a\n\
              b\n\
              end\n",
         );
-        assert_eq!(l.subgraphs.len(), 1);
+        assert_eq!(l.groups.len(), 1);
         assert_eq!(l.nodes.len(), 2);
         let f = sub_rect(&l, 0);
-        assert_eq!(d.subgraphs[0].title.as_deref(), Some("Cluster"));
+        assert_eq!(d.groups[0].title.as_deref(), Some("Cluster"));
         for id in ["a", "b"] {
             let n = node_rect(&l, id);
             assert!(
@@ -5019,17 +5019,17 @@ mod tests {
 
     #[test]
     fn frame_grows_to_fit_a_wider_title() {
-        // A long title on a narrow subgraph: the frame must widen so the
+        // A long title on a narrow group: the frame must widen so the
         // title text fits, rather than the title spilling out of the frame.
         let (d, l) = lay(
             "diagram top-down\n\
-             subgraph \"A Very Long Cluster Title\"\n\
+             group \"A Very Long Cluster Title\"\n\
              a\n\
              end\n",
         );
-        assert_eq!(l.subgraphs.len(), 1);
+        assert_eq!(l.groups.len(), 1);
         let f = sub_rect(&l, 0);
-        let title = d.subgraphs[0].title.as_deref().unwrap();
+        let title = d.groups[0].title.as_deref().unwrap();
         let m = text::measure(title, FRAME_TITLE_FONT_SIZE);
         // Title starts at FRAME_TITLE_X and needs the same clearance past
         // its last glyph.
@@ -5076,13 +5076,13 @@ mod tests {
         // band the stacked lines ride in).
         let (_d1, l1) = lay(
             "diagram top-down\n\
-             subgraph \"Cluster\"\n\
+             group \"Cluster\"\n\
              a\n\
              end\n",
         );
         let (_d2, l2) = lay(
             "diagram top-down\n\
-             subgraph \"Kubernetes\\nCluster\"\n\
+             group \"Kubernetes\\nCluster\"\n\
              a\n\
              end\n",
         );
@@ -5104,20 +5104,20 @@ mod tests {
     }
 
     #[test]
-    fn nested_subgraph_frame_inside_outer_frame() {
+    fn nested_group_frame_inside_outer_frame() {
         let (d, l) = lay(
             "diagram top-down\n\
-             subgraph \"Outer\"\n\
-             subgraph \"Inner\"\n\
+             group \"Outer\"\n\
+             group \"Inner\"\n\
              a\n\
              end\n\
              end\n",
         );
-        assert_eq!(l.subgraphs.len(), 2);
+        assert_eq!(l.groups.len(), 2);
         let outer = sub_rect(&l, 0);
         let inner = sub_rect(&l, 1);
-        assert_eq!(d.subgraphs[0].title.as_deref(), Some("Outer"));
-        assert_eq!(d.subgraphs[1].title.as_deref(), Some("Inner"));
+        assert_eq!(d.groups[0].title.as_deref(), Some("Outer"));
+        assert_eq!(d.groups[1].title.as_deref(), Some("Inner"));
         assert!(
             contains((outer.x, outer.y, outer.w, outer.h), (inner.x, inner.y, inner.w, inner.h)),
             "inner frame not inside outer frame"
@@ -5131,13 +5131,13 @@ mod tests {
     }
 
     #[test]
-    fn subgraph_inherits_diagram_direction() {
-        // A subgraph with no explicit direction inherits the diagram's
+    fn group_inherits_diagram_direction() {
+        // A group with no explicit direction inherits the diagram's
         // direction. With left-right, two isolated members share a column
         // (stacked vertically), not a row.
         let (_d, l) = lay(
             "diagram left-right\n\
-             subgraph \"S\"\n\
+             group \"S\"\n\
              a\n\
              b\n\
              end\n",
@@ -5151,15 +5151,15 @@ mod tests {
     }
 
     #[test]
-    fn per_subgraph_direction_changes_internal_arrangement() {
-        // Same internal graph (a chain) under two different subgraph
+    fn per_group_direction_changes_internal_arrangement() {
+        // Same internal graph (a chain) under two different group
         // directions. Top-down ⇒ frame is tall; left-right ⇒ frame is wide.
         let src_td = "diagram top-down\n\
-             subgraph top-down \"S\"\n\
+             group top-down \"S\"\n\
              a --> b --> c\n\
              end\n";
         let src_lr = "diagram top-down\n\
-             subgraph left-right \"S\"\n\
+             group left-right \"S\"\n\
              a --> b --> c\n\
              end\n";
         let (_d, l_td) = lay(src_td);
@@ -5174,35 +5174,35 @@ mod tests {
             node_rect(&l_td, "b"),
             node_rect(&l_td, "c"),
         );
-        assert!(a_td.y < b_td.y && b_td.y < c_td.y, "top-down subgraph should stack vertically");
+        assert!(a_td.y < b_td.y && b_td.y < c_td.y, "top-down group should stack vertically");
         let (a_lr, b_lr, c_lr) = (
             node_rect(&l_lr, "a"),
             node_rect(&l_lr, "b"),
             node_rect(&l_lr, "c"),
         );
-        assert!(a_lr.x < b_lr.x && b_lr.x < c_lr.x, "left-right subgraph should run horizontally");
+        assert!(a_lr.x < b_lr.x && b_lr.x < c_lr.x, "left-right group should run horizontally");
 
         // The frame aspect ratio flips between the two.
         assert!(
             f_td.h > f_td.w,
-            "top-down subgraph frame should be tall (w={:.1} h={:.1})",
+            "top-down group frame should be tall (w={:.1} h={:.1})",
             f_td.w,
             f_td.h
         );
         assert!(
             f_lr.w > f_lr.h,
-            "left-right subgraph frame should be wide (w={:.1} h={:.1})",
+            "left-right group frame should be wide (w={:.1} h={:.1})",
             f_lr.w,
             f_lr.h
         );
     }
 
     #[test]
-    fn top_level_nodes_and_subgraph_coexist_without_overlap() {
+    fn top_level_nodes_and_group_coexist_without_overlap() {
         let (_d, l) = lay(
             "diagram top-down\n\
              x\n\
-             subgraph \"S\"\n\
+             group \"S\"\n\
              a\n\
              b\n\
              end\n",
@@ -5215,17 +5215,17 @@ mod tests {
         let f = sub_rect(&l, 0);
         assert!(
             !overlaps((x.x, x.y, x.w, x.h), (f.x, f.y, f.w, f.h)),
-            "top-level node x overlaps subgraph frame"
+            "top-level node x overlaps group frame"
         );
     }
 
     #[test]
     fn cross_boundary_edge_renders_between_actual_endpoints() {
-        // lb (top-level) -> api (inside subgraph): a cross-boundary edge.
+        // lb (top-level) -> api (inside group): a cross-boundary edge.
         let (_d, l) = lay(
             "diagram top-down\n\
              lb\n\
-             subgraph \"S\"\n\
+             group \"S\"\n\
              api\n\
              end\n\
              lb --> api\n",
@@ -5252,12 +5252,12 @@ mod tests {
     }
 
     #[test]
-    fn internal_subgraph_edge_uses_internal_layout() {
-        // An edge fully inside a subgraph is a direct internal edge: laid out
-        // within the subgraph, so b sits strictly below a (top-down subgraph).
+    fn internal_group_edge_uses_internal_layout() {
+        // An edge fully inside a group is a direct internal edge: laid out
+        // within the group, so b sits strictly below a (top-down group).
         let (_d, l) = lay(
             "diagram top-down\n\
-             subgraph \"S\"\n\
+             group \"S\"\n\
              a --> b\n\
              end\n",
         );
@@ -5274,15 +5274,15 @@ mod tests {
 
     #[test]
     fn cross_boundary_edge_does_not_collapse_internal_direction() {
-        // The headline guarantee: a subgraph with its own direction keeps
+        // The headline guarantee: a group with its own direction keeps
         // that internal arrangement even when edges cross its boundary.
-        // Here the subgraph is left-right with a chain; external edges attach
+        // Here the group is left-right with a chain; external edges attach
         // to its members but the chain still runs horizontally.
         let (_d, l) = lay(
             "diagram top-down\n\
              src\n\
              sink\n\
-             subgraph left-right \"S\"\n\
+             group left-right \"S\"\n\
              a --> b --> c\n\
              end\n\
              src --> a\n\
@@ -5291,7 +5291,7 @@ mod tests {
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let c = node_rect(&l, "c");
-        assert!(a.x < b.x && b.x < c.x, "left-right subgraph chain must stay horizontal");
+        assert!(a.x < b.x && b.x < c.x, "left-right group chain must stay horizontal");
         assert_all_finite(&l);
         assert_no_overlaps(&l);
         // Both cross-boundary edges render.
@@ -5300,21 +5300,21 @@ mod tests {
     }
 
     #[test]
-    fn every_descendant_node_present_with_nested_subgraphs() {
+    fn every_descendant_node_present_with_nested_groups() {
         let (_d, l) = lay(
             "diagram top-down\n\
-             subgraph \"A\"\n\
-             subgraph \"B\"\n\
-             subgraph \"C\"\n\
+             group \"A\"\n\
+             group \"B\"\n\
+             group \"C\"\n\
              x --> y\n\
              end\n\
              end\n\
              end\n",
         );
         assert_eq!(l.nodes.len(), 2);
-        assert_eq!(l.subgraphs.len(), 3);
+        assert_eq!(l.groups.len(), 3);
         assert_all_finite(&l);
-        // x -> y is a direct internal edge of the innermost subgraph.
+        // x -> y is a direct internal edge of the innermost group.
         assert!(edge_path(&l, "x", "y").points.len() >= 2);
         // Frames nest: A ⊃ B ⊃ C.
         let a = sub_rect(&l, 0);
@@ -5325,16 +5325,16 @@ mod tests {
     }
 
     #[test]
-    fn empty_subgraph_renders_a_frame() {
+    fn empty_group_renders_a_frame() {
         let (d, l) = lay(
             "diagram top-down\n\
-             subgraph \"Empty\"\n\
+             group \"Empty\"\n\
              end\n",
         );
-        assert_eq!(l.subgraphs.len(), 1);
+        assert_eq!(l.groups.len(), 1);
         let f = sub_rect(&l, 0);
-        assert_eq!(d.subgraphs[0].title.as_deref(), Some("Empty"));
-        assert!(f.w > 0.0 && f.h > 0.0, "empty subgraph should still have a visible frame");
+        assert_eq!(d.groups[0].title.as_deref(), Some("Empty"));
+        assert!(f.w > 0.0 && f.h > 0.0, "empty group should still have a visible frame");
     }
 
     // ================= M5 — cross-boundary frame routing =================
@@ -5397,11 +5397,11 @@ mod tests {
         t0 < t1 - 1e-6
     }
 
-    /// A node/subgraph rect as a tuple, for the geometry helpers above.
+    /// A node/group rect as a tuple, for the geometry helpers above.
     fn rect_of(n: &NodeRect) -> (f32, f32, f32, f32) {
         (n.x, n.y, n.w, n.h)
     }
-    fn sub_rect_of(s: &SubgraphRect) -> (f32, f32, f32, f32) {
+    fn sub_rect_of(s: &GroupRect) -> (f32, f32, f32, f32) {
         (s.x, s.y, s.w, s.h)
     }
 
@@ -5413,7 +5413,7 @@ mod tests {
         // edge, at S's center-x (the representative's port).
         let (_d, l) = lay(r#"diagram top-down
 lb
-subgraph "S"
+group "S"
 api
 end
 lb --> api
@@ -5451,10 +5451,10 @@ lb --> api
         // runs a port -> A port -> B port -> b port, with a connection point
         // on each frame.
         let (_d, l) = lay(r#"diagram top-down
-subgraph "A"
+group "A"
 a
 end
-subgraph "B"
+group "B"
 b
 end
 a --> b
@@ -5479,24 +5479,24 @@ a --> b
     }
 
     #[test]
-    fn cross_boundary_frame_points_preserve_subgraph_direction() {
-        // The headline M5 guarantee: a subgraph's own direction is kept even
+    fn cross_boundary_frame_points_preserve_group_direction() {
+        // The headline M5 guarantee: a group's own direction is kept even
         // when edges cross its frame, AND those edges route through frame
         // connection points rather than piercing the frame.
         let (_d, l) = lay(r#"diagram top-down
 src
 sink
-subgraph left-right "S"
+group left-right "S"
 a --> b --> c
 end
 src --> a
 c --> sink
 "#);
-        // Per-subgraph direction preserved: the chain stays horizontal.
+        // Per-group direction preserved: the chain stays horizontal.
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let c = node_rect(&l, "c");
-        assert!(a.x < b.x && b.x < c.x, "left-right subgraph chain must stay horizontal");
+        assert!(a.x < b.x && b.x < c.x, "left-right group chain must stay horizontal");
         // Both cross-boundary edges route through S frame connection points.
         let s = sub_rect(&l, 0);
         let s_rect = sub_rect_of(s);
@@ -5527,7 +5527,7 @@ c --> sink
         // api2's port up to the K8s frame's connection point — is checked,
         // not just the first segment. The frame connection point itself is
         // found by value (it is no longer at a fixed index after the Z).
-        let (_d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
         let api1 = node_rect(&l, "api1");
         let api2 = node_rect(&l, "api2");
         let k8s = sub_rect(&l, 0);
@@ -5569,14 +5569,14 @@ c --> sink
 
     #[test]
     fn cross_boundary_edge_routes_around_frame_when_target_is_deep() {
-        // Orders (in the left-right Services subgraph) -> Database (the
-        // *bottom* of the top-down Storage subgraph, with Cache above it).
+        // Orders (in the left-right Services group) -> Database (the
+        // *bottom* of the top-down Storage group, with Cache above it).
         // The straight within-frame stub would run straight through Cache and
         // then exactly overlap the Cache->Database edge (both at Storage's
         // center-x). Instead the edge routes around the Storage frame and
         // enters Database from the side, so it clears Cache and stays
         // distinct from the Cache->Database edge.
-        let (_d, l) = lay(include_str!("../examples/subdirection.mmd"));
+        let (_d, l) = lay(include_str!("../examples/subdirection.dgmr"));
         let cache = node_rect(&l, "cache");
         let db = node_rect(&l, "db");
         let e = edge_path(&l, "orders", "db");
@@ -5632,8 +5632,8 @@ c --> sink
 
     #[test]
     fn cross_boundary_edge_routes_around_frame_when_source_is_above_frame() {
-        // src (top-level, centered above a top-down subgraph) -> b (the
-        // *bottom* of the subgraph, with a above it). The straight within-
+        // src (top-level, centered above a top-down group) -> b (the
+        // *bottom* of the group, with a above it). The straight within-
         // frame stub would run straight through a. The around-route drops
         // into the gap above the frame, runs down the frame's side, and
         // enters b from the side — the case where the source node is NOT
@@ -5641,7 +5641,7 @@ c --> sink
         // within the frame's cross-span), so the route takes a gap jog first.
         let (_d, l) = lay(r#"diagram top-down
 src
-subgraph top-down "S"
+group top-down "S"
 a --> b
 end
 src --> b
@@ -5683,8 +5683,8 @@ src --> b
         // connection point on each frame it passes through.
         let (_d, l) = lay(r#"diagram top-down
 ext
-subgraph "Outer"
-subgraph "Inner"
+group "Outer"
+group "Inner"
 inner
 end
 end
@@ -5712,29 +5712,29 @@ ext --> inner
     }
 
     #[test]
-    fn cross_boundary_subgraph_grows_around_immediate_child() {
-        // A subgraph that a cross-boundary edge reaches through (to an
+    fn cross_boundary_group_grows_around_immediate_child() {
+        // A group that a cross-boundary edge reaches through (to an
         // *immediate* child) grows by [`CROSS_FRAME_PAD`] on top and bottom
         // so the edge's within-frame stub has room to jog clear of the title
-        // text and the node's arrowhead. A subgraph with no such edge keeps
+        // text and the node's arrowhead. A group with no such edge keeps
         // the default frame geometry. Both diagrams here hold the *same*
         // single-node content inside "S", so the only difference is the extra
         // padding.
         let with = lay(r#"diagram top-down
 src
-subgraph "S"
+group "S"
 a
 end
 src --> a
 "#);
         let without = lay(r#"diagram top-down
-subgraph "S"
+group "S"
 a
 end
 "#);
         let f_with = sub_rect(&with.1, 0);
         let f_without = sub_rect(&without.1, 0);
-        // The cross-boundary subgraph is exactly 2*CROSS_FRAME_PAD taller
+        // The cross-boundary group is exactly 2*CROSS_FRAME_PAD taller
         // (one font-height on top, one on bottom).
         assert_eq!(
             f_with.h - f_without.h,
@@ -5757,7 +5757,7 @@ end
         assert_eq!(
             a_without.y - f_without.y,
             FRAME_TITLE_H,
-            "untouched subgraph keeps the default top inset"
+            "untouched group keeps the default top inset"
         );
         assert_eq!(
             (f_with.y + f_with.h) - (a_with.y + a_with.h),
@@ -5768,20 +5768,20 @@ end
 
     #[test]
     fn cross_boundary_multiline_title_grows_top_inset_further() {
-        // Same growth check as `cross_boundary_subgraph_grows_around_immediate_child`
+        // Same growth check as `cross_boundary_group_grows_around_immediate_child`
         // but with a two-line title: the title band itself grows by one title
         // line height *before* the cross-boundary padding, so the stub's jog
         // still lands below the whole title.
         let one_line = lay(r#"diagram top-down
 src
-subgraph "Kubernetes Cluster"
+group "Kubernetes Cluster"
 a
 end
 src --> a
 "#);
         let two_lines = lay(r#"diagram top-down
 src
-subgraph "Kubernetes\nCluster"
+group "Kubernetes\nCluster"
 a
 end
 src --> a
@@ -5836,7 +5836,7 @@ src --> a
         // to check.)
         let (_d, l) = lay(r#"diagram top-down
 src
-subgraph left-right "Services"
+group left-right "Services"
 a --> b
 end
 src --> a
@@ -5887,7 +5887,7 @@ src --> a
         // fixed gap would be eaten (short titles touched, long ones
         // crossed).
         let short = title_clear_gap(text::measure("S", FRAME_TITLE_FONT_SIZE).width);
-        let long = title_clear_gap(text::measure("A Very Long Subgraph Title Indeed", FRAME_TITLE_FONT_SIZE).width);
+        let long = title_clear_gap(text::measure("A Very Long Group Title Indeed", FRAME_TITLE_FONT_SIZE).width);
         assert!(short > TITLE_CLEAR_GAP, "fixed bump missing: {short}");
         assert!(long > short, "length-derived component missing: {long} vs {short}");
         assert!(
@@ -5898,17 +5898,17 @@ src --> a
 
     /// Width of the long test title, for the proportional-gap assertion.
     fn long_width_hint() -> f32 {
-        text::measure("A Very Long Subgraph Title Indeed", FRAME_TITLE_FONT_SIZE).width
+        text::measure("A Very Long Group Title Indeed", FRAME_TITLE_FONT_SIZE).width
     }
 
-    /// A wide-titled single-frame subgraph with one small child `a`, plus a
+    /// A wide-titled single-frame group with one small child `a`, plus a
     /// cross-boundary edge `src --> a`. The frame's width is determined by
     /// the title (the child is too narrow to widen it), and `a` sits under
     /// the title's left half — the shape of the M10 left-side detour.
     fn left_detour_setup() -> (crate::ast::Diagram, Layout) {
         lay(r#"diagram top-down
 src
-subgraph "A Very Long Subgraph Title Indeed"
+group "A Very Long Group Title Indeed"
 a
 end
 src --> a
@@ -5916,7 +5916,7 @@ src --> a
     }
 
     /// The `x` at which the `src -> a` edge crosses the frame's top edge.
-    fn frame_top_entry_x(l: &Layout, s: &SubgraphRect, to: &str) -> f32 {
+    fn frame_top_entry_x(l: &Layout, s: &GroupRect, to: &str) -> f32 {
         let e = edge_path(l, "src", to);
         e.points
             .iter()
@@ -5927,7 +5927,7 @@ src --> a
 
     /// The title text rect of a titled frame (top band, starting at
     /// [`FRAME_TITLE_X`], the measured width wide, glyph height tall).
-    fn title_rect(s: &SubgraphRect, title: &str) -> (f32, f32, f32, f32) {
+    fn title_rect(s: &GroupRect, title: &str) -> (f32, f32, f32, f32) {
         let tw = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
         (
             s.x + FRAME_TITLE_X,
@@ -5949,7 +5949,7 @@ src --> a
         let a = node_rect(&l, "a");
         let s = sub_rect(&l, 0);
         // The node is under the title's left half.
-        let tw = text::measure("A Very Long Subgraph Title Indeed", FRAME_TITLE_FONT_SIZE).width;
+        let tw = text::measure("A Very Long Group Title Indeed", FRAME_TITLE_FONT_SIZE).width;
         let title_mid = s.x + FRAME_TITLE_X + tw / 2.0;
         assert!(
             cx(a) < title_mid,
@@ -5971,7 +5971,7 @@ src --> a
         );
         // And no segment of the edge touches the title text.
         let e = edge_path(&l, "src", "a");
-        let tr = title_rect(s, "A Very Long Subgraph Title Indeed");
+        let tr = title_rect(s, "A Very Long Group Title Indeed");
         for w in e.points.windows(2) {
             assert!(
                 !segment_intersects_rect(w[0], w[1], tr),
@@ -5992,7 +5992,7 @@ src --> a
         // insets, so the group's internal arrangement is untouched.
         let (_d, l) = lay(r#"diagram top-down
 src
-subgraph "A Very Long Subgraph Title Indeed"
+group "A Very Long Group Title Indeed"
 a
 b
 end
@@ -6029,7 +6029,7 @@ src --> b
         );
         // No segment of the edge touches the title text.
         let e = edge_path(&l, "src", "b");
-        let tr = title_rect(s, "A Very Long Subgraph Title Indeed");
+        let tr = title_rect(s, "A Very Long Group Title Indeed");
         for w in e.points.windows(2) {
             assert!(
                 !segment_intersects_rect(w[0], w[1], tr),
@@ -6052,7 +6052,7 @@ src --> b
         // gap now includes the fixed + proportional fallback margins, so a
         // viewer rendering the title with a wider fallback face still does
         // not reach the entry.
-        let (_d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
         let s = sub_rect(&l, 0);
         let title = "Kubernetes Cluster";
         let tw = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
@@ -6156,7 +6156,7 @@ src --> b
 
     #[test]
     fn infra_web_lb_cluster_share_a_center() {
-        let (_d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
         let web = node_rect(&l, "web");
         let lb = node_rect(&l, "lb");
         let k8s = sub_rect(&l, 0);
@@ -6170,7 +6170,7 @@ src --> b
     fn infra_data_tier_centers_under_cluster() {
         // Postgres + Redis + Message Queue center as a block under the K8s
         // cluster (and thus under Web/LB).
-        let (_d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
         let db = node_rect(&l, "db");
         let cache = node_rect(&l, "cache");
         let queue = node_rect(&l, "queue");
@@ -6189,7 +6189,7 @@ src --> b
 
     #[test]
     fn infra_replica_centers_under_postgres() {
-        let (_d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
         let db = node_rect(&l, "db");
         let replica = node_rect(&l, "replica");
         assert!((cx(replica) - cx(db)).abs() < 1e-2, "Replica not aligned under Postgres");
@@ -6221,18 +6221,18 @@ src --> b
             ("diagram left-right\na-->b-->c\n", "left-right chain"),
             ("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n", "diamond"),
             ("diagram top-down\na-->b\nb-->a\n", "cycle"),
-            (include_str!("../examples/infra.mmd"), "infra"),
-            (include_str!("../examples/subdirection.mmd"), "subdirection"),
+            (include_str!("../examples/infra.dgmr"), "infra"),
+            (include_str!("../examples/subdirection.dgmr"), "subdirection"),
             (
                 "diagram top-down\n\
                  src\n\
                  sink\n\
-                 subgraph left-right \"S\"\n\
+                 group left-right \"S\"\n\
                  a --> b --> c\n\
                  end\n\
                  src --> a\n\
                  c --> sink\n",
-                "cross-boundary into left-right subgraph",
+                "cross-boundary into left-right group",
             ),
         ];
         for (src, name) in cases {
@@ -6298,7 +6298,7 @@ src --> b
         // The final segment of every edge is axis-aligned, so the arrowhead's
         // `orient="auto"` orients it along a clean cardinal direction (the
         // arrow points straight at the target, not diagonally).
-        let (_d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
         for e in &l.edges {
             assert!(e.points.len() >= 2);
             let n = e.points.len();
@@ -6321,7 +6321,7 @@ src --> b
         // the stub jogs [`STUB_JOG_CLEARANCE`] above the node, in the clear
         // padding below the title. The jog is closer to the node than to the
         // frame top (proving the near-node bias, not the midpoint default).
-        let (_d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
         let api1 = node_rect(&l, "api1");
         let k8s = sub_rect(&l, 0);
         let e = edge_path(&l, "lb", "api1");
@@ -6347,8 +6347,8 @@ src --> b
     }
 
     #[test]
-    fn cross_boundary_edges_enter_subgraph_aligned_with_target_node() {
-        // Two cross-boundary edges into the same subgraph enter it at their
+    fn cross_boundary_edges_enter_group_aligned_with_target_node() {
+        // Two cross-boundary edges into the same group enter it at their
         // respective target node's cross-coordinate on the frame — not at the
         // frame's midpoint — so they stay distinct instead of converging on
         // one point (which read as both sources reaching both targets). The
@@ -6357,7 +6357,7 @@ src --> b
         let (_d, l) = lay(r#"diagram top-down
 src1
 src2
-subgraph "S"
+group "S"
 a
 b
 end
@@ -6393,19 +6393,19 @@ src2 --> b
     #[test]
     fn cross_boundary_edge_between_aligned_nodes_is_straight() {
         // A cross-boundary edge whose two endpoints share a cross-coordinate
-        // (here two single nodes in side-by-side grown subgraphs under a
+        // (here two single nodes in side-by-side grown groups under a
         // left-right LCA) runs as a single straight line along that coordinate
-        // — it does not jog up to a subgraph's frame-center coordinate and
+        // — it does not jog up to a group's frame-center coordinate and
         // back down. Before this change the rep port sat at each frame's
         // center, so the off-center node (pushed down by the grown frame's
         // extra top inset) forced exactly such a jog.
         let (_d, l) = lay(r#"diagram top-down
 src
-subgraph left-right "Outer"
-    subgraph "A"
+group left-right "Outer"
+    group "A"
     a
     end
-    subgraph "B"
+    group "B"
     b
     end
 end
@@ -6506,15 +6506,15 @@ a --> b
     #[test]
     #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
     fn _dump_finance_for_inspection() {
-        let (d, l) = lay(include_str!("../examples/finance.mmd"));
+        let (d, l) = lay(include_str!("../examples/finance.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
         nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
         for n in &nodes {
             println!("  {:<12} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
         }
-        for s in &l.subgraphs {
-            println!("  subgraph #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.subgraphs[s.index].title, s.x, s.y, s.w, s.h);
+        for s in &l.groups {
+            println!("  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h);
         }
         for e in &l.edges {
             let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
@@ -6524,7 +6524,7 @@ a --> b
 
     #[test]
     fn infra_edges_do_not_overlap_or_pass_through_nodes() {
-        let (d, l) = lay(include_str!("../examples/infra.mmd"));
+        let (d, l) = lay(include_str!("../examples/infra.dgmr"));
         assert_all_finite(&l);
         for e in &l.edges {
             assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
@@ -6534,7 +6534,7 @@ a --> b
 
     #[test]
     fn subdirection_edges_do_not_overlap_or_pass_through_nodes() {
-        let (d, l) = lay(include_str!("../examples/subdirection.mmd"));
+        let (d, l) = lay(include_str!("../examples/subdirection.dgmr"));
         assert_all_finite(&l);
         for e in &l.edges {
             assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
@@ -6548,7 +6548,7 @@ a --> b
         // cvms — the two M9 stress cases. The thick `User --> pubclb` edge
         // and the cross-boundary `User --> VPN` edge share User's bottom
         // side, and five `VPN --> cvm` edges share VPN's bottom.
-        let (d, l) = lay(include_str!("../examples/finance.mmd"));
+        let (d, l) = lay(include_str!("../examples/finance.dgmr"));
         assert_all_finite(&l);
         assert_eq!(d.edges.len(), l.edges.len());
         for e in &l.edges {
@@ -6572,12 +6572,12 @@ a --> b
     fn cross_boundary_lca_routes_around_a_peer_node() {
         // A cross-boundary edge whose LCA segment would jog through a peer
         // node routes around it instead. Here `src` (top-level) -> `t` (in
-        // subgraph S, below) with `mid` (a peer) sitting between them on the
+        // group S, below) with `mid` (a peer) sitting between them on the
         // same x as both endpoints, so a single midpoint jog cannot clear it.
         let (_d, l) = lay(r#"diagram top-down
 src
 mid
-subgraph "S"
+group "S"
 t
 end
 src --> t
@@ -6735,9 +6735,9 @@ src --> t
         // (Strokes and arrowheads paint within a few px of the geometry
         // checked here; the margin absorbs that.)
         let cases: [&str; 4] = [
-            include_str!("../examples/sides.mmd"),
-            include_str!("../examples/infra.mmd"),
-            include_str!("../examples/finance.mmd"),
+            include_str!("../examples/sides.dgmr"),
+            include_str!("../examples/infra.dgmr"),
+            include_str!("../examples/finance.dgmr"),
             "diagram top-down\na -- \"hit\" from=\"left\" --> b\n",
         ];
         for src in cases {
@@ -6759,7 +6759,7 @@ src --> t
             for n in &l.nodes {
                 check(&n.id, n.x, n.y, n.x + n.w, n.y + n.h);
             }
-            for s in &l.subgraphs {
+            for s in &l.groups {
                 check("frame", s.x, s.y, s.x + s.w, s.y + s.h);
             }
             for (i, e) in l.edges.iter().enumerate() {
@@ -6809,13 +6809,13 @@ src --> t
 
     #[test]
     fn forced_side_on_cross_boundary_edge_enters_target_from_that_side() {
-        // `src --> t` where t sits inside a subgraph, forced to enter t at
+        // `src --> t` where t sits inside a group, forced to enter t at
         // its RIGHT side: the LCA segment runs to the frame's right border
         // at t's height, and the within-frame stub enters t's right side.
         let (_d, l) = lay(
             r#"diagram top-down
 src
-subgraph "S"
+group "S"
 t "Target"
 end
 src -- to="right" --> t
@@ -6831,7 +6831,7 @@ src -- to="right" --> t
     #[test]
     #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
     fn _dump_sides_for_inspection() {
-        let (_d, l) = lay(include_str!("../examples/sides.mmd"));
+        let (_d, l) = lay(include_str!("../examples/sides.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
         nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
@@ -6846,7 +6846,7 @@ src -- to="right" --> t
 
     #[test]
     fn forced_sides_keep_m9_invariants_on_the_example() {
-        let (d, l) = lay(include_str!("../examples/sides.mmd"));
+        let (d, l) = lay(include_str!("../examples/sides.dgmr"));
         assert_eq!(d.edges.len(), l.edges.len());
         assert_all_finite(&l);
         for e in &l.edges {
@@ -6933,7 +6933,7 @@ src -- to="right" --> t
                 );
             }
             // (5) It crosses no frame border and covers no frame title.
-            for s in &l.subgraphs {
+            for s in &l.groups {
                 for b in border_bands((s.x, s.y, s.w, s.h)) {
                     assert!(
                         rect_overlap_area(r, b) <= 0.0,
@@ -6942,7 +6942,7 @@ src -- to="right" --> t
                         s.index
                     );
                 }
-                if let Some(t) = d.subgraphs[s.index].title.as_deref() {
+                if let Some(t) = d.groups[s.index].title.as_deref() {
                     let tr = title_text_rect((s.x, s.y, s.w, s.h), t);
                     assert!(
                         rect_overlap_area(r, tr) <= 0.0,
@@ -6959,10 +6959,10 @@ src -- to="right" --> t
     #[test]
     fn labels_are_resolved_on_the_samples() {
         for src in [
-            include_str!("../examples/finance.mmd"),
-            include_str!("../examples/infra.mmd"),
-            include_str!("../examples/subdirection.mmd"),
-            include_str!("../examples/sides.mmd"),
+            include_str!("../examples/finance.dgmr"),
+            include_str!("../examples/infra.dgmr"),
+            include_str!("../examples/subdirection.dgmr"),
+            include_str!("../examples/sides.dgmr"),
         ] {
             let (d, l) = lay(src);
             assert_labels_resolved(&d, &l);
@@ -6971,7 +6971,7 @@ src -- to="right" --> t
 
     #[test]
     fn label_placement_is_deterministic() {
-        let src = include_str!("../examples/finance.mmd");
+        let src = include_str!("../examples/finance.dgmr");
         let (d1, l1) = lay(src);
         let (d2, l2) = lay(src);
         let a1: Vec<_> = d1
@@ -7190,9 +7190,9 @@ src -- to="right" --> t
     #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
     fn _dump_labels_for_inspection() {
         for (name, src) in [
-            ("finance", include_str!("../examples/finance.mmd")),
-            ("infra", include_str!("../examples/infra.mmd")),
-            ("subdirection", include_str!("../examples/subdirection.mmd")),
+            ("finance", include_str!("../examples/finance.dgmr")),
+            ("infra", include_str!("../examples/infra.dgmr")),
+            ("subdirection", include_str!("../examples/subdirection.dgmr")),
         ] {
             let (d, l) = lay(src);
             println!("== {name} ==");

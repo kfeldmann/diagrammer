@@ -8,7 +8,7 @@ grow toward infrastructure diagrams (boxes now, cylinders next).
 ## Example
 
 ```
-# diagram.mmd — infrastructure
+# diagram.dgmr — infrastructure
 diagram top-down
 
 web       "Web Server"
@@ -33,7 +33,7 @@ api2 -- "events" --> queue
 # edge with style + label + color, all between the dashes
 db -- thick "replication" color="#888" --> replica "Replica" : cylinder
 
-subgraph "Kubernetes Cluster"
+group "Kubernetes Cluster"
     api1
     api2
 end
@@ -44,8 +44,8 @@ end
 ```
 diagram     := "diagram" direction EOL statement*
 direction   := "top-down" | "bottom-up" | "left-right" | "right-left"
-statement   := nodelist | subgraph | (blank)
-subgraph    := "subgraph" [direction] [string] [attr*] EOL statement* "end" EOL
+statement   := nodelist | group | (blank)
+group       := "group" [direction] [string] [attr*] EOL statement* "end" EOL
 nodelist    := nodespec ( edge nodespec )* EOL
 nodespec    := id [string] [ ":" shape ] [attr*]
 edge        := "-->" | "--" edgebody "-->"
@@ -71,7 +71,7 @@ comment     := '#' ... EOL                              # ignored outside string
    chains can't wrap across lines. If that bites later, add explicit line
    continuation; start strict.
 
-3. **Indentation is not significant.** Subgraph bodies may be indented
+3. **Indentation is not significant.** Group bodies may be indented
    for readability; the parser ignores leading whitespace.
 
 ## Tokens
@@ -96,7 +96,7 @@ string := '"' ( [^"\\] | '\' . )* '"'
 ```
 
 Recognized escapes: `\"` (literal quote), `\\` (literal backslash), and
-`\n` (newline — makes a label or title multi-line; nodes, subgraph frames,
+`\n` (newline — makes a label or title multi-line; nodes, group frames,
 and edge labels all size themselves for the tallest/widest line). Any
 other `\X` is a parse error for v0 (we may relax later). Strings are used
 for labels, titles, and attribute values. A `#` inside a quoted string is
@@ -108,7 +108,7 @@ literal, e.g. `"API Server #1"`.
 
 ## Reserved words
 
-Only `diagram`, `subgraph`, and `end` are fully reserved as identifiers.
+Only `diagram`, `group`, and `end` are fully reserved as identifiers.
 Everything else (`box`, `cylinder`, `solid`, `dotted`, `dashed`, `thick`,
 `top-down`, `left-right`, …) is **contextual**: it only has its special
 meaning in a specific syntactic position. `box` only means "shape" after
@@ -186,7 +186,7 @@ api -- from="top" --> db              # only the source side is forced
 
 Each value is one of `top | bottom | left | right`. Sides are
 **page-space** (as drawn): `top` always means the visual top of the box,
-regardless of the diagram's or any subgraph's layout direction — no
+regardless of the diagram's or any group's layout direction — no
 translation between the attribute and the drawn result.
 
 The request is honored **literally**: the port lands on the requested side,
@@ -219,8 +219,8 @@ be eaten by the `#`-comment lexer.
 ### Attribute semantics
 
 Parsed in v0 and **rendered as of M6** (node `color`/`fill`, edge `color`
-and line styles, and edge labels), **M7.5** (subgraph `color`/`fill`/
-`line`, and a `text` text-color attribute on nodes, edges, and subgraphs),
+and line styles, and edge labels), **M7.5** (group `color`/`fill`/
+`line`, and a `text` text-color attribute on nodes, edges, and groups),
 and **M11** (edge `from`/`to` side attributes; see
 [Edge sides](#edge-sides)).
 
@@ -236,18 +236,18 @@ and **M11** (edge `from`/`to` side attributes; see
   - `from` / `to` — the page-space side of the source / target the edge
     connects to (M11); see [Edge sides](#edge-sides).
 
-- **Subgraphs:**
+- **Groups:**
   - `color` — frame border / stroke color (M7.5). Defaults to `"#88BDA4"`.
   - `fill` — frame interior background color (M7.5). Defaults to
     `"#f2f8f4"`; an explicit `fill="none"` keeps the frame transparent so
-    edges routed behind a subgraph stay visible through it.
+    edges routed behind a group stay visible through it.
   - `line` — frame border line style (M7.5): one of `solid`, `dotted`,
     `dashed`, `thick` — the same set as edge styles, but supplied as a
-    quoted attribute value (e.g. `line="dashed"`), since the subgraph
+    quoted attribute value (e.g. `line="dashed"`), since the group
     header has no style keyword slot. `thick` doubles the border width;
     `dotted`/`dashed` reuse the edge dash patterns. An unknown value
     (e.g. `line="wavy"`) is a resolve error.
-  - `text` — frame title text color (M7.5). Applies only when the subgraph
+  - `text` — frame title text color (M7.5). Applies only when the group
     has a title.
 
 **Unknown attributes are a parse error.** An attribute is valid only if it
@@ -256,37 +256,37 @@ above). This catches typos like `colr="#888"` early rather than silently
 ignoring them. The recognized attributes are fixed for v0; adding new ones
 later is a deliberate grammar change.
 
-## Subgraphs
+## Groups
 
 ```
-subgraph [direction] [string] [attr*]
+group [direction] [string] [attr*]
     statement*
 end
 ```
 
-In v0 subgraphs are **visual grouping only**. The optional `direction`
-slot selects the subgraph's own layout direction (e.g.
-`subgraph left-right "K8s"`); a subgraph without one inherits the effective
+In v0 groups are **visual grouping only**. The optional `direction`
+slot selects the group's own layout direction (e.g.
+`group left-right "K8s"`); a group without one inherits the effective
 direction of its enclosing level. The body is a
 sequence of statements, typically node references:
 
 ```
-subgraph "Kubernetes Cluster"
+group "Kubernetes Cluster"
     api1
     api2
 end
 ```
 
-Referencing a node in a subgraph places it in that group; a node not
-referenced by any subgraph belongs to the top-level diagram. A node may
-not appear in more than one subgraph (parse error).
+Referencing a node in a group places it in that group; a node not
+referenced by any group belongs to the top-level diagram. A node may
+not appear in more than one group (parse error).
 
-A subgraph's frame can be styled with `color` (border), `fill`
+A group's frame can be styled with `color` (border), `fill`
 (background), `line` (border style), and `text` (title color) attributes
 (M7.5); see [Attribute semantics](#attribute-semantics). For example:
 
 ```
-subgraph "Kubernetes Cluster" color="#0a7" fill="#cfe" line="dashed" text="#005"
+group "Kubernetes Cluster" color="#0a7" fill="#cfe" line="dashed" text="#005"
     api1
     api2
 end
@@ -300,8 +300,8 @@ direction := "top-down" | "bottom-up" | "left-right" | "right-left"
 
 `top-down` ranks root nodes at the top, children below. `left-right`
 ranks them left to right. `bottom-up` and `right-left` are the reverses.
-The diagram uses a single global direction by default, but any `subgraph`
-may override it with its own `direction` (milestone 4); a subgraph without
+The diagram uses a single global direction by default, but any `group`
+may override it with its own `direction` (milestone 4); a group without
 one inherits the direction of its enclosing level.
 
 ## What v0 does not include
@@ -309,7 +309,7 @@ one inherits the direction of its enclosing level.
 - No-arrow edges (`---`).
 - Reusable style classes (`classDef`-style).
 - Shapes beyond `box` and `cylinder`.
-- Cross-boundary edge routing that connects through subgraph frames.
+- Cross-boundary edge routing that connects through group frames.
   Frame-aware routing is implemented (M5): an edge crossing a group boundary
   runs to a connection point on the frame (at the frame's center, on the side
   facing the other endpoint along the level's direction axis), then continues
@@ -322,6 +322,6 @@ one inherits the direction of its enclosing level.
   proves insufficient for complex diagrams, per-node pinning/alignment
   controls can be added later via the node `attr` slot.
 
-These are all shaped for in the grammar (direction slot in `subgraph`,
+These are all shaped for in the grammar (direction slot in `group`,
 `attr` slots on nodes and edges) so adding them later is additive, not a
 re-spec.

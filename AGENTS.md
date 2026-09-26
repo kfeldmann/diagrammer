@@ -13,8 +13,8 @@ project is and what's next without reading source:
 
 A small CLI that reads a Mermaid-like DSL and emits self-contained,
 GitHub-renderable SVG. The core reason it exists: Mermaid/dagre **ignore
-per-subgraph layout direction when edges cross group boundaries** — diagrammer
-escapes that by laying each subgraph under its own direction and routing
+per-`subgraph` layout direction when edges cross group boundaries** —
+diagrammer escapes that by laying each group under its own direction and routing
 cross-boundary edges through frame connection points without disturbing the
 groups' internal arrangement.
 
@@ -24,17 +24,17 @@ groups' internal arrangement.
 source string
   → lexer.rs        tokens (ids w/ hyphen rule, quoted strings, # comments)
   → parser.rs       raw AST (RawDiagram: every decl as written, incl. dups)
-  → resolve.rs      validated Diagram (dedup nodes, strict attrs, subgraph
-                    membership + containment tree, per-subgraph direction)
+  → resolve.rs      validated Diagram (dedup nodes, strict attrs, group
+                    membership + containment tree, per-group direction)
   → layout.rs       Layout (Sugiyama flat engine + compound recursion +
                     cross-boundary frame routing + M9 edge separation &
                     obstacle-aware LCA routing + M13 label placement)
   → render/svg.rs   self-contained SVG string
-  → main.rs         CLI: `diagrammer <in.mmd> [-o <out.svg>]`
+  → main.rs         CLI: `diagrammer <in.dgmr> [-o <out.svg>]`
 ```
 
 `ast.rs` holds both layers: the `Raw*` syntactic types and the resolved
-`Diagram`/`Node`/`Edge`/`Subgraph`. `text.rs` measures labels with `ab_glyph`
+`Diagram`/`Node`/`Edge`/`Group`. `text.rs` measures labels with `ab_glyph`
 against the embedded DejaVu Sans Regular (deterministic across machines).
 `error.rs` is an offset-carrying `Error` enum → 1-based line numbers.
 
@@ -45,9 +45,9 @@ src/
   main.rs        CLI: arg parsing, run(), summary vs. -o SVG output
   lexer.rs       tokenizer
   parser.rs      winnow parser → raw AST
-  ast.rs         Raw* + resolved Diagram/Node/Edge/Subgraph + Shape/Style/Direction enums
-  resolve.rs     raw → validated Diagram (dedup, attrs, subgraph membership)
-  layout.rs      ★ biggest file: flat Sugiyama engine + compound (per-subgraph
+  ast.rs         Raw* + resolved Diagram/Node/Edge/Group + Shape/Style/Direction enums
+  resolve.rs     raw → validated Diagram (dedup, attrs, group membership)
+  layout.rs      ★ biggest file: flat Sugiyama engine + compound (per-group
                  direction) + cross-boundary edge routing + M9 edge
                  separation & obstacle-aware LCA routing + M13 label
                  placement & label-aware fan/lane spacing → Layout
@@ -66,8 +66,8 @@ src/
 cargo test                            # full suite (incl. golden snapshots)
 cargo test -- --skip snapshot         # logic only, faster feedback
 UPDATE_SNAPSHOTS=1 cargo test         # regenerate golden .svg files (commit them)
-cargo run -- examples/infra.mmd -o out.svg   # render one diagram
-cargo run -- examples/infra.mmd                # print a validation summary
+cargo run -- examples/infra.dgmr -o out.svg   # render one diagram
+cargo run -- examples/infra.dgmr               # print a validation summary
 ```
 
 **The snapshot harness is non-obvious:** `src/render/svg.rs` zips each diagram
@@ -77,8 +77,8 @@ files (don't hand-edit them).
 
 ## Invariants — don't break these
 
-- **Index correspondence.** `Layout.nodes`/`Layout.edges`/`Layout.subgraphs`
-  correspond **by index** to `diagram.nodes`/`diagram.edges`/`diagram.subgraphs`
+- **Index correspondence.** `Layout.nodes`/`Layout.edges`/`Layout.groups`
+  correspond **by index** to `diagram.nodes`/`diagram.edges`/`diagram.groups`
   in declaration order. The renderer `zip`s them directly. Any new output
   keyed by id must preserve this. (Edge-label anchors ride on `EdgePath` —
   `label_at: Option<(f32, f32)>`, M13 — for exactly this reason; don't move
@@ -133,7 +133,7 @@ breaks geometry):
   this radius.
 - `layout::FRAME_TITLE_X = 10.0`, `layout::FRAME_TITLE_TOP = 4.0`, and
   `layout::FRAME_TITLE_FONT_SIZE = 12.0` — the inset, top offset, and font
-  size of a subgraph's title text. Layout reads these to detect when a
+  size of a group's title text. Layout reads these to detect when a
   cross-boundary within-frame stub would cross the title text
   (`title_detour_clear_x`) so it can route around it, and to keep label
   knockouts off the title (`title_text_rect`, M13); they must match
@@ -152,10 +152,20 @@ breaks geometry):
   layout does not read the render constants, it just promises to stay above
   them.)
 - `layout::CROSS_FRAME_PAD = 12.0` — extra top + bottom padding added to a
-  subgraph frame when a cross-boundary edge connects to one of its immediate
-  children, so the within-frame stub has room to jog. One subgraph-title
+  group frame when a cross-boundary edge connects to one of its immediate
+  children, so the within-frame stub has room to jog. One group-title
   font height each side; keep in sync with `render::FRAME_TITLE_SIZE` (12.0).
-  A subgraph with no such edges keeps the default frame geometry.
+  A group with no such edges keeps the default frame geometry.
+
+## Editor tooling
+
+- `contrib/vim/` — vim/neovim runtime files (syntax, ftdetect, ftplugin) for
+  `.dgmr` files. The syntax file mirrors `docs/grammar.md` (v0), including
+  its contextuality: shapes only after `:`, edge styles only inside an edge
+  body, directions only after `diagram`/`group`, only `diagram`/`group`/`end`
+  reserved (and only at statement start). If the grammar changes — new
+  keywords, shapes, styles, attributes — update `contrib/vim/syntax/dgmr.vim`
+  alongside the parser and `docs/grammar.md`.
 
 ## Test layout
 
@@ -163,5 +173,9 @@ breaks geometry):
 - `src/layout.rs` — geometry/alignment/cross-boundary tests (the bulk).
 - `src/resolve.rs` — validation + error-case tests.
 - `src/text.rs` — measurement sanity tests.
-- `examples/infra.mmd` and `examples/subdirection.mmd` are the canonical
-  sample diagrams; `infra.mmd` is loaded by tests via `include_str!`.
+- `examples/infra.dgmr` and `examples/subdirection.dgmr` are the canonical
+  sample diagrams; `infra.dgmr` is loaded by tests via `include_str!`.
+  Input files use the `.dgmr` extension (deliberately unique — unclaimed by
+  other formats — so editor tooling like a vim syntax file can target the
+  grammar unambiguously); don't rename examples back to `.mmd`/other
+  extensions without updating the `include_str!` paths in tests.

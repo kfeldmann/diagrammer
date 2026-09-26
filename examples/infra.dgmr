@@ -1,4 +1,4 @@
-# diagram.mmd — sample infrastructure
+# diagram.dgmr — sample infrastructure
 diagram top-down
 
 web       "Web Server"
@@ -23,7 +23,7 @@ api2 -- "events" --> queue
 # edge with style + label + color, all between the dashes
 db -- thick "replication" color="#888" --> replica "Replica" : cylinder
 
-subgraph "Kubernetes Cluster"
+group "Kubernetes Cluster"
     api1
     api2
 end

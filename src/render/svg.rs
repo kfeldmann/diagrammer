@@ -6,8 +6,8 @@
 //! arrowhead, and — as of M6 — per-node `color`/`fill`, per-edge `color`,
 //! the `dotted`/`dashed`/`thick` line styles, the `cylinder` shape, and edge
 //! labels. M7.5 adds
-//! per-subgraph frame `color`/`fill`/`line` (border style) and a `text`
-//! text-color attribute on node labels, edge labels, and subgraph titles.
+//! per-group frame `color`/`fill`/`line` (border style) and a `text`
+//! text-color attribute on node labels, edge labels, and group titles.
 //! The document is GitHub-
 //! renderable — no scripts, no external references, no CSS dependencies, only
 //! inline attributes.
@@ -35,9 +35,9 @@
 //! arrow. The marker's `refX` is reduced by the same amount so the tip still
 //! lands on the target node's boundary.
 
-use crate::ast::{Diagram, Edge, Node, Shape, Style, Subgraph};
+use crate::ast::{Diagram, Edge, Group, Node, Shape, Style};
 use crate::layout::{
-    EdgePath, Layout, NodeRect, SubgraphRect, EDGE_LABEL_SIZE, LABEL_PAD,
+    EdgePath, GroupRect, Layout, NodeRect, EDGE_LABEL_SIZE, LABEL_PAD,
 };
 use crate::text;
 
@@ -87,7 +87,7 @@ const FONT_FAMILY: &str = "Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-
 /// background so the edge line is "broken" cleanly behind the text.
 const LABEL_KNOCKOUT: &str = "#fff";
 
-// Subgraph frame styling. Frames are deliberately lighter and thinner than
+// Group frame styling. Frames are deliberately lighter and thinner than
 // node boxes so the contained nodes read as the foreground.
 const FRAME_STROKE: &str = "#88BDA4";
 /// Default frame interior fill (when no `fill` attribute is given).
@@ -124,12 +124,12 @@ pub fn render_svg(diagram: &Diagram, layout: &Layout) -> String {
     let edge_color_ids = collect_edge_color_ids(&diagram.edges);
     s.push_str(&defs(&edge_color_ids));
 
-    // Subgraph frames go behind edges (so a cross-boundary edge pierces the
+    // Group frames go behind edges (so a cross-boundary edge pierces the
     // frame border cleanly) and behind the nodes they contain. Omitted
-    // entirely when there are no subgraphs, keeping subgraph-free output
+    // entirely when there are no groups, keeping group-free output
     // byte-identical to the pre-M4 renderer.
-    if !layout.subgraphs.is_empty() {
-        s.push_str(&render_subgraphs(&diagram.subgraphs, &layout.subgraphs));
+    if !layout.groups.is_empty() {
+        s.push_str(&render_groups(&diagram.groups, &layout.groups));
     }
 
     // Edges first. Stroke color, width, and dash pattern are per-edge (M6:
@@ -241,29 +241,29 @@ fn marker_id_for(color: &str, existing: &[(String, String)]) -> String {
     id
 }
 
-/// The subgraph frames: one rounded rectangle per subgraph with its title
+/// The group frames: one rounded rectangle per group with its title
 /// set into the top-left of the frame. Drawn before edges and nodes so
 /// contained boxes and crossing edges render on top of the border.
 ///
-/// `subgraphs` (the resolved [`Subgraph`]s, carrying style) and `rects`
-/// (the laid-out [`SubgraphRect`]s, carrying geometry) correspond by index
+/// `groups` (the resolved [`Group`]s, carrying style) and `rects`
+/// (the laid-out [`GroupRect`]s, carrying geometry) correspond by index
 /// (declaration order), so they're zipped — the same pattern the renderer
 /// uses for nodes and edges. A frame's `color` (border), `fill` (background),
 /// `line` (border style), and `text` (title color) are honored (M7.5); a
 /// frame with none of these falls back to the default frame palette
 /// ([`FRAME_STROKE`] border, [`FRAME_FILL`] interior, the group's default
 /// stroke-width, and a title color inherited from the group).
-fn render_subgraphs(subgraphs: &[Subgraph], rects: &[SubgraphRect]) -> String {
+fn render_groups(groups: &[Group], rects: &[GroupRect]) -> String {
     let mut s = String::new();
     // The group sets the default frame stroke/width (the M4 defaults); each
     // frame's <rect> overrides fill/stroke/width/dasharray with its own
-    // `color`/`fill`/`line` (M7.5). A subgraph with no `fill` gets the
+    // `color`/`fill`/`line` (M7.5). A group with no `fill` gets the
     // default frame fill ([`FRAME_FILL`]); an explicit `fill="none"` keeps
     // the frame transparent so edges routed behind it stay visible.
     s.push_str(&format!(
         "  <g fill=\"none\" stroke=\"{FRAME_STROKE}\" stroke-width=\"{FRAME_STROKE_WIDTH}\" stroke-linejoin=\"round\">\n"
     ));
-    for (sg, r) in subgraphs.iter().zip(rects.iter()) {
+    for (sg, r) in groups.iter().zip(rects.iter()) {
         let stroke = escape_xml(sg.color.as_deref().unwrap_or(FRAME_STROKE));
         let fill = escape_xml(sg.fill.as_deref().unwrap_or(FRAME_FILL));
         let (width, dash) = frame_stroke(sg.line);
@@ -284,13 +284,13 @@ fn render_subgraphs(subgraphs: &[Subgraph], rects: &[SubgraphRect]) -> String {
     }
     s.push_str("  </g>\n");
     // Titles ride on top of the frame border. The group sets the default
-    // title color; a subgraph with a `text` attribute overrides it on its own
+    // title color; a group with a `text` attribute overrides it on its own
     // <text> so the default (no `text`) title stays byte-identical.
     s.push_str(&format!(
         "  <g fill=\"{FRAME_TITLE_FILL}\" font-family=\"{FONT_FAMILY}\" font-size=\"{}\">\n",
         fmt(FRAME_TITLE_SIZE)
     ));
-    for (sg, r) in subgraphs.iter().zip(rects.iter()) {
+    for (sg, r) in groups.iter().zip(rects.iter()) {
         if let Some(title) = &sg.title {
             // Each line's top rides at its own `y` (hanging baseline): line
             // 0 at `FRAME_TITLE_Y`, one [`text::line_height`] per extra line
@@ -321,7 +321,7 @@ fn render_subgraphs(subgraphs: &[Subgraph], rects: &[SubgraphRect]) -> String {
     s
 }
 
-/// Map a subgraph frame's optional `line` style (M7.5) to its
+/// Map a group frame's optional `line` style (M7.5) to its
 /// (stroke-width, optional dash pattern). `None` (or `solid`) is the default
 /// plain frame; `dotted`/`dashed` reuse the same dash patterns as edges;
 /// `thick` doubles the base frame stroke width (mirroring the edge
@@ -767,10 +767,10 @@ mod tests {
     }
 
     #[test]
-    fn multiline_subgraph_title_renders_stacked_tspans() {
+    fn multiline_group_title_renders_stacked_tspans() {
         let svg = render(
             "diagram top-down\n\
-             subgraph \"Kubernetes\\nCluster\"\n\
+             group \"Kubernetes\\nCluster\"\n\
              a\n\
              end\n",
         );
@@ -860,7 +860,7 @@ mod tests {
         // The lid is an <ellipse>; the body is a <path> with two arcs.
         assert!(svg.contains("<ellipse "), "missing cylinder lid ellipse");
         assert!(svg.contains("<path d=\"M"), "missing cylinder body path");
-        // A single cylinder node (no edges, no subgraphs) emits no <rect>.
+        // A single cylinder node (no edges, no groups) emits no <rect>.
         assert!(!svg.contains("<rect"), "cylinder node should not emit a <rect>");
     }
 
@@ -1205,7 +1205,7 @@ mod tests {
         // engine (policy tested in `layout.rs`) and stored on the `EdgePath`;
         // the renderer draws the text *and* its knockout rect at exactly that
         // point. Checks the infra "events" and "replication" labels.
-        let raw = parser::parse_diagram(include_str!("../../examples/infra.mmd")).unwrap();
+        let raw = parser::parse_diagram(include_str!("../../examples/infra.dgmr")).unwrap();
         let d = resolve::resolve(&raw).unwrap();
         let l = layout::layout(&d);
         let svg = render_svg(&d, &l);
@@ -1272,7 +1272,7 @@ mod tests {
 
     #[test]
     fn snapshot_infra() {
-        assert_snapshot("infra", &render(include_str!("../../examples/infra.mmd")));
+        assert_snapshot("infra", &render(include_str!("../../examples/infra.dgmr")));
     }
 
     #[test]
@@ -1281,17 +1281,17 @@ mod tests {
         // must route around a peer `prd` node, plus a thick `User --> prd` edge
         // and several `VPN --> cvm` edges sharing VPN's bottom side (port
         // separation + lane separation) and a deep-target around-frame route.
-        assert_snapshot("finance", &render(include_str!("../../examples/finance.mmd")));
+        assert_snapshot("finance", &render(include_str!("../../examples/finance.dgmr")));
     }
 
     #[test]
     fn snapshot_subdirection() {
-        // The headline M4 feature: two subgraphs with different per-subgraph
+        // The headline M4 feature: two groups with different per-group
         // directions (one left-right, one top-down) in a single top-down
         // diagram, plus cross-boundary edges.
         assert_snapshot(
             "subdirection",
-            &render(include_str!("../../examples/subdirection.mmd")),
+            &render(include_str!("../../examples/subdirection.dgmr")),
         );
     }
 
@@ -1299,8 +1299,8 @@ mod tests {
     fn snapshot_sides() {
         // The M11 surface: forced page-space sides (`from=` / `to=`),
         // agreeable and contradictory alike, a forced self-loop, and a
-        // forced side on a cross-boundary edge inside a left-right subgraph.
-        assert_snapshot("sides", &render(include_str!("../../examples/sides.mmd")));
+        // forced side on a cross-boundary edge inside a left-right group.
+        assert_snapshot("sides", &render(include_str!("../../examples/sides.dgmr")));
     }
 
     #[test]
@@ -1347,8 +1347,8 @@ mod tests {
     #[test]
     fn svg_edge_polylines_are_orthogonal() {
         // Every edge <polyline> in a rendered diagram must be axis-aligned
-        // (M7), including the cross-boundary edges into the K8s subgraph.
-        let svg = render(include_str!("../../examples/infra.mmd"));
+        // (M7), including the cross-boundary edges into the K8s group.
+        let svg = render(include_str!("../../examples/infra.dgmr"));
         let polylines: Vec<&str> = svg.lines().filter(|l| l.contains("<polyline")).collect();
         assert!(!polylines.is_empty(), "infra should have edge polylines");
         for line in &polylines {
@@ -1373,57 +1373,57 @@ mod tests {
         assert!(svg.contains("orient=\"auto\""));
     }
 
-    // ---- M7.5: subgraph color/fill/line/text and text-color rendering ----
+    // ---- M7.5: group color/fill/line/text and text-color rendering ----
 
-    /// The frame `<rect>` for the (single) subgraph in a diagram. Frames use
+    /// The frame `<rect>` for the (single) group in a diagram. Frames use
     /// `rx="8"` (FRAME_RADIUS); node boxes use `rx="6"` (RADIUS), so this
     /// picks the frame out from any node boxes.
     fn frame_rect(svg: &str) -> &str {
         svg.lines()
             .find(|l| l.contains("<rect") && l.contains("rx=\"8\""))
-            .unwrap_or_else(|| panic!("no subgraph frame <rect rx=\"8\"> in:\n{svg}"))
+            .unwrap_or_else(|| panic!("no group frame <rect rx=\"8\"> in:\n{svg}"))
     }
 
     #[test]
-    fn subgraph_color_fill_line_text_are_rendered() {
+    fn group_color_fill_line_text_are_rendered() {
         let svg = render(
             "diagram top-down\n\
-             subgraph \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
+             group \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
              a\n\
              end\n",
         );
         let frame = frame_rect(&svg);
-        assert!(frame.contains("fill=\"#eef\""), "subgraph fill not rendered: {frame}");
-        assert!(frame.contains("stroke=\"#888\""), "subgraph border color not rendered: {frame}");
-        assert!(frame.contains("stroke-dasharray=\"6 4\""), "dashed subgraph line not rendered: {frame}");
+        assert!(frame.contains("fill=\"#eef\""), "group fill not rendered: {frame}");
+        assert!(frame.contains("stroke=\"#888\""), "group border color not rendered: {frame}");
+        assert!(frame.contains("stroke-dasharray=\"6 4\""), "dashed group line not rendered: {frame}");
         let title = svg.lines().find(|l| l.contains(">S</text>")).unwrap();
-        assert!(title.contains("fill=\"#005\""), "subgraph title text color not rendered: {title}");
+        assert!(title.contains("fill=\"#005\""), "group title text color not rendered: {title}");
     }
 
     #[test]
-    fn subgraph_line_styles_render() {
+    fn group_line_styles_render() {
         // thick doubles the frame stroke width (1 -> 2) and stays solid.
-        let svg = render("diagram top-down\nsubgraph \"S\" line=\"thick\"\na\nend\n");
+        let svg = render("diagram top-down\ngroup \"S\" line=\"thick\"\na\nend\n");
         let frame = frame_rect(&svg);
         assert!(frame.contains("stroke-width=\"2\""), "thick frame not wider: {frame}");
         assert!(!frame.contains("stroke-dasharray"), "thick frame should not be dashed: {frame}");
         // dotted reuses the same 1-4 dash as dotted edges.
-        let svg = render("diagram top-down\nsubgraph \"S\" line=\"dotted\"\na\nend\n");
+        let svg = render("diagram top-down\ngroup \"S\" line=\"dotted\"\na\nend\n");
         let frame = frame_rect(&svg);
         assert!(frame.contains("stroke-dasharray=\"1 4\""), "dotted frame: {frame}");
         // solid is explicit but equivalent to the default.
-        let svg = render("diagram top-down\nsubgraph \"S\" line=\"solid\"\na\nend\n");
+        let svg = render("diagram top-down\ngroup \"S\" line=\"solid\"\na\nend\n");
         let frame = frame_rect(&svg);
         assert!(!frame.contains("stroke-dasharray"), "solid frame should have no dash: {frame}");
         assert!(frame.contains("stroke-width=\"1\""), "solid frame width: {frame}");
     }
 
     #[test]
-    fn default_subgraph_frame_is_unstyled() {
-        // A subgraph with no style attributes falls back to the default frame
+    fn default_group_frame_is_unstyled() {
+        // A group with no style attributes falls back to the default frame
         // palette: FRAME_FILL interior, FRAME_STROKE border, default width,
         // no dash, and a title that inherits the group's default fill.
-        let svg = render("diagram top-down\nsubgraph \"S\"\na\nend\n");
+        let svg = render("diagram top-down\ngroup \"S\"\na\nend\n");
         let frame = frame_rect(&svg);
         assert!(frame.contains("fill=\"#f2f8f4\""), "{frame}");
         assert!(frame.contains("stroke=\"#88BDA4\""), "{frame}");
@@ -1475,11 +1475,11 @@ mod tests {
     }
 
     #[test]
-    fn subgraph_fill_paints_behind_contents() {
-        // The frame is drawn before edges and nodes, so a filled subgraph is
+    fn group_fill_paints_behind_contents() {
+        // The frame is drawn before edges and nodes, so a filled group is
         // a background behind its members (the member node's own fill sits
         // on top). Confirm the frame rect precedes the node rect in the SVG.
-        let svg = render("diagram top-down\nsubgraph \"S\" fill=\"#eef\"\na\nend\n");
+        let svg = render("diagram top-down\ngroup \"S\" fill=\"#eef\"\na\nend\n");
         assert!(svg.find("rx=\"8\"").unwrap() < svg.find("rx=\"6\"").unwrap());
         let frame = svg.lines().find(|l| l.contains("rx=\"8\"")).unwrap();
         let node = svg.lines().find(|l| l.contains("rx=\"6\"")).unwrap();
@@ -1488,16 +1488,16 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_subgraph_style() {
-        // The full M7.5 surface in one diagram: subgraph color/fill/line/text,
+    fn snapshot_group_style() {
+        // The full M7.5 surface in one diagram: group color/fill/line/text,
         // plus node and edge text colors. Frames paint behind contents.
         assert_snapshot(
-            "subgraph_style",
+            "group_style",
             &render(
                 "diagram top-down\n\
                  a \"A\" text=\"#0055ff\"\n\
                  b \"B\"\n\
-                 subgraph \"Group\" color=\"#0a7\" fill=\"#cfe\" line=\"dashed\" text=\"#005\"\n\
+                 group \"Group\" color=\"#0a7\" fill=\"#cfe\" line=\"dashed\" text=\"#005\"\n\
                  c \"C\"\n\
                  d \"D\" text=\"#a00\"\n\
                  end\n\

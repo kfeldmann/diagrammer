@@ -3,7 +3,7 @@
 //! All errors carry a byte `offset` into the source so the CLI can report a
 //! 1-based line number. Parse errors come from the parser (syntax); resolve
 //! errors come from semantic validation (e.g. conflicting redeclarations,
-//! unknown attributes, nodes placed in more than one subgraph).
+//! unknown attributes, nodes placed in more than one group).
 
 use std::fmt;
 

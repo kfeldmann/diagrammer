@@ -19,7 +19,7 @@ not backward-compatible. See [`grammar.md`](grammar.md).
 - [x] Header + direction
 - [x] Nodes (bare id / `id "label"`, `: shape`, attrs)
 - [x] Edges (`-->`, `-- style "label" attrs -->`)
-- [x] Subgraphs (visual grouping; direction slot reserved)
+- [x] Groups (visual grouping; direction slot reserved)
 - [x] Comments (`#`), quoted strings with escapes
 - [x] Decisions locked: `diagram` header; full-word directions; `-- "label" -->`
       edge labels; implicit node declarations; `#` comments; strict unknown
@@ -32,18 +32,18 @@ diagram. Layout and rendering are stubbed (`todo!()`).
 
 - [x] Lexer: whitespace/comments, identifiers (hyphen rule so `A-->B` works),
       quoted strings with `\"`/`\\` escapes, line endings.
-- [x] Parser (winnow): diagram header, nodes, edge chains, subgraphs (nested),
+- [x] Parser (winnow): diagram header, nodes, edge chains, groups (nested),
       attributes. Errors carry a byte offset + context labels → 1-based line
       numbers.
 - [x] Resolver: dedup nodes, label/shape/attribute consistency on
       redeclaration, strict attribute validation (unknown & duplicate → error),
-      subgraph membership (a node may belong to at most one subgraph), reject
-      per-subgraph direction.
+      group membership (a node may belong to at most one group), reject
+      per-group direction.
 - [x] Cross-boundary edges do **not** relocate a node (the Mermaid/dagre
       behavior we want to escape). Standalone occurrences and new implicit
       declarations set membership; edge endpoints are pure references.
-- [x] Minimal CLI: `diagrammer <input.mmd>` validates and prints a summary
-      (`ok: N nodes, M edges, K subgraphs (direction ...)`).
+- [x] Minimal CLI: `diagrammer <input.dgmr>` validates and prints a summary
+      (`ok: N nodes, M edges, K groups (direction ...)`).
 - [x] Test suite: 20 tests covering parse, resolve, and error cases.
 
 ---
@@ -51,7 +51,7 @@ diagram. Layout and rendering are stubbed (`todo!()`).
 ## ✅ M2 — Layout engine (Sugiyama-style)
 
 Produce coordinates and a ranking for a single flat graph under one global
-direction. No subgraphs yet.
+direction. No groups yet.
 
 - [x] **Text measurement** (precise, via `ab_glyph`): node label → pixel
       width/height. Needed to size boxes before placing them.
@@ -84,7 +84,7 @@ GitHub-renderable (no scripts/external refs).
 - [x] **Diagonal/direct edges** to start (straight lines), arrowheads via
       `<marker>`.
 - [x] SVG document wrapper (viewBox sized to content).
-- [x] CLI: `diagrammer <input.mmd> -o <output.svg>` (and read direction/output
+- [x] CLI: `diagrammer <input.dgmr> -o <output.svg>` (and read direction/output
       from flags).
 - [x] Snapshot test harness (golden `.svg` files) so output is locked early.
 
@@ -103,23 +103,23 @@ six diagrams against committed `snapshots/*.svg` (regenerated via
 
 **Blocked by:** M2. **Note:** orthogonal edges landed in M7.
 
-## ✅ M4 — Subgraphs with per-subgraph direction (headline feature)
+## ✅ M4 — Groups with per-group direction (headline feature)
 
-Extend the layout to model compound nodes (subgraphs) and honor a per-subgraph
+Extend the layout to model compound nodes (groups) and honor a per-group
 direction. This is the core reason the tool exists.
 
-- [x] Compound layout: subgraphs contain child nodes/subgraphs; parents size
+- [x] Compound layout: groups contain child nodes/groups; parents size
       to fit children.
-- [x] Honor `subgraph <direction>` (lift the M1 rejection into layout).
-- [x] Subgraph frame rendering (labeled border around members).
-- [x] Tests: same graph laid out with different per-subgraph directions.
+- [x] Honor `group <direction>` (lift the M1 rejection into layout).
+- [x] Group frame rendering (labeled border around members).
+- [x] Tests: same graph laid out with different per-group directions.
 
 Implemented in `src/layout.rs` + `src/render/svg.rs` (+ containment fields in
 `src/ast.rs` / `src/resolve.rs`): the flat M2 engine was extracted into a
 parameterized `layout_flat(items, edges, direction, margin)` and driven
-**recursively** per level. Each level (the top-level diagram or a subgraph)
-lays out its direct-child real nodes plus its direct-child subgraphs as opaque
-compound boxes; a subgraph box is sized to fit its own recursively-laid-out
+**recursively** per level. Each level (the top-level diagram or a group)
+lays out its direct-child real nodes plus its direct-child groups as opaque
+compound boxes; a group box is sized to fit its own recursively-laid-out
 contents plus a labeled frame, and uses its own effective direction (its own
 `direction`, or the direction inherited from the enclosing level). Each edge
 is assigned to the lowest common ancestor level of its endpoints and drawn
@@ -137,12 +137,12 @@ behind edges and nodes. 10 new layout tests + 1 render snapshot
 
 ## ✅ M5 — Cross-boundary edges that respect group layout
 
-Edges crossing subgraph boundaries must route without collapsing the group's
+Edges crossing group boundaries must route without collapsing the group's
 internal layout (the Mermaid failure mode).
 
 - [x] Edge routing aware of compound boundaries.
-- [x] Connection points on subgraph frames.
-- [x] Tests: cross-boundary edges preserve per-subgraph direction.
+- [x] Connection points on group frames.
+- [x] Tests: cross-boundary edges preserve per-group direction.
 
 Implemented in `src/layout.rs` (`cross_boundary_path` plus `Side` / `port` /
 `sides_along` / `line_rect_exit` / `chain_to_lca` / `effective_direction`,
@@ -161,7 +161,7 @@ members — the api2→db stub no longer crosses api1, which the perpendicular
 alternative would have done. Intermediate (nested) frames are clipped at their
 boundaries via line/rect intersection so the path records each frame it
 passes through. The groups' internal layouts are untouched (still computed by
-the M4 recursion), so a left-right subgraph chain stays horizontal even while
+the M4 recursion), so a left-right group chain stays horizontal even while
 edges cross its frame. The LCA direction is reconstructed in `assemble` via
 `effective_direction` (own direction or inherited), so the flat engine's
 cross-boundary waypoints — which M4 discarded — are no longer needed. 5 new
@@ -173,7 +173,7 @@ were diagonal until M7 made them orthogonal.)
 **Follow-up — around-the-frame routing for a deep target (post-M7.5).** The
 straight within-frame target stub pierces the frame's internal content when
 the target node sits beyond other members along the frame's internal flow axis
-— e.g. `orders --> db` in `examples/subdirection.mmd`: the Storage subgraph is
+— e.g. `orders --> db` in `examples/subdirection.dgmr`: the Storage group is
 top-down, entered from the top, but Database is its *bottom* node with Cache
 above it, so the stub ran straight through Cache and then exactly overlapped
 the Cache→Database edge. `cross_boundary_path` now detects this (the stub
@@ -189,7 +189,7 @@ the source sits above the frame within its cross-span), falls back to the far
 side if a sibling blocks the near perpendicular entry, and keeps the straight
 stub if both sides are blocked or the nesting is deeper than one frame. The
 groups' internal layouts stay untouched (the M5 headline guarantee holds).
-`assemble` now passes each subgraph's immediate children (node rects + nested
+`assemble` now passes each group's immediate children (node rects + nested
 frame rects) to `cross_boundary_path` for the pierce test. 2 new layout tests
 (`cross_boundary_edge_routes_around_frame_when_target_is_deep` on the
 subdirection sample, and the source-above-frame gap-jog case);
@@ -198,16 +198,16 @@ changed (it now runs down beside Storage and turns into Database's right
 side instead of crossing Cache and overlapping the Cache→Database edge).
 
 **Follow-up — node-aligned frame connection points (post-M7.5).** A
-cross-boundary edge's representative port on a subgraph frame used to sit at
+cross-boundary edge's representative port on a group frame used to sit at
 the frame's *center* on its facing side. That made every edge entering a
-subgraph converge on the same midpoint — so two edges into one group read as
+group converge on the same midpoint — so two edges into one group read as
 both sources reaching both members — and made a within-frame stub jog from
 the node's coordinate up to the frame-center coordinate and back (the
 `prv-clb --> tke` edge in a nested left-right diagram jogged up to the
-subgraph's center-y and back down). `cross_boundary_path` now places each rep
+group's center-y and back down). `cross_boundary_path` now places each rep
 port at the **endpoint node's** cross-coordinate on its frame's facing side
 (`port_at_cross`), so a within-frame stub runs straight along the node's own
-axis and edges enter a subgraph lined up with their target. The one
+axis and edges enter a group lined up with their target. The one
 complication is the frame's (top-left) title: a straight stub at the node's
 `x` would cross the title text when the node sits under it, so a title detour
 (`title_detour` / `title_detour_clear_x`) enters the frame just past the
@@ -218,12 +218,12 @@ otherwise the stub stays straight (crossing a too-wide title no worse than the
 old center design did). The M7 `JogBias` near-node mechanism is gone (the
 detour places its own jog), so `ortho_chain` always jogs at the segment
 midpoint. The sibling-pierce around-route and the M5 headline guarantee are
-unchanged. 2 new layout tests (`cross_boundary_edges_enter_subgraph_aligned_
+unchanged. 2 new layout tests (`cross_boundary_edges_enter_group_aligned_
 with_target_node` and `cross_boundary_edge_between_aligned_nodes_is_straight`);
 `cross_boundary_stub_does_not_cross_sibling` and
 `cross_boundary_stub_jog_clears_title_region_and_arrowhead` updated for the
 new model; `snapshots/infra.svg`, `snapshots/subdirection.svg`, and
-`snapshots/subgraph_style.svg` regenerated — cross-boundary edges no longer
+`snapshots/group_style.svg` regenerated — cross-boundary edges no longer
 merge at a frame's center (e.g. infra's `lb → api1/api2` and `api1/api2 →
 db` now enter/leave the K8s frame at each node's own `x`).
 
@@ -258,7 +258,7 @@ what makes a layered diagram read as aligned rather than ragged.
 Implemented in `src/layout.rs` (`assign_x` plus new `center_blocks` /
 `real_ancestor`), replacing the old `place_layer_left` barycenter. It is a
 contained change to the flat engine, so it applies at **every** level (the
-top level and each subgraph) via the existing compound recursion — no
+top level and each group) via the existing compound recursion — no
 compound-layout or cross-boundary work needed. This is the most visible
 quality win since M2: `snapshots/infra.svg` now has a straight
 Web→Load Balancer→Kubernetes Cluster spine, with the data tier centered
@@ -322,7 +322,7 @@ axis (the rank axis in page space: vertical for top-down / bottom-up,
 horizontal for left-right / right-left) to the segment's flow midpoint,
 across to the target's cross coordinate, then along the flow axis to the
 target. The flow axis is read per edge from its LCA-level effective
-direction, so an edge inside a left-right subgraph jogs horizontally even in
+direction, so an edge inside a left-right group jogs horizontally even in
 a top-down diagram. The perpendicular jog lands between the two waypoints'
 flow coordinates — in an inter-rank `RANK_GAP` or a frame's padding — so it
 stays clear of node interiors and the M5 "stub does not cross a sibling"
@@ -336,10 +336,10 @@ the renderer's `ARROW_BACKOFF` of 4 px so the arrowhead tip still lands on
 the node boundary, and the arrowhead's `markerHeight` of 10 px so the
 horizontal approach clears the arrowhead body rather than cutting into its
 side) above the node, in the clear padding below the title. That padding is
-created by `CROSS_FRAME_PAD`: a subgraph that a cross-boundary edge reaches
-through (to an *immediate* child) grows by one subgraph-title font height on
+created by `CROSS_FRAME_PAD`: a group that a cross-boundary edge reaches
+through (to an *immediate* child) grows by one group-title font height on
 top and bottom, so the 12-px jog lands in the grown band below the title
-text rather than on it; a subgraph with no such edge keeps the default frame
+text rather than on it; a group with no such edge keeps the default frame
 geometry. `cross_boundary_path` routes the source stub (`NearStart`), the
 LCA segment (`Mid`), and the target stub (`NearEnd`) as separate orthogonal
 chains. The arrowhead keeps its `orient="auto"` marker, which the now
@@ -356,47 +356,47 @@ title instead of crossing it, and the K8s frame grew to give them room).
 
 **Blocked by:** M3, M5.5. **Independent of:** M4/M5; done after M6.
 
-## ✅ M7.5 — Subgraph color, fill, and line (border) style; text color
+## ✅ M7.5 — Group color, fill, and line (border) style; text color
 
-- [x] Subgraph color attribute (color for the line (border))
-- [x] Subgraph fill attribute (color of the fill (background) of the subgraph)
-- [x] Subgraph line style (dashed, dotted, thick, etc.)
+- [x] Group color attribute (color for the line (border))
+- [x] Group fill attribute (color of the fill (background) of the group)
+- [x] Group line style (dashed, dotted, thick, etc.)
 - [x] For all text: text attribute (color of the text)
 
 Implemented in `src/resolve.rs` + `src/render/svg.rs` (+ new fields on the
-resolved `Subgraph`/`Node`/`Edge` in `src/ast.rs`): the resolver now accepts
-four subgraph style attributes — `color` (border), `fill` (background),
+resolved `Group`/`Node`/`Edge` in `src/ast.rs`): the resolver now accepts
+four group style attributes — `color` (border), `fill` (background),
 `line` (border style: `solid`/`dotted`/`dashed`/`thick`, supplied as a
-quoted value since the subgraph header has no style keyword slot), and
+quoted value since the group header has no style keyword slot), and
 `text` (title color) — and a `text` text-color attribute on nodes and
 edges. `line`'s value is validated against the `Style` set (an unknown
 value like `line="wavy"` is a resolve error); node `text` follows the same
 redeclaration-consistency rule as `color`/`fill`. The renderer now zips
-`diagram.subgraphs` with `layout.subgraphs` (the index-correspondence
+`diagram.groups` with `layout.groups` (the index-correspondence
 invariant) to read a frame's `color`/`fill`/`line`/`text` from the resolved
-`Subgraph` and its geometry from `SubgraphRect` — the same split it already
-uses for nodes and edges — so `SubgraphRect` is now geometry-only (its
-`title` field moved to `Subgraph`, which already carried it). A frame with
+`Group` and its geometry from `GroupRect` — the same split it already
+uses for nodes and edges — so `GroupRect` is now geometry-only (its
+`title` field moved to `Group`, which already carried it). A frame with
 no style attributes renders byte-identically to the pre-M7.5 output: the
 `<g>` keeps the default frame stroke/width, each `<rect>` overrides with
 its own (defaulting to those same constants), and a title with no `text`
 inherits the group's default fill. `line` maps via a `frame_stroke` helper
 mirroring `edge_stroke` (`dotted`/`dashed` reuse the same dash patterns;
 `thick` doubles the frame border width, mirroring the edge convention);
-`fill` originally defaulted to `none` so a default subgraph stayed
+`fill` originally defaulted to `none` so a default group stayed
 transparent (edges behind it visible) — the default-palette change later
 switched the frame defaults to `fill="#f2f8f4"` / `color="#88BDA4"` and the
 node defaults to `fill="#c0e1fc"` / `color="#2196F3"` (see `grammar.md`), with
 explicit `fill="none"` still available for transparency. The `text`
 attribute sets a per-element `fill` on
-the node label, the edge-label `<text>`, and the subgraph-title `<text>`,
+the node label, the edge-label `<text>`, and the group-title `<text>`,
 each only when present (default text keeps the existing group/INK color, so
-unstyled diagrams are unchanged). 19 new tests (subgraph attrs parsed + each
-`line` style + invalid `line` value + unknown/duplicate subgraph attrs +
+unstyled diagrams are unchanged). 19 new tests (group attrs parsed + each
+`line` style + invalid `line` value + unknown/duplicate group attrs +
 node/edge `text` + `text` redeclaration consistency + render checks for
-every new attribute + a `subgraph_style` snapshot); all eight existing
+every new attribute + a `group_style` snapshot); all eight existing
 snapshots regenerated and verified byte-identical (only a new
-`subgraph_style.svg` was added) — subgraph styling is render-only, so layout
+`group_style.svg` was added) — group styling is render-only, so layout
 geometry is untouched.
 
 **Blocked by:** M3 (rendering), M6 (attribute pipeline). **Independent of:**
@@ -407,7 +407,7 @@ M7 (orthogonal routing).
 - [ ] `--direction` flag to override the header.
 - [ ] Theme/style presets (reusable style classes — grammar slot is reserved).
 - [ ] Error message quality pass (context spans, suggestions).
-- [ ] Input-robustness guards: deeply nested subgraphs currently recurse on
+- [ ] Input-robustness guards: deeply nested groups currently recurse on
       the native stack in both the parser and the compound layout — a
       pathologically nested input stack-overflows instead of erroring
       cleanly. Cap or depth-proof both.
@@ -422,7 +422,7 @@ milestone eliminates: (1) an edge passing *through* a node — the LCA-level
 segment of a cross-boundary edge could jog through a peer node sitting between
 its endpoints (e.g. `User --> VPN` whose jog crossed `prd`, making it read as
 if `prd` connected to `VPN`); (2) parallel edges laying *on top of* each other
-— several edges from one source to one target subgraph shared the source's
+— several edges from one source to one target group shared the source's
 single port and the same jog lane, so their trunks overlapped and their labels
 collided (e.g. the five `VPN --> cvm` edges, and `lb --> api1/api2` in
 `infra`). Crossing is allowed; laying on top, and passing behind a node, are
@@ -455,8 +455,8 @@ port-separation pre-pass, a lane-separation pre-pass, and a per-level obstacle
 field). Within-frame stubs keep the M5/M7 frame-aware logic unchanged (title
 detours, around-target-frame routes, nested-frame crossings); only the
 inter-representative LCA segment and direct-edge endpoints are rerouted, so the
-M5 headline guarantee (a subgraph's internal layout is never disturbed by a
-crossing edge) holds. New sample `examples/finance.mmd` + snapshot
+M5 headline guarantee (a group's internal layout is never disturbed by a
+crossing edge) holds. New sample `examples/finance.dgmr` + snapshot
 `snapshots/finance.svg`; `infra`, `diamond`, `cycle`, and `shapes_styles`
 snapshots regenerated (forks and 2-cycles now fan ports — e.g. an `a <-> b`
 cycle renders as two distinct parallel lines instead of one overlapping).
@@ -476,7 +476,7 @@ addressed in M13.
 ## ✅ M10 — Title-detour robustness
 
 The M5.5 title detour had two verified failure modes that grow worse with
-longer subgraph titles; both are fixed.
+longer group titles; both are fixed.
 
 - [x] **Entry gap eaten by viewer font fallback.** The detour used to enter
       exactly `TITLE_CLEAR_GAP` (6 px) past the title's *measured* right
@@ -524,7 +524,7 @@ horizontal growth pass in `layout_level`'s child-frame sizing. 4 new tests
 `title_detour_entry_clears_measured_title_by_the_fallback_gap` — the latter
 three assert the title rect is never crossed);
 `snapshots/infra.svg`, `snapshots/subdirection.svg`, and
-`snapshots/subgraph_style.svg` regenerated — the only change is that title
+`snapshots/group_style.svg` regenerated — the only change is that title
 -detour entries sit a fallback-safe gap further right of their titles (e.g.
 infra's `lb → api1` now enters the K8s frame at x = title-right + 27.8 px
 instead of + 6 px); no frame widths changed in the samples (none of them has
@@ -545,7 +545,7 @@ explicit to mitigate ugly routing.
       values `top | bottom | left | right`; unknown values are resolve
       errors (strict-attribute convention).
 - [x] Sides are **page-space** (as drawn), unambiguous regardless of the
-      diagram's or any subgraph's direction.
+      diagram's or any group's direction.
 - [x] Resolved `Edge` carries `from_side` / `to_side`; layout honors them at
       the two port-decision points — the flat engine's `edge_waypoints`
       (direct edges) and `sides_along` (cross-boundary LCA segments).
@@ -559,7 +559,7 @@ explicit to mitigate ugly routing.
       will document this: *the attribute is honored literally; contradictory
       choices produce ugly (but valid, non-overlapping) routes.*
 - [x] **Routing must always succeed.** Forced sides can push routes outside
-      the current content bounds (e.g. an excursion around a wide subgraph);
+      the current content bounds (e.g. an excursion around a wide group);
       the track graph needs unbounded escape corridors and the viewBox grows
       to include them. What remains guaranteed even for contradictory
       choices: orthogonal segments, no passing through node interiors, no two
@@ -604,9 +604,9 @@ caller rejected and the blocked simple Z was used as the last resort —
 producing exactly the collinear stacking M11 forbids. `track_route` now
 clear-checks against `ROUTE_PAD`-inflated rects, matching `route_clear`.
 
-`examples/sides.mmd` is the canonical M11 sample (agreeable + contradictory
+`examples/sides.dgmr` is the canonical M11 sample (agreeable + contradictory
 sides, a forced self-loop, a forced cross-boundary edge in a left-right
-subgraph), with a golden `sides.svg` snapshot alongside the others.
+group), with a golden `sides.svg` snapshot alongside the others.
 
 **Blocked by:** M9. **Blocks:** M11.5, M13 (they build on the final geometry so
 the cosmetic work is done once).
@@ -638,7 +638,7 @@ Everything that works stays: the compound/LCA decomposition, the `(cross,
 flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
 
 - [x] **One obstacle world (absorbs M12).** A single obstacle model used by
-      every router: node rects; subgraph **frame borders** as thin obstacles
+      every router: node rects; group **frame borders** as thin obstacles
       that may only be crossed at designated connection points (collinear
       overlap with a border barred except at an entry/exit crossing — a
       frame's interior stays legal, since crossing a nested frame is

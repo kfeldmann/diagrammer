@@ -14,13 +14,13 @@
     <polyline points="138.94,171.50 138.94,205.25 109.70,205.25 109.70,235.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g>
-    <rect x="66.94" y="20.00" width="49.37" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="66.94" y="20.00" width="49.37" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="91.62" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">a</text>
-    <rect x="20.00" y="129.50" width="49.63" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="20.00" y="129.50" width="49.63" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="44.82" y="150.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">b</text>
-    <rect x="114.63" y="129.50" width="48.61" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="114.63" y="129.50" width="48.61" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="138.94" y="150.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">c</text>
-    <rect x="67.06" y="239.00" width="49.63" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="67.06" y="239.00" width="49.63" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="91.88" y="260.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">d</text>
   </g>
 </svg>

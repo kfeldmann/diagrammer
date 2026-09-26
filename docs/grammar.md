@@ -225,8 +225,8 @@ and **M11** (edge `from`/`to` side attributes; see
 [Edge sides](#edge-sides)).
 
 - **Nodes:**
-  - `color` — border / stroke color.
-  - `fill` — interior background color.
+  - `color` — border / stroke color. Defaults to `"#2196F3"`.
+  - `fill` — interior background color. Defaults to `"#c0e1fc"`.
   - `text` — label text color (M7.5).
 
 - **Edges:**
@@ -237,10 +237,10 @@ and **M11** (edge `from`/`to` side attributes; see
     connects to (M11); see [Edge sides](#edge-sides).
 
 - **Subgraphs:**
-  - `color` — frame border / stroke color (M7.5).
-  - `fill` — frame interior background color (M7.5). The default is
-    transparent (`none`), so edges routed behind a subgraph stay visible
-    through it.
+  - `color` — frame border / stroke color (M7.5). Defaults to `"#88BDA4"`.
+  - `fill` — frame interior background color (M7.5). Defaults to
+    `"#f2f8f4"`; an explicit `fill="none"` keeps the frame transparent so
+    edges routed behind a subgraph stay visible through it.
   - `line` — frame border line style (M7.5): one of `solid`, `dotted`,
     `dashed`, `thick` — the same set as edge styles, but supplied as a
     quoted attribute value (e.g. `line="dashed"`), since the subgraph

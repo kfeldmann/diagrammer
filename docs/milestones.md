@@ -6,7 +6,8 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0–M7.5, M9, M10, and M11 are complete. **M11.5 (routing-layer refactor; absorbs M12) is next**, then M13; M8 (CLI polish) is deferred until after.
+**Current position:** M0–M7.5 and M9–M13 are complete (M12 was absorbed by
+M11.5). **M8 (CLI polish) is the only remaining milestone.**
 
 ---
 
@@ -382,8 +383,12 @@ its own (defaulting to those same constants), and a title with no `text`
 inherits the group's default fill. `line` maps via a `frame_stroke` helper
 mirroring `edge_stroke` (`dotted`/`dashed` reuse the same dash patterns;
 `thick` doubles the frame border width, mirroring the edge convention);
-`fill` defaults to `none` so a default subgraph stays transparent and edges
-behind it stay visible. The `text` attribute sets a per-element `fill` on
+`fill` originally defaulted to `none` so a default subgraph stayed
+transparent (edges behind it visible) — the default-palette change later
+switched the frame defaults to `fill="#f2f8f4"` / `color="#88BDA4"` and the
+node defaults to `fill="#c0e1fc"` / `color="#2196F3"` (see `grammar.md`), with
+explicit `fill="none"` still available for transparency. The `text`
+attribute sets a per-element `fill` on
 the node label, the edge-label `<text>`, and the subgraph-title `<text>`,
 each only when present (default text keeps the existing group/INK color, so
 unstyled diagrams are unchanged). 19 new tests (subgraph attrs parsed + each
@@ -397,7 +402,7 @@ geometry is untouched.
 **Blocked by:** M3 (rendering), M6 (attribute pipeline). **Independent of:**
 M7 (orthogonal routing).
 
-## ⬜ M8 — CLI polish and extras *(deferred until after M13)*
+## ⬜ M8 — CLI polish and extras *(the remaining milestone)*
 
 - [ ] `--direction` flag to override the header.
 - [ ] Theme/style presets (reusable style classes — grammar slot is reserved).
@@ -584,8 +589,11 @@ rectangular bump; adjacent/opposite sides → corner wraps), and the
 within-frame stub avoidance (`force_stub_around_siblings`); already-routed
 edges become obstacles via `segment_rect`, so two forced excursions in one
 gap cannot lie collinearly on top of each other. A
-canvas-growth pass in `assemble` grows — and, for negative excursions,
-translates — the canvas so every drawn point lands inside the viewBox.
+canvas-fit pass in `assemble` translates — and grows the canvas — so every
+drawn point lands inside the viewBox with the page `MARGIN` (20 px) clear on
+every side (nodes, frames, edge waypoints and label knockouts alike), so a
+route that bulges past the margin shifts the drawing instead of touching the
+canvas edge.
 
 One latent M9 bug surfaced here and was fixed: `track_route` clear-checked
 its candidate segments against **un-inflated** obstacle rects while its
@@ -603,7 +611,7 @@ subgraph), with a golden `sides.svg` snapshot alongside the others.
 **Blocked by:** M9. **Blocks:** M11.5, M13 (they build on the final geometry so
 the cosmetic work is done once).
 
-## ▶ M11.5 — Routing-layer refactor: one obstacle world, one routing regime
+## ✅ M11.5 — Routing-layer refactor: one obstacle world, one routing regime
 
 Review of the routing layer found it structurally sound (the compound/LCA
 decomposition, the `(cross, flow)` vocabulary, the `route_lca` ladder, and the
@@ -629,7 +637,7 @@ It **absorbs M12** (edges avoid frame outlines), whose scope is step 1 below.
 Everything that works stays: the compound/LCA decomposition, the `(cross,
 flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
 
-- [ ] **One obstacle world (absorbs M12).** A single obstacle model used by
+- [x] **One obstacle world (absorbs M12).** A single obstacle model used by
       every router: node rects; subgraph **frame borders** as thin obstacles
       that may only be crossed at designated connection points (collinear
       overlap with a border barred except at an entry/exit crossing — a
@@ -639,16 +647,16 @@ flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
       only forced ones. `route_clear` / `track_route` clear-check against this
       one (consistently inflated) world — eliminating the class of latent bug
       M11 already hit once (mismatched inflation between the two checks).
-- [ ] **Every edge routes through the ladder.** Non-forced direct edges run the
+- [x] **Every edge routes through the ladder.** Non-forced direct edges run the
       same `route_lca` ladder (simple Z at the lane → mid jog → track route →
       last-resort Z) instead of blind `orthogonalize`, closing the
       pass-through-a-node hole; the simple Z remains the fast path when the
       obstacle set is empty or the lane is clear.
-- [ ] **Deterministic routing order.** Edges are routed in one pass in a
+- [x] **Deterministic routing order.** Edges are routed in one pass in a
       deterministic priority (forced edges first, then declaration order), so
       peer-segment obstacles no longer depend on an edge happening to be
       forced.
-- [ ] **RouteContext hoist.** Extract a per-edge `RouteContext` built **once** —
+- [x] **RouteContext hoist.** Extract a per-edge `RouteContext` built **once** —
       endpoint rects, chains, rep rects, effective sides (implicit vs forced
       resolved in *one* place), port-separation results, lane assignments,
       level obstacles — and rebuild `assemble`'s edge loop to: build context →
@@ -658,14 +666,14 @@ flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
       candidate generator (each generator decides whether it applies); a
       single dispatch point decides. The special cases keep their fallbacks —
       the point is one dispatch, not fewer cases.
-- [ ] **No invariant regression.** The M5 headline guarantee (crossing edges
+- [x] **No invariant regression.** The M5 headline guarantee (crossing edges
       never disturb group internal layout), the M9 invariants (no collinear
       stacking, no node pass-through, orthogonality), and the M11 literal
       forced-side semantics all keep passing. The existing invariant test
       suite is the definition of success; snapshots regenerate only where the
       unified routing actually improves a route (e.g. a direct-edge jog that
       used to cross a peer node).
-- [ ] **Decision point — global router? (evaluate, do not build).** After steps
+- [x] **Decision point — global router? (evaluate, do not build).** After steps
       1–2, evaluate on the samples plus adversarial cases: if the unified
       regime still needs per-case fallbacks to satisfy the invariants, the
       next move is a global routing pass (all edges against a shared occupancy
@@ -675,27 +683,88 @@ flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
 **Blocked by:** M11. **Blocks:** M13 (they build on the final geometry so the
 cosmetic work is done once).
 
-## ⬜ M13 — Label placement engine + parallel-edge spacing
+## ✅ M13 — Label placement engine + parallel-edge spacing
 
-Edge labels are placed blind at the longest segment's midpoint (M9's known
-limitation); parallel edges sit close enough that a label's white knockout
-covers a neighboring edge.
+Edge labels used to be placed blind at the midpoint of their polyline's
+longest segment (M9's known limitation); parallel edges sit close enough that
+a label's white knockout covers a neighboring edge. Resolved: the anchor is
+now computed against the finished geometry, and the fan/lane separation is
+label-aware.
 
-- [ ] **Move label anchors into layout** (decided): `assemble` computes each
+- [x] **Move label anchors into layout** (decided): `assemble` computes each
       label's anchor — it knows all geometry: obstacles, lanes, frames, other
-      edges — and stores it on `EdgePath` (a per-edge field, so the
-      index-correspondence invariant is safe); the renderer is slimmed to
-      draw the knockout rect + text at the given anchor.
-- [ ] Placement algorithm: candidate positions along each polyline (offsets
+      edges — and stores it on `EdgePath` (`label_at: Option<(f32, f32)>`, a
+      per-edge field, so the index-correspondence invariant is safe); the
+      renderer is slimmed to draw the knockout rect + text at the given anchor
+      (`render_edge_labels` keeps the old longest-segment midpoint only as a
+      fallback for hand-built paths). `EDGE_LABEL_SIZE` / `LABEL_PAD` moved
+      into `layout.rs` (the shared-constant convention) so the knockout rect
+      the engine scores is byte-identical to the one the renderer draws; the
+      canvas-growth pass now includes label rects (a graze label deliberately
+      overhangs its line) and translates anchors with everything else.
+- [x] Placement algorithm: candidate positions along each polyline (offsets
       along segments), scored against other edges' segments, other labels'
       rects, node rects, and frame borders/titles; deterministic greedy pass
       with a refinement pass (no randomness, fixed iteration order).
-- [ ] **Label-aware parallel spacing**: lane/fan assignment informed by label
+      Implemented as `place_labels` (new M13 section of `layout.rs`). The
+      candidates per segment are the five taps in `LABEL_TAPS` (clamped so the
+      knockout fits inside a segment long enough to hold it), each in up to
+      three variants: **on-line** (the classic knockout-breaks-the-line look)
+      and the two perpendicular **grazes** — the knockout's edge still crosses
+      its own line by `LABEL_ON_LINE` (2.5 px) so the break reads, while its
+      bulk clears one side. The grazes are what resolves genuinely crowded
+      gaps: sliding alone cannot dodge a neighbor that runs parallel the whole
+      length of a label, and a wide knockout in a tight fan has nowhere to
+      hide on-line. Scoring: peer edge lines hidden under the knockout (heavy
+      — the defect being eliminated; a label may cover only its *own* line),
+      label-rect / node / frame-border / title overlap (flat + area terms,
+      nodes heaviest), and small preference terms (segment midpoint,
+      on-line over graze) that only break ties. Greedy pass in declaration
+      order, then one refinement pass in the same order where each label
+      re-optimizes against every other label's current rect and moves only on
+      a strict improvement (a later label that crowded an earlier one can be
+      relieved by moving the earlier one to its next-best spot). Degenerate
+      polylines fall back to the old longest-segment midpoint.
+- [x] **Label-aware parallel spacing**: lane/fan assignment informed by label
       sizes so a labeled edge's knockout cannot cover a neighbor; bump
-      `FAN_SEP` / `LANE_INSET` / `LABEL_PAD` as needed.
+      `FAN_SEP` / `LANE_INSET` / `LABEL_PAD` as needed. Implemented as
+      `label_pair_sep`: the gap between two adjacent fan ports (`separate_ports`)
+      or jog lanes (`assign_lanes`) is `max(FAN_SEP, wider knockout's cross-run
+      half-extent + LABEL_CLEAR)` — the covering extent is read per geometry
+      (`side_label_cover`: the knockout's width across a Top/Bottom side's
+      vertical runs, height across a Left/Right side's horizontal ones;
+      `lane_label_cover`: the flow-axis extent across the lane's cross-axis
+      run). Fan bumps are capped at `FAN_LABEL_CAP` (24 px) so a fan of wide
+      labels still fits a real node side; lanes need no cap (the gap band
+      clamps them) and take their minimums first, sharing the band's slack
+      evenly on top — which reproduces the old uniform spread exactly for
+      unlabeled groups. When even the minimums overflow the room, gaps shrink
+      proportionally (deterministic best effort — the graze candidates resolve
+      the rest). One latent bug surfaced and was fixed: `separate_ports`'
+      push-and-clamp would collapse several ports onto one coordinate when the
+      minimums overflowed the side (collinear stacked legs — an M9-invariant
+      violation); it now shrinks the minimum run proportionally instead.
+      `LABEL_PAD` stays 3 px (bumping it would grow every knockout for
+      marginal stroke clearance; the `LABEL_HIT_PAD` scoring margin covers
+      that instead) and `LANE_INSET` keeps its 5 px (lanes hug neither the
+      node edge nor the frame border).
 
-**Blocked by:** M11.5 (final geometry + unified obstacle model). Resolves M9's
-known limitation.
+Tests: `assert_labels_resolved` on the four samples (exactly the labeled
+edges carry anchors; each knockout touches its own line while covering no
+other edge's line, overlapping no other label, covering no node interior, and
+crossing no frame border or title), placement determinism, the kept
+midpoint policy on an unobstructed edge, the degenerate fallback, a synthetic
+refinement test (a later label crowding an earlier one out of its best spot),
+`label_pair_sep` unit tests, label-aware fan/lane spacing tests, and a
+renderer test that text + knockout draw at `label_at`. Snapshots regenerated:
+label anchors changed everywhere, and finance's `vpn` fan + gap lanes
+respread label-aware.
+
+**Blocked by:** M11.5 (final geometry + unified obstacle model). **Resolves**
+M9's known limitation (e.g. finance's `vpn --> cvm1` two-line port list no
+longer covers `vpn --> cvm3`'s run or neighboring labels, and a label that
+used to sit half-behind a node — `tech.finance.example.com\n443` over
+`pubclb` — now moves clear). **Blocks:** M8 only.
 
 ---
 

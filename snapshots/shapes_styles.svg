@@ -19,20 +19,20 @@
   </g>
   <g fill="#fff" stroke="none">
     <rect x="76.67" y="69.88" width="29.95" height="18.00"/>
-    <rect x="36.39" y="208.25" width="60.36" height="18.00"/>
+    <rect x="36.39" y="210.25" width="60.36" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
     <text x="91.65" y="78.88">polls</text>
-    <text x="66.57" y="217.25">replication</text>
+    <text x="66.57" y="219.25">replication</text>
   </g>
   <g>
-    <rect x="84.65" y="20.00" width="83.31" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="84.65" y="20.00" width="83.31" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="126.30" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Source</text>
     <path d="M20.00,134.50 L20.00,180.50 A46.57,5.00 0 0 0 113.14,180.50 L113.14,134.50 A46.57,5.00 0 0 0 20.00,134.50 Z" fill="#eef" stroke="#888" stroke-width="1.5"/>
     <ellipse cx="66.57" cy="134.50" rx="46.57" ry="5.00" fill="#eef" stroke="#888" stroke-width="1.5"/>
     <text x="66.57" y="161.92" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Postgres</text>
-    <path d="M158.14,134.50 L158.14,180.50 A37.23,5.00 0 0 0 232.60,180.50 L232.60,134.50 A37.23,5.00 0 0 0 158.14,134.50 Z" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <ellipse cx="195.37" cy="134.50" rx="37.23" ry="5.00" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <path d="M158.14,134.50 L158.14,180.50 A37.23,5.00 0 0 0 232.60,180.50 L232.60,134.50 A37.23,5.00 0 0 0 158.14,134.50 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <ellipse cx="195.37" cy="134.50" rx="37.23" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="195.37" y="161.92" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Redis</text>
     <rect x="32.79" y="253.00" width="67.56" height="42.00" rx="6" ry="6" fill="#cfe" stroke="#0a7" stroke-width="1.5"/>
     <text x="66.57" y="274.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Sink</text>

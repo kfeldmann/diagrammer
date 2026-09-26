@@ -7,7 +7,7 @@
       <path d="M0,0 L10,5 L0,10 Z" fill="#333"/>
     </marker>
   </defs>
-  <g fill="none" stroke="#7a7a7a" stroke-width="1" stroke-linejoin="round">
+  <g fill="none" stroke="#88BDA4" stroke-width="1" stroke-linejoin="round">
     <rect x="20.00" y="129.50" width="188.66" height="94.00" rx="8" ry="8" fill="#cfe" stroke="#0a7" stroke-width="1" stroke-dasharray="6 4"/>
   </g>
   <g fill="#3a3a3a" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00">
@@ -24,13 +24,13 @@
     <text x="66.71" y="78.88" fill="#0a7">sync</text>
   </g>
   <g>
-    <rect x="41.60" y="20.00" width="50.23" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="41.60" y="20.00" width="50.23" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="66.71" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#0055ff" text-anchor="middle" dominant-baseline="central">A</text>
-    <rect x="136.82" y="20.00" width="50.25" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="136.82" y="20.00" width="50.25" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="161.95" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">B</text>
-    <rect x="41.00" y="161.50" width="50.40" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="41.00" y="161.50" width="50.40" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="66.20" y="182.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">C</text>
-    <rect x="136.40" y="161.50" width="51.26" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="136.40" y="161.50" width="51.26" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="162.03" y="182.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#a00" text-anchor="middle" dominant-baseline="central">D</text>
   </g>
 </svg>

@@ -12,8 +12,8 @@
       <path d="M0,0 L10,5 L0,10 Z" fill="#888"/>
     </marker>
   </defs>
-  <g fill="none" stroke="#7a7a7a" stroke-width="1" stroke-linejoin="round">
-    <rect x="58.56" y="239.00" width="318.53" height="94.00" rx="8" ry="8" fill="none" stroke="#7a7a7a" stroke-width="1"/>
+  <g fill="none" stroke="#88BDA4" stroke-width="1" stroke-linejoin="round">
+    <rect x="58.56" y="239.00" width="318.53" height="94.00" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
   </g>
   <g fill="#3a3a3a" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00">
     <text x="68.56" y="243.00" text-anchor="start" dominant-baseline="hanging">Kubernetes Cluster</text>
@@ -24,41 +24,41 @@
     <polyline points="274.62,171.50 274.62,232.00 298.20,232.00 298.20,239.00 298.20,267.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="86.56,313.00 86.56,333.00 86.56,338.00 96.14,338.00 96.14,396.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="247.32,313.00 247.32,333.00 247.32,375.00 106.14,375.00 106.14,396.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="178.32,313.00 178.32,333.00 178.32,356.50 165.14,356.50 165.14,396.50" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
+    <polyline points="165.46,313.00 165.46,333.00 165.46,356.50 165.14,356.50 165.14,396.50" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
     <polyline points="257.32,313.00 257.32,333.00 257.32,393.50 225.60,393.50 225.60,396.50" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
     <polyline points="188.32,313.00 188.32,333.00 188.32,338.00 284.60,338.00 284.60,403.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="346.62,313.00 346.62,333.00 346.62,393.50 298.20,393.50 298.20,403.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="346.62,313.00 346.62,333.00 346.62,393.50 307.47,393.50 307.47,403.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="66.57,456.50 66.57,520.00" stroke="#888" stroke-width="3" marker-end="url(#arrow-888)"/>
   </g>
   <g fill="#fff" stroke="none">
-    <rect x="216.10" y="329.00" width="40.73" height="18.00"/>
+    <rect x="264.23" y="363.75" width="40.73" height="18.00"/>
     <rect x="326.26" y="354.25" width="40.73" height="18.00"/>
-    <rect x="36.39" y="479.25" width="60.36" height="18.00"/>
+    <rect x="36.39" y="481.25" width="60.36" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
-    <text x="236.46" y="338.00">events</text>
+    <text x="284.60" y="372.75">events</text>
     <text x="346.62" y="363.25">events</text>
-    <text x="66.57" y="488.25">replication</text>
+    <text x="66.57" y="490.25">replication</text>
   </g>
   <g>
-    <rect x="162.08" y="20.00" width="111.48" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="162.08" y="20.00" width="111.48" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="217.82" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Web Server</text>
-    <rect x="154.03" y="129.50" width="127.59" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="154.03" y="129.50" width="127.59" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="217.82" y="150.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Load Balancer</text>
-    <rect x="79.56" y="271.00" width="115.76" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="79.56" y="271.00" width="115.76" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="137.44" y="292.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">API Server 1</text>
-    <rect x="240.32" y="271.00" width="115.76" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="240.32" y="271.00" width="115.76" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="298.20" y="292.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">API Server 2</text>
-    <path d="M20.00,405.50 L20.00,451.50 A46.57,5.00 0 0 0 113.14,451.50 L113.14,405.50 A46.57,5.00 0 0 0 20.00,405.50 Z" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <ellipse cx="66.57" cy="405.50" rx="46.57" ry="5.00" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <path d="M20.00,405.50 L20.00,451.50 A46.57,5.00 0 0 0 113.14,451.50 L113.14,405.50 A46.57,5.00 0 0 0 20.00,405.50 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <ellipse cx="66.57" cy="405.50" rx="46.57" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="66.57" y="432.92" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Postgres</text>
-    <path d="M158.14,405.50 L158.14,451.50 A37.23,5.00 0 0 0 232.60,451.50 L232.60,405.50 A37.23,5.00 0 0 0 158.14,405.50 Z" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <ellipse cx="195.37" cy="405.50" rx="37.23" ry="5.00" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <path d="M158.14,405.50 L158.14,451.50 A37.23,5.00 0 0 0 232.60,451.50 L232.60,405.50 A37.23,5.00 0 0 0 158.14,405.50 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <ellipse cx="195.37" cy="405.50" rx="37.23" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="195.37" y="432.92" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Redis</text>
-    <rect x="277.60" y="407.50" width="138.04" height="42.00" rx="6" ry="6" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <rect x="277.60" y="407.50" width="138.04" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="346.62" y="428.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Message Queue</text>
-    <path d="M23.81,529.00 L23.81,575.00 A42.76,5.00 0 0 0 109.33,575.00 L109.33,529.00 A42.76,5.00 0 0 0 23.81,529.00 Z" fill="#fff" stroke="#333" stroke-width="1.5"/>
-    <ellipse cx="66.57" cy="529.00" rx="42.76" ry="5.00" fill="#fff" stroke="#333" stroke-width="1.5"/>
+    <path d="M23.81,529.00 L23.81,575.00 A42.76,5.00 0 0 0 109.33,575.00 L109.33,529.00 A42.76,5.00 0 0 0 23.81,529.00 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <ellipse cx="66.57" cy="529.00" rx="42.76" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="66.57" y="556.42" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Replica</text>
   </g>
 </svg>

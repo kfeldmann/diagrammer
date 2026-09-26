@@ -1,11 +1,11 @@
-//! SVG output (milestones 3, 6, 7, and 7.5).
+//! SVG output (milestones 3, 6, 7, 7.5, and 13).
 //!
 //! Turns a resolved [`Diagram`] plus a [`Layout`] into a self-contained,
 //! static SVG document: rounded-rect boxes or cylinders with centered labels,
 //! edges as orthogonal (right-angle) polylines carrying an auto-oriented
 //! arrowhead, and — as of M6 — per-node `color`/`fill`, per-edge `color`,
 //! the `dotted`/`dashed`/`thick` line styles, the `cylinder` shape, and edge
-//! labels placed at the midpoint of each edge's longest segment. M7.5 adds
+//! labels. M7.5 adds
 //! per-subgraph frame `color`/`fill`/`line` (border style) and a `text`
 //! text-color attribute on node labels, edge labels, and subgraph titles.
 //! The document is GitHub-
@@ -22,11 +22,12 @@
 //! hard-coded `fill`, so a colored edge's arrowhead matches its line. This is
 //! more portable than relying on `currentColor`/`context-stroke` inheriting
 //! from the referencing element, which SVG markers don't do reliably across
-//! renderers (including GitHub's). Edge labels are centered on the midpoint of
-//! the longest segment of their (orthogonal) polyline — the long straight run
-//! of the route, not the arc-length midpoint (which can land on or near a
-//! bend) — with a white knockout rect behind them, so the line reads as broken
-//! behind the text (the classic Graphviz look).
+//! renderers (including GitHub's). Edge labels are drawn at the anchor the
+//! layout's label placement engine picks (M13, stored per-edge on
+//! [`EdgePath::label_at`]) with a white knockout rect behind them, so the line
+//! reads as broken behind the text (the classic Graphviz look). The renderer
+//! only draws: the placement policy — candidates along the polyline scored
+//! against the finished geometry — lives in `layout.rs`.
 //!
 //! Each edge's line is shortened at the target end by [`ARROW_BACKOFF`] so the
 //! stroke tucks under its same-color arrowhead: a thick line's round cap
@@ -35,15 +36,20 @@
 //! lands on the target node's boundary.
 
 use crate::ast::{Diagram, Edge, Node, Shape, Style, Subgraph};
-use crate::layout::{EdgePath, Layout, NodeRect, SubgraphRect};
+use crate::layout::{
+    EdgePath, Layout, NodeRect, SubgraphRect, EDGE_LABEL_SIZE, LABEL_PAD,
+};
 use crate::text;
 
-/// Default stroke color for box borders and edges.
+/// Default stroke color for edges (and the default arrowhead fill).
 const STROKE: &str = "#333";
+/// Default node border color (when no `color` attribute is given).
+const NODE_STROKE: &str = "#2196F3";
 /// Default text color.
 const INK: &str = "#222";
-/// Default box interior fill (covers edges routed behind a node).
-const FILL: &str = "#fff";
+/// Default node interior fill (when no `fill` attribute is given). Covers
+/// edges routed behind a node.
+const FILL: &str = "#c0e1fc";
 /// Box corner radius, in user units.
 const RADIUS: f32 = 6.0;
 /// Default edge stroke width, in user units.
@@ -74,17 +80,18 @@ const CYL_LABEL_SHIFT: f32 = (6.0 / 19.0) * crate::layout::FONT_SIZE;
 /// stays last as the Linux catch-all. Layout *measures* with the wider
 /// bundled DejaVu (`text.rs`), so boxes never under-size for any of these.
 const FONT_FAMILY: &str = "Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif";
-/// Font size for edge labels (slightly smaller than the node label size).
-const EDGE_LABEL_SIZE: f32 = 12.0;
-/// Padding inside an edge label's white knockout rect, each side.
-const LABEL_PAD: f32 = 3.0;
-/// Fill of the knockout rect behind edge labels. Matches the default box fill
-/// so the edge line is "broken" cleanly behind the text on a white page.
+// Edge-label sizing ([`EDGE_LABEL_SIZE`], [`LABEL_PAD`]) lives in
+// `layout.rs`: the placement engine sizes the very knockout rects this module
+// draws around its anchors (M13), so both sides share one definition.
+/// Fill of the knockout rect behind edge labels. Matches the white page
+/// background so the edge line is "broken" cleanly behind the text.
 const LABEL_KNOCKOUT: &str = "#fff";
 
 // Subgraph frame styling. Frames are deliberately lighter and thinner than
 // node boxes so the contained nodes read as the foreground.
-const FRAME_STROKE: &str = "#7a7a7a";
+const FRAME_STROKE: &str = "#88BDA4";
+/// Default frame interior fill (when no `fill` attribute is given).
+const FRAME_FILL: &str = "#f2f8f4";
 const FRAME_STROKE_WIDTH: f32 = 1.0;
 const FRAME_RADIUS: f32 = 8.0;
 const FRAME_TITLE_FILL: &str = "#3a3a3a";
@@ -243,25 +250,22 @@ fn marker_id_for(color: &str, existing: &[(String, String)]) -> String {
 /// (declaration order), so they're zipped — the same pattern the renderer
 /// uses for nodes and edges. A frame's `color` (border), `fill` (background),
 /// `line` (border style), and `text` (title color) are honored (M7.5); a
-/// frame with none of these renders byte-identically to the pre-M7.5 output
-/// (the group's default stroke/width stands, and the default title color is
-/// inherited from the group), so subgraph-free styling never perturbs
-/// existing snapshots.
+/// frame with none of these falls back to the default frame palette
+/// ([`FRAME_STROKE`] border, [`FRAME_FILL`] interior, the group's default
+/// stroke-width, and a title color inherited from the group).
 fn render_subgraphs(subgraphs: &[Subgraph], rects: &[SubgraphRect]) -> String {
     let mut s = String::new();
     // The group sets the default frame stroke/width (the M4 defaults); each
     // frame's <rect> overrides fill/stroke/width/dasharray with its own
-    // `color`/`fill`/`line` (M7.5). `fill="none"` keeps a default subgraph
-    // transparent so edges routed behind it stay visible.
+    // `color`/`fill`/`line` (M7.5). A subgraph with no `fill` gets the
+    // default frame fill ([`FRAME_FILL`]); an explicit `fill="none"` keeps
+    // the frame transparent so edges routed behind it stay visible.
     s.push_str(&format!(
         "  <g fill=\"none\" stroke=\"{FRAME_STROKE}\" stroke-width=\"{FRAME_STROKE_WIDTH}\" stroke-linejoin=\"round\">\n"
     ));
     for (sg, r) in subgraphs.iter().zip(rects.iter()) {
         let stroke = escape_xml(sg.color.as_deref().unwrap_or(FRAME_STROKE));
-        let fill = match &sg.fill {
-            Some(f) => escape_xml(f),
-            None => "none".to_string(),
-        };
+        let fill = escape_xml(sg.fill.as_deref().unwrap_or(FRAME_FILL));
         let (width, dash) = frame_stroke(sg.line);
         s.push_str(&format!(
             "    <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{}\"",
@@ -408,20 +412,19 @@ fn edge_stroke(style: Style) -> (f32, Option<&'static str>) {
     }
 }
 
-/// Edge labels: each is centered on the midpoint of the longest segment of
-/// its polyline (the long straight run of an orthogonal route — not the
-/// arc-length midpoint, which can land on or near a bend), with a white
+/// Edge labels: each is drawn at the anchor the layout's label placement
+/// engine picked (M13, [`EdgePath::label_at`] — the center of the knockout
+/// rect + text block, chosen against the finished geometry), with a white
 /// knockout rect behind the text so the edge line reads as broken behind the
-/// label. Drawn after the edges and before the nodes. The midpoint is taken
-/// from the arrow-shortened (rendered) points so the label centers on the
-/// line actually drawn.
+/// label. Drawn after the edges and before the nodes, so a label that strays
+/// over a node is covered by the node's fill.
 fn render_edge_labels(s: &mut String, labeled: &[(&Edge, &EdgePath)]) {
     // Knockout rects first (their own group), then the text (another group),
     // so no rect can cover a sibling label's text.
     s.push_str(&format!("  <g fill=\"{LABEL_KNOCKOUT}\" stroke=\"none\">\n"));
     for (edge, path) in labeled {
         let label = edge.label.as_deref().unwrap();
-        let (mx, my) = longest_segment_midpoint(&shortened_points(path));
+        let (mx, my) = label_anchor(path);
         let m = text::measure(label, EDGE_LABEL_SIZE);
         let rw = m.width + 2.0 * LABEL_PAD;
         let rh = m.height + 2.0 * LABEL_PAD;
@@ -440,7 +443,7 @@ fn render_edge_labels(s: &mut String, labeled: &[(&Edge, &EdgePath)]) {
     ));
     for (edge, path) in labeled {
         let label = edge.label.as_deref().unwrap();
-        let (mx, my) = longest_segment_midpoint(&shortened_points(path));
+        let (mx, my) = label_anchor(path);
         let ys = centered_line_ys(my, text::line_count(label), EDGE_LABEL_SIZE);
         if let Some(c) = &edge.text {
             s.push_str(&format!(
@@ -462,19 +465,19 @@ fn render_edge_labels(s: &mut String, labeled: &[(&Edge, &EdgePath)]) {
     s.push_str("  </g>\n");
 }
 
+/// Where to draw one edge label: the anchor the layout's placement engine
+/// picked (M13), falling back to the midpoint of the polyline's longest
+/// segment only for a hand-built [`EdgePath`] without one.
+fn label_anchor(path: &EdgePath) -> (f32, f32) {
+    path.label_at
+        .unwrap_or_else(|| longest_segment_midpoint(&shortened_points(path)))
+}
+
 /// The midpoint of the longest segment of a polyline (by Euclidean length),
-/// with ties going to the first (lowest-index) such segment. Used to place an
-/// edge label on the most visually significant segment of an orthogonal
-/// route — the long straight run — rather than at the arc-length midpoint,
-/// which can land on or near a bend (e.g. the "T" where a fork's branches
-/// merge into a shared trunk) and read as off-center. For a single-segment
-/// (straight) edge this is just that segment's midpoint.
-///
-/// Pass the *rendered* (arrow-shortened) points (see [`shortened_points`]) so
-/// the label centers on the line actually drawn: a straight edge's line is
-/// pulled back by [`ARROW_BACKOFF`] at the target, so centering on the
-/// unshortened path would sit the label half-of-that closer to the target
-/// than the visible line's true middle.
+/// with ties going to the first (lowest-index) such segment. Only the
+/// fallback anchor for a [`EdgePath`] without `label_at` (see
+/// [`label_anchor`]); the placement policy itself lives in `layout.rs` (M13),
+/// where the whole geometry is known.
 fn longest_segment_midpoint(points: &[(f32, f32)]) -> (f32, f32) {
     if points.is_empty() {
         return (0.0, 0.0);
@@ -533,7 +536,7 @@ fn centered_line_ys(cy: f32, n: usize, font_size: f32) -> Vec<f32> {
 /// `color` (stroke) and `fill` (interior) attributes, and the `cylinder`
 /// shape, are honored (M6).
 fn render_node(s: &mut String, node: &Node, rect: &NodeRect) {
-    let stroke = escape_xml(node.color.as_deref().unwrap_or(STROKE));
+    let stroke = escape_xml(node.color.as_deref().unwrap_or(NODE_STROKE));
     let fill = escape_xml(node.fill.as_deref().unwrap_or(FILL));
     let ink = escape_xml(node.text.as_deref().unwrap_or(INK));
     let cx = rect.x + rect.w / 2.0;
@@ -1132,6 +1135,7 @@ mod tests {
             from: "a".into(),
             to: "b".into(),
             points: vec![(0.0, 0.0), (0.0, 100.0)],
+            label_at: None,
         });
         assert_eq!(p[1], (0.0, 100.0 - ARROW_BACKOFF));
         // Segment shorter than ARROW_BACKOFF: clamped, never flips backwards.
@@ -1139,6 +1143,7 @@ mod tests {
             from: "a".into(),
             to: "b".into(),
             points: vec![(0.0, 0.0), (0.0, 1.0)],
+            label_at: None,
         });
         assert!(p[1].1 > 0.0 && p[1].1 < 1.0, "clamped end out of bounds: {:?}", p[1]);
         // Single point: unchanged.
@@ -1146,6 +1151,7 @@ mod tests {
             from: "a".into(),
             to: "b".into(),
             points: vec![(5.0, 5.0)],
+            label_at: None,
         });
         assert_eq!(p, vec![(5.0, 5.0)]);
     }
@@ -1173,7 +1179,8 @@ mod tests {
 
     #[test]
     fn longest_segment_midpoint_placement() {
-        // Empty / single-point degenerate cases.
+        // Empty / single-point degenerate cases (the fallback anchor for a
+        // hand-built path without `label_at`).
         assert_eq!(longest_segment_midpoint(&[]), (0.0, 0.0));
         assert_eq!(longest_segment_midpoint(&[(1.0, 2.0)]), (1.0, 2.0));
         // A single segment: its midpoint.
@@ -1193,76 +1200,41 @@ mod tests {
     }
 
     #[test]
-    fn edge_label_centers_on_longest_segment_of_orthogonal_route() {
-        // Regression for the infra "events" label: it used to sit at the
-        // arc-length midpoint, which lands on the "T" where the two
-        // api->queue edges merge into a shared horizontal trunk. It must
-        // instead sit at the midpoint of that trunk (the longest segment),
-        // centered between the down-edge from the cluster and the down-edge
-        // into the queue.
+    fn edge_labels_render_at_the_layout_anchor() {
+        // M13 contract: the anchor is computed by the layout's placement
+        // engine (policy tested in `layout.rs`) and stored on the `EdgePath`;
+        // the renderer draws the text *and* its knockout rect at exactly that
+        // point. Checks the infra "events" and "replication" labels.
         let raw = parser::parse_diagram(include_str!("../../examples/infra.mmd")).unwrap();
         let d = resolve::resolve(&raw).unwrap();
         let l = layout::layout(&d);
         let svg = render_svg(&d, &l);
-        let idx = d
-            .edges
-            .iter()
-            .position(|e| e.label.as_deref() == Some("events"))
-            .unwrap();
-        let path = &l.edges[idx];
-        let pts = shortened_points(path);
-        // Locate the longest segment and confirm it's the horizontal trunk.
-        let (mut best_i, mut best_len) = (0usize, -1.0_f32);
-        for (i, w) in pts.windows(2).enumerate() {
-            let len = (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1);
-            if len > best_len {
-                best_len = len;
-                best_i = i;
-            }
+        for label in ["events", "replication"] {
+            let idx = d
+                .edges
+                .iter()
+                .position(|e| e.label.as_deref() == Some(label))
+                .unwrap();
+            let (ax, ay) = l.edges[idx].label_at.expect("labeled edge has an anchor");
+            // Text at the anchor (single-line label: y == anchor y).
+            let text = svg
+                .lines()
+                .find(|t| t.contains(&format!(">{label}</text>")))
+                .unwrap();
+            assert!(text.contains(&format!("x=\"{}\"", fmt(ax))), "{label} text x: {text}");
+            assert!(text.contains(&format!("y=\"{}\"", fmt(ay))), "{label} text y: {text}");
+            // The knockout rect is centered on the anchor.
+            let m = crate::text::measure(label, EDGE_LABEL_SIZE);
+            let rw = m.width + 2.0 * LABEL_PAD;
+            let rh = m.height + 2.0 * LABEL_PAD;
+            let rect = svg
+                .lines()
+                .find(|t| t.starts_with("    <rect") && t.contains(&format!("x=\"{}\"", fmt(ax - rw / 2.0))))
+                .unwrap();
+            assert!(rect.contains(&format!("y=\"{}\"", fmt(ay - rh / 2.0))), "{label} rect y: {rect}");
+            assert!(rect.contains(&format!("width=\"{}\"", fmt(rw))), "{label} rect w: {rect}");
+            assert!(rect.contains(&format!("height=\"{}\"", fmt(rh))), "{label} rect h: {rect}");
         }
-        let (sx, sy) = pts[best_i];
-        let (ex, ey) = pts[best_i + 1];
-        assert!((sy - ey).abs() < 1e-3, "longest segment should be horizontal");
-        assert!(
-            best_len > 50.0,
-            "longest segment should be the long trunk, got len {best_len}"
-        );
-        let want_x = (sx + ex) / 2.0;
-        let text = svg.lines().find(|t| t.contains(">events</text>")).unwrap();
-        assert!(
-            text.contains(&format!("x=\"{}\"", fmt(want_x))),
-            "events label x should be trunk midpoint {want_x}: {text}"
-        );
-    }
-
-    #[test]
-    fn edge_label_on_straight_edge_centers_on_visible_line() {
-        // A straight (single-segment) edge's label must sit at the midpoint of
-        // the *rendered* line — which is shortened by ARROW_BACKOFF at the
-        // target — not the midpoint of the full layout segment, otherwise the
-        // label reads as shifted toward the target. Checks the infra
-        // db->replica "replication" edge.
-        let raw = parser::parse_diagram(include_str!("../../examples/infra.mmd")).unwrap();
-        let d = resolve::resolve(&raw).unwrap();
-        let l = layout::layout(&d);
-        let svg = render_svg(&d, &l);
-        let idx = d
-            .edges
-            .iter()
-            .position(|e| e.label.as_deref() == Some("replication"))
-            .unwrap();
-        let path = &l.edges[idx];
-        let pts = shortened_points(path);
-        assert_eq!(pts.len(), 2, "replication should be a single-segment edge");
-        let want_y = (pts[0].1 + pts[1].1) / 2.0;
-        let text = svg
-            .lines()
-            .find(|t| t.contains(">replication</text>"))
-            .unwrap();
-        assert!(
-            text.contains(&format!("y=\"{}\"", fmt(want_y))),
-            "replication label y should be visible-line midpoint {want_y}: {text}"
-        );
     }
 
     // ---- Golden snapshots (lock the output) ----
@@ -1448,17 +1420,28 @@ mod tests {
 
     #[test]
     fn default_subgraph_frame_is_unstyled() {
-        // A subgraph with no style attributes renders byte-identically to the
-        // pre-M7.5 frame: transparent fill, default border, default width,
+        // A subgraph with no style attributes falls back to the default frame
+        // palette: FRAME_FILL interior, FRAME_STROKE border, default width,
         // no dash, and a title that inherits the group's default fill.
         let svg = render("diagram top-down\nsubgraph \"S\"\na\nend\n");
         let frame = frame_rect(&svg);
-        assert!(frame.contains("fill=\"none\""), "{frame}");
-        assert!(frame.contains("stroke=\"#7a7a7a\""), "{frame}");
+        assert!(frame.contains("fill=\"#f2f8f4\""), "{frame}");
+        assert!(frame.contains("stroke=\"#88BDA4\""), "{frame}");
         assert!(frame.contains("stroke-width=\"1\""), "{frame}");
         assert!(!frame.contains("stroke-dasharray"), "{frame}");
         let title = svg.lines().find(|l| l.contains(">S</text>")).unwrap();
         assert!(!title.contains("fill="), "default title should inherit the group fill: {title}");
+    }
+
+    #[test]
+    fn default_node_colors() {
+        // A node with no `color`/`fill` attributes falls back to the default
+        // node palette: NODE_STROKE border and FILL interior. (Edges keep the
+        // separate default stroke; only node boxes use NODE_STROKE.)
+        let svg = render("diagram top-down\na \"A\"\n");
+        let box_line = svg.lines().find(|l| l.contains("rx=\"6\"")).unwrap();
+        assert!(box_line.contains("fill=\"#c0e1fc\""), "default node fill: {box_line}");
+        assert!(box_line.contains("stroke=\"#2196F3\""), "default node stroke: {box_line}");
     }
 
     #[test]
@@ -1501,7 +1484,7 @@ mod tests {
         let frame = svg.lines().find(|l| l.contains("rx=\"8\"")).unwrap();
         let node = svg.lines().find(|l| l.contains("rx=\"6\"")).unwrap();
         assert!(frame.contains("fill=\"#eef\""), "frame fill: {frame}");
-        assert!(node.contains("fill=\"#fff\""), "node keeps its own default fill: {node}");
+        assert!(node.contains("fill=\"#c0e1fc\""), "node keeps its own default fill: {node}");
     }
 
     #[test]

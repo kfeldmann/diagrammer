@@ -28,7 +28,7 @@ source string
                     membership + containment tree, per-subgraph direction)
   → layout.rs       Layout (Sugiyama flat engine + compound recursion +
                     cross-boundary frame routing + M9 edge separation &
-                    obstacle-aware LCA routing)
+                    obstacle-aware LCA routing + M13 label placement)
   → render/svg.rs   self-contained SVG string
   → main.rs         CLI: `diagrammer <in.mmd> [-o <out.svg>]`
 ```
@@ -49,13 +49,15 @@ src/
   resolve.rs     raw → validated Diagram (dedup, attrs, subgraph membership)
   layout.rs      ★ biggest file: flat Sugiyama engine + compound (per-subgraph
                  direction) + cross-boundary edge routing + M9 edge
-                 separation & obstacle-aware LCA routing → Layout
+                 separation & obstacle-aware LCA routing + M13 label
+                 placement & label-aware fan/lane spacing → Layout
   text.rs        ab_glyph label measurement vs embedded DejaVu Sans
   error.rs       Error enum + line_of()
   render/
     mod.rs       `pub mod svg;`
     svg.rs       Layout+Diagram → self-contained SVG (boxes, cylinders, edges,
-                 edge labels, per-color arrowhead markers)
+                 edge labels at their layout-given anchors, per-color
+                 arrowhead markers)
 ```
 
 ## Build, test, run
@@ -78,7 +80,9 @@ files (don't hand-edit them).
 - **Index correspondence.** `Layout.nodes`/`Layout.edges`/`Layout.subgraphs`
   correspond **by index** to `diagram.nodes`/`diagram.edges`/`diagram.subgraphs`
   in declaration order. The renderer `zip`s them directly. Any new output
-  keyed by id must preserve this.
+  keyed by id must preserve this. (Edge-label anchors ride on `EdgePath` —
+  `label_at: Option<(f32, f32)>`, M13 — for exactly this reason; don't move
+  them into a separate keyed collection.)
 - **Canonical top-down space, then transform.** All layout math runs in
   canonical top-down space (rank grows down, order is horizontal), then a
   rigid transform maps rects + waypoints into the requested direction. The
@@ -107,7 +111,9 @@ files (don't hand-edit them).
   is measured against the **embedded** DejaVu Sans Regular (via the `dejavu`
   crate + `ab_glyph`), never a system font. Snapshots are byte-stable across
   machines — don't introduce nondeterminism (random ids, hashmap iteration
-  order leaking into output, system fonts).
+  order leaking into output, system fonts). Edge-label placement (M13) is a
+  fixed-order greedy pass plus one refinement pass over candidate anchors —
+  keep it that way (no randomness, no iteration-order dependence).
 
 ## Shared constants across the layout/render boundary
 
@@ -117,15 +123,23 @@ breaks geometry):
 
 - `layout::FONT_SIZE = 14.0` — node label size; the renderer sizes `<text>`
   to match the boxes laid out from these metrics.
+- `layout::EDGE_LABEL_SIZE = 12.0` and `layout::LABEL_PAD = 3.0` — edge-label
+  font size and knockout-rect padding (M13). The label placement engine in
+  `layout.rs` (`label_box`) sizes the very knockout rects `render/svg.rs`
+  draws around `EdgePath.label_at` from these; both sides must agree or the
+  knockout drifts off its anchor.
 - `layout::CYL_RY = 5.0` — cylinder elliptical-cap radius; layout sizes the
   cylinder box to include it (`cyl_height`), the renderer draws the caps at
   this radius.
-- `layout::FRAME_TITLE_X = 10.0` and `layout::FRAME_TITLE_FONT_SIZE = 12.0` —
-  the inset and font size of a subgraph's title text. Layout reads these only
-  to detect when a cross-boundary within-frame stub would cross the title text
-  (`title_detour_clear_x`) so it can route around it; they must match
-  `render::FRAME_TITLE_X` (10.0) and `render::FRAME_TITLE_SIZE` (12.0), else
-  the title-detour would misjudge the title's extent.
+- `layout::FRAME_TITLE_X = 10.0`, `layout::FRAME_TITLE_TOP = 4.0`, and
+  `layout::FRAME_TITLE_FONT_SIZE = 12.0` — the inset, top offset, and font
+  size of a subgraph's title text. Layout reads these to detect when a
+  cross-boundary within-frame stub would cross the title text
+  (`title_detour_clear_x`) so it can route around it, and to keep label
+  knockouts off the title (`title_text_rect`, M13); they must match
+  `render::FRAME_TITLE_X` (10.0), `render::FRAME_TITLE_Y` (4.0), and
+  `render::FRAME_TITLE_SIZE` (12.0), else the title-detour would misjudge the
+  title's extent and labels would clear the wrong box.
 - `layout::STUB_JOG_CLEARANCE = 12.0` — how far a title-detour within-frame
   stub jogs from a node port (it sits in the grown `CROSS_FRAME_PAD` band just
   below the title). It must exceed `render::ARROW_BACKOFF`

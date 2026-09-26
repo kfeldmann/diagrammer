@@ -79,6 +79,17 @@
 //! title) — see [`title_detour`]. The arrowhead keeps its `orient="auto"`
 //! marker, which the now axis-aligned final segment orients along a clean
 //! cardinal direction.
+//!
+//! ## Edge labels (M13)
+//!
+//! Each labeled edge's anchor is computed here — where the finished geometry
+//! (obstacles, lanes, frames, other edges) is known — and stored on its
+//! [`EdgePath`] as `label_at`; the renderer just draws the knockout rect +
+//! text there. Placement is a deterministic greedy + refinement pass over
+//! candidate positions along each polyline (see [`place_labels`]), and the
+//! M9 fan/lane separation is label-aware ([`label_pair_sep`]) so parallel
+//! knockouts do not cover neighbor lines where the room exists. See the M13
+//! section below.
 
 use crate::ast::{Diagram, Direction, Subgraph};
 use crate::text;
@@ -99,12 +110,34 @@ const NODE_PAD_Y: f32 = FONT_SIZE;
 const NODE_SEP: f32 = 45.0;
 /// Minimum gap between two consecutive layers (edge to edge).
 const RANK_GAP: f32 = 67.5;
-/// Page margin around the whole drawing (top level only).
+/// Page margin around the whole drawing (top level only) — and the minimum
+/// clear space the canvas fit in [`assemble`] guarantees between any drawn
+/// geometry (node rect, frame rect, edge waypoint, label knockout) and every
+/// canvas edge. Strokes and arrowheads paint within a few px of that geometry
+/// (round caps ~1 px; an arrowhead's perpendicular spread is at most 5 px at
+/// its base), so the visible gap never closes.
 const MARGIN: f32 = 20.0;
 /// Smallest node size, so even tiny labels get a visible box. Match the
 /// per-node sizing: three font heights, wide and tall.
 const MIN_NODE_W: f32 = 3.0 * FONT_SIZE;
 const MIN_NODE_H: f32 = 3.0 * FONT_SIZE;
+/// Edge-label font size (M13). Public so the SVG renderer sizes its edge-label
+/// `<text>` to match the knockout rects this module places (see [`label_box`]).
+pub const EDGE_LABEL_SIZE: f32 = 12.0;
+/// Padding inside an edge label's white knockout rect, each side (M13).
+/// Public so the renderer draws the very knockout rect the placement engine
+/// scored (see [`label_box`]); keep the two formulas together.
+pub const LABEL_PAD: f32 = 3.0;
+/// Clearance a label's knockout keeps from a neighboring edge line where the
+/// fan/lane spacing can provide it (M13): the gap between two adjacent
+/// parallel runs grows to the wider label's half-extent across the runs plus
+/// this (see [`label_pair_sep`]).
+const LABEL_CLEAR: f32 = 2.5;
+/// Cap on the label-aware fan bump (M13). Uncapped, one wide multi-line label
+/// would fan its neighbors past the corners of a real node side; the cap keeps
+/// a fan usable and leaves the residual crowding to the placement engine's
+/// offset candidates. Lanes need no cap — their gap band clamps them.
+const FAN_LABEL_CAP: f32 = 24.0;
 /// Elliptical cap radius (the lid and base rim) for `cylinder` nodes, in
 /// pixels. Fixed (not scaled to the box) so that growing a cylinder's height
 /// actually buys the label more room instead of also growing the caps. Public
@@ -137,6 +170,12 @@ const FRAME_TITLE_H: f32 = 20.0;
 /// the frame.
 const FRAME_TITLE_X: f32 = 10.0;
 const FRAME_TITLE_FONT_SIZE: f32 = 12.0;
+/// Top offset of the rendered title text inside the frame's title band (M13:
+/// the label placement engine keeps knockouts off the title rect). Keep in
+/// sync with the renderer's `FRAME_TITLE_Y` (in `render/svg.rs`, 4 px): the
+/// title text occupies `y ∈ [frame.y + FRAME_TITLE_TOP, … + lines *
+/// line_height]`.
+const FRAME_TITLE_TOP: f32 = 4.0;
 /// Extra padding added to a subgraph frame's top inset *and* bottom padding
 /// when a cross-boundary edge connects to one of the frame's *immediate*
 /// children (a direct-child node the edge reaches by crossing the frame).
@@ -237,11 +276,17 @@ pub struct NodeRect {
 /// An edge as an ordered polyline of waypoints from `from` to `to`. The first
 /// point sits on the source node's port, the last on the target node's port;
 /// intermediate points (if any) route the edge through the gaps between layers.
+/// `label_at` is the anchor of the edge's label (M13): the center of the
+/// knockout rect + text block the renderer draws there, computed by the label
+/// placement engine ([`place_labels`]) against the finished geometry. `None`
+/// for an unlabeled edge. A per-edge field, so the index-correspondence
+/// invariant is safe.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EdgePath {
     pub from: String,
     pub to: String,
     pub points: Vec<(f32, f32)>,
+    pub label_at: Option<(f32, f32)>,
 }
 
 /// A subgraph's frame rectangle, in absolute (page) coordinates. The
@@ -721,6 +766,15 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         .map(|ei| edge_context(&geom, edge_infos, ei))
         .collect();
 
+    // ---- M13: edge-label knockout sizes ----------------------------------
+    // Shared by the spacing pre-passes below (which grow fan/lane gaps with
+    // them) and the label placement engine after routing.
+    let label_sizes: Vec<Option<(f32, f32)>> = diagram
+        .edges
+        .iter()
+        .map(|e| e.label.as_deref().map(label_box))
+        .collect();
+
     // ---- M9 pre-pass 1: port separation -----------------------------------
     // Gather, for every edge endpoint that touches a node, the node side it
     // uses (already resolved in the context: forced override or implicit
@@ -735,6 +789,7 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
             node_rect: ctx.from_rect,
             side: ctx.from_side,
             other_cross: cross_of(center(ctx.to_rect), ctx.from_side),
+            cover: side_label_cover(ctx.from_side, label_sizes[ctx.ei]),
         });
         // An around-target-frame edge enters its target from a perpendicular
         // side (not the one [`sides_along`] picks), so its target port is not
@@ -749,6 +804,7 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
                 node_rect: ctx.to_rect,
                 side: ctx.to_side,
                 other_cross: cross_of(center(ctx.from_rect), ctx.to_side),
+                cover: side_label_cover(ctx.to_side, label_sizes[ctx.ei]),
             });
         }
     }
@@ -795,6 +851,7 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
             ),
             from_cross,
             axis: ctx.flow,
+            cover: lane_label_cover(ctx.flow, label_sizes[ctx.ei]),
             obstacles,
         });
     }
@@ -867,12 +924,37 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
             from: ctxs[ei].from_id.clone(),
             to: ctxs[ei].to_id.clone(),
             points: pts,
+            label_at: None,
         });
     }
     let mut edges_out: Vec<EdgePath> = edges_out
         .into_iter()
         .map(|e| e.expect("every edge routed"))
         .collect();
+
+    // ---- M13: label placement --------------------------------------------
+    // Every polyline is routed now, so each label's anchor can be scored
+    // against the complete world — other edges' segments, other labels'
+    // knockouts, node rects, frame borders and titles — and stored on its
+    // `EdgePath`; the renderer draws the knockout rect + text at the anchor.
+    let paths: Vec<Vec<(f32, f32)>> = edges_out.iter().map(|e| e.points.clone()).collect();
+    let mut label_frames: Vec<(f32, f32, f32, f32)> = Vec::new();
+    for s in 0..diagram.subgraphs.len() {
+        let r = geom.frame(s);
+        label_frames.extend(border_bands(r));
+        if let Some(title) = diagram.subgraphs[s].title.as_deref() {
+            label_frames.push(title_text_rect(r, title));
+        }
+    }
+    let label_world = LabelWorld {
+        nodes: (0..diagram.nodes.len()).map(|gi| geom.node(gi)).collect(),
+        frames: label_frames,
+    };
+    let labels: Vec<Option<&str>> = diagram.edges.iter().map(|e| e.label.as_deref()).collect();
+    let anchors = place_labels(&labels, &paths, &label_world);
+    for (e, a) in edges_out.iter_mut().zip(anchors) {
+        e.label_at = a;
+    }
 
     let mut nodes_out = Vec::with_capacity(diagram.nodes.len());
     for (gi, n) in diagram.nodes.iter().enumerate() {
@@ -898,15 +980,17 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         });
     }
 
-    // ---- M11: canvas growth for forced-side excursions --------------------
-    // A forced side can route outside the laid-out content bounds (an
-    // excursion around a frame at the canvas edge, or an escape past the
-    // page margin). Grow — and, for negative excursions, translate — the
-    // canvas so every drawn point lies inside it; the renderer's viewBox
-    // comes straight from width/height. For an unforced diagram this is a
-    // no-op: content sits exactly [`MARGIN`] inside the canvas on every
-    // side, so nothing pokes out and the extents match to within float
-    // noise (hence the 1e-2 tolerance).
+    // ---- M11: canvas fit — the page margin clear on every side ------------
+    // Edge routing can leave the laid-out content bounds (an excursion
+    // around a frame at the canvas edge, an escape past the page margin, a
+    // long side run), and a label's knockout can overhang its line. Fit the
+    // canvas around *all* drawn geometry with at least [`MARGIN`] of clear
+    // space on every side — translating (left/top deficits) and growing
+    // (right/bottom) — so nothing ever touches the canvas edge; the
+    // renderer's viewBox comes straight from width/height. When routing
+    // stays within the content bounds this is a no-op: content sits exactly
+    // [`MARGIN`] inside the canvas on every side and the extents match to
+    // within float noise (hence the 1e-2 tolerances).
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;
@@ -931,9 +1015,25 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
             max_y = max_y.max(py);
         }
     }
-    if min_x < 0.0 || min_y < 0.0 {
-        let sx = if min_x < 0.0 { -min_x } else { 0.0 };
-        let sy = if min_y < 0.0 { -min_y } else { 0.0 };
+    // M13: a label's knockout can overhang its line (the offset candidates
+    // deliberately push it to one side), so the label rects join the extent.
+    for (edge, path) in diagram.edges.iter().zip(&edges_out) {
+        if let (Some(label), Some((ax, ay))) = (edge.label.as_deref(), path.label_at) {
+            let (lw, lh) = label_box(label);
+            min_x = min_x.min(ax - lw / 2.0);
+            min_y = min_y.min(ay - lh / 2.0);
+            max_x = max_x.max(ax + lw / 2.0);
+            max_y = max_y.max(ay + lh / 2.0);
+        }
+    }
+    // Left/top deficits: translate everything by the shortfall (uniformly —
+    // no relative geometry changes) so those sides clear [`MARGIN`] too.
+    // Right/bottom deficits are handled by the canvas growth below, which
+    // runs on the shifted extents. Nothing drawn (an empty diagram): the
+    // extents are infinite and both shifts stay 0.
+    let sx = if min_x < MARGIN - 1e-2 { MARGIN - min_x } else { 0.0 };
+    let sy = if min_y < MARGIN - 1e-2 { MARGIN - min_y } else { 0.0 };
+    if sx > 0.0 || sy > 0.0 {
         for n in nodes_out.iter_mut() {
             n.x += sx;
             n.y += sy;
@@ -944,6 +1044,10 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         }
         for e in edges_out.iter_mut() {
             for p in e.points.iter_mut() {
+                p.0 += sx;
+                p.1 += sy;
+            }
+            if let Some(p) = e.label_at.as_mut() {
                 p.0 += sx;
                 p.1 += sy;
             }
@@ -2007,8 +2111,9 @@ const BEND_PENALTY: f32 = 12.0;
 /// side's outward normal) before orthogonal routing begins (M11). Sized to
 /// clear the arrowhead's back-extent (`markerHeight`, 10) comfortably, and
 /// — being just past the top-level page margin ([`MARGIN`], 20) — to push a
-/// forced excursion at the canvas edge outside it, where the canvas-growth
-/// pass in [`assemble`] grows the viewBox instead of silently clipping.
+/// forced excursion at the canvas edge outside it, where the canvas fit in
+/// [`assemble`] grows the canvas around it (keeping [`MARGIN`] clear) instead
+/// of silently clipping.
 const SIDE_ESCAPE: f32 = 24.0;
 /// How far a forced self-loop's excursion runs beyond the node's sides
 /// (M11), before wrapping around to the entry side.
@@ -2461,6 +2566,10 @@ struct PortEnd {
     /// The other endpoint node's centre cross-coordinate along this side's
     /// cross axis — used to order and place the fanned port.
     other_cross: f32,
+    /// M13: the edge label's knockout extent *across* the parallel runs this
+    /// side carries ([`side_label_cover`]; 0 when unlabeled) — the fan gap
+    /// grows with it (see [`label_pair_sep`]).
+    cover: f32,
 }
 
 /// Assign fanned port cross-coordinates to node sides carrying more than one
@@ -2470,7 +2579,9 @@ struct PortEnd {
 /// Each edge's port is placed at its *other* endpoint's cross-coordinate
 /// projected onto this side (clamped to the side, inset from the corners), so
 /// an edge to a directly-aligned target stays straight; edges sharing a side
-/// are then nudged apart to at least [`FAN_SEP`].
+/// are then nudged apart to at least [`label_pair_sep`] — [`FAN_SEP`] for two
+/// unlabeled edges, more when a label's knockout would reach the neighbor's
+/// line (M13, capped at [`FAN_LABEL_CAP`]).
 fn separate_ports(ends: &[PortEnd]) -> std::collections::HashMap<(usize, bool), f32> {
     use std::collections::HashMap;
     let mut groups: HashMap<(usize, Side), Vec<usize>> = HashMap::new();
@@ -2498,19 +2609,39 @@ fn separate_ports(ends: &[PortEnd]) -> std::collections::HashMap<(usize, bool), 
             .iter()
             .map(|&i| ends[i].other_cross.clamp(usable_lo, usable_hi))
             .collect();
+        // The minimum gap between two adjacent ports is label-aware (M13): it
+        // grows with the wider label's knockout reach across the runs. When
+        // the required run overflows the usable span every gap shrinks
+        // proportionally — deterministic best effort, and (unlike the old
+        // push-and-clamp) never collapses two ports onto one coordinate (which
+        // would stack their segments collinearly).
+        let covers: Vec<f32> = order.iter().map(|&i| ends[i].cover).collect();
+        let mut seps: Vec<f32> = (0..covers.len().saturating_sub(1))
+            .map(|k| label_pair_sep(covers[k], covers[k + 1], FAN_SEP, Some(FAN_LABEL_CAP)))
+            .collect();
+        let total: f32 = seps.iter().sum();
+        let span = usable_hi - usable_lo;
+        if total > span {
+            let scale = span / total;
+            for s in seps.iter_mut() {
+                *s *= scale;
+            }
+        }
         // Enforce minimum fan separation left-to-right, then clamp, then a
         // right-to-left pass to restore separation if clamping bunched an end.
         for i in 1..assigned.len() {
-            if assigned[i] - assigned[i - 1] < FAN_SEP {
-                assigned[i] = assigned[i - 1] + FAN_SEP;
+            let s = seps[i - 1];
+            if assigned[i] - assigned[i - 1] < s {
+                assigned[i] = assigned[i - 1] + s;
             }
         }
         for v in assigned.iter_mut() {
             *v = v.clamp(usable_lo, usable_hi);
         }
         for i in (1..assigned.len()).rev() {
-            if assigned[i] - assigned[i - 1] < FAN_SEP {
-                assigned[i - 1] = assigned[i] - FAN_SEP;
+            let s = seps[i - 1];
+            if assigned[i] - assigned[i - 1] < s {
+                assigned[i - 1] = assigned[i] - s;
             }
         }
         for v in assigned.iter_mut() {
@@ -2541,6 +2672,10 @@ struct LaneEdge {
     /// and gap. Used to keep the lane band clear of obstacles that intrude
     /// into the gap.
     obstacles: Vec<(f32, f32, f32, f32)>,
+    /// M13: the edge label's knockout extent *across* the lane's run
+    /// ([`lane_label_cover`]; 0 when unlabeled) — the lane gap grows with it
+    /// (see [`label_pair_sep`]).
+    cover: f32,
 }
 
 /// Assign distinct jog flow-coordinates (lanes) to parallel cross-boundary LCA
@@ -2548,6 +2683,11 @@ struct LaneEdge {
 /// they fan out in their shared gap instead of overlapping. Returns a map from
 /// edge index to its jog flow-coordinate. A lone edge in a group gets the gap
 /// midpoint (the prior behaviour).
+///
+/// The lanes spread across the usable band with a label-aware (M13) minimum
+/// gap between adjacent lanes (see [`label_pair_sep`] / [`lane_label_cover`]):
+/// the uniform spread whenever it already clears the labels, more where a
+/// knockout would otherwise reach a neighbor's line.
 fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
     use std::collections::HashMap;
     // Group edges that share a source, source side, and gap (the flow span
@@ -2603,13 +2743,50 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
                 }
             }
         }
-        for (k, &i) in order.iter().enumerate() {
-            let lane = if n > 1 && usable_hi > usable_lo {
-                usable_lo + k as f32 * (usable_hi - usable_lo) / (n - 1) as f32
+        if n > 1 && usable_hi > usable_lo {
+            let band = usable_hi - usable_lo;
+            // Label-aware lane gaps (M13): the gap between two adjacent lanes
+            // is at least [`label_pair_sep`] (the wider knockout's reach plus
+            // [`LABEL_CLEAR`], floored at [`FAN_SEP`]) and the band's slack is
+            // shared out evenly on top — which reproduces the pre-M13 uniform
+            // spread exactly for unlabeled groups while giving labeled gaps
+            // their room first. When even the minimums overflow the band,
+            // every gap shrinks proportionally — deterministic best effort;
+            // the label placement engine's graze candidates resolve the rest.
+            let mut seps: Vec<f32> = (0..n - 1)
+                .map(|g| {
+                    label_pair_sep(
+                        edges[order[g]].cover,
+                        edges[order[g + 1]].cover,
+                        FAN_SEP,
+                        None,
+                    )
+                })
+                .collect();
+            let total: f32 = seps.iter().sum();
+            if total > band {
+                let scale = band / total;
+                for s in seps.iter_mut() {
+                    *s *= scale;
+                }
             } else {
-                gap_lo + span / 2.0
-            };
-            out.insert(edges[i].edge, lane);
+                let slack = (band - total) / (n - 1) as f32;
+                for s in seps.iter_mut() {
+                    *s += slack;
+                }
+            }
+            let used: f32 = seps.iter().sum();
+            let mut lane = usable_lo + (band - used) / 2.0;
+            for (k, &i) in order.iter().enumerate() {
+                out.insert(edges[i].edge, lane);
+                if k < seps.len() {
+                    lane += seps[k];
+                }
+            }
+        } else {
+            for &i in &order {
+                out.insert(edges[i].edge, gap_lo + span / 2.0);
+            }
         }
     }
     out
@@ -4024,6 +4201,389 @@ fn edge_waypoints(e: &OrigEdge, x: &[f32], y: &[f32], w: &[f32], h: &[f32]) -> V
     pts
 }
 
+// ============ M13 — label placement engine + parallel-edge spacing ============
+//
+// Edge labels used to be placed blind at the midpoint of their polyline's
+// longest segment — the M9 known limitation: in a crowded gap one label's
+// white knockout covered a neighboring edge's line or another label's text.
+// M13 moves the anchor decision into the layout: `assemble` computes each
+// label's anchor where the complete routed geometry is known and stores it on
+// the `EdgePath` (a per-edge field, so the index-correspondence invariant is
+// safe); the renderer just draws the knockout rect + text at the anchor.
+//
+// The placement engine enumerates candidate anchors along the polyline
+// (offsets along the segments — centered on the line, plus the two
+// perpendicular "graze" variants whose knockout edge still crosses the line
+// while the bulk of the rect clears one side), scores each against what it
+// must dodge — other edges' segments, other labels' knockouts, node rects,
+// frame borders and titles — and takes the deterministic minimum: a greedy
+// pass in declaration order, then one refinement pass in the same fixed order
+// in which each label re-optimizes against every other label's current rect
+// and moves only on a strict improvement. No randomness anywhere.
+//
+// The spacing half makes the M9 fan/lane separation label-aware: the gap
+// between two adjacent fan ports or jog lanes grows with the labels' knockout
+// sizes ([`label_pair_sep`] + [`side_label_cover`] / [`lane_label_cover`]), so
+// an on-line knockout cannot reach a neighbor's line wherever the room
+// exists; the graze candidates resolve what remains.
+
+/// The knockout rect size `(width, height)` of an edge label: the measured
+/// text block plus [`LABEL_PAD`] each side — exactly the rect the renderer
+/// draws around the anchor [`place_labels`] picks. This is the single
+/// definition both sides use (the renderer re-derives it from the same two
+/// constants); keep the formulas together.
+fn label_box(label: &str) -> (f32, f32) {
+    let m = text::measure(label, EDGE_LABEL_SIZE);
+    (m.width + 2.0 * LABEL_PAD, m.height + 2.0 * LABEL_PAD)
+}
+
+/// The knockout rect (top-left `(x, y, w, h)` form) of a label of knockout
+/// `size` centered at `anchor`.
+fn label_rect(anchor: (f32, f32), size: (f32, f32)) -> (f32, f32, f32, f32) {
+    (anchor.0 - size.0 / 2.0, anchor.1 - size.1 / 2.0, size.0, size.1)
+}
+
+/// The minimum gap between two adjacent parallel runs where one of their
+/// labels may sit (M13): at least `base` ([`FAN_SEP`] for fan ports, the
+/// uniform lane spread for lanes), and enough that neither on-line knockout
+/// reaches the other's line — half the wider label's cross-run knockout
+/// extent (`cover_a` / `cover_b` from [`side_label_cover`] /
+/// [`lane_label_cover`]; 0 for an unlabeled edge) plus [`LABEL_CLEAR`].
+/// `cap` bounds the label-aware bump where the runs cannot spread further
+/// (fan ports on a real node side — see [`FAN_LABEL_CAP`]; lanes need no cap,
+/// their gap band clamps them).
+fn label_pair_sep(cover_a: f32, cover_b: f32, base: f32, cap: Option<f32>) -> f32 {
+    let cover = cover_a.max(cover_b);
+    if cover <= 0.0 {
+        return base;
+    }
+    let mut need = cover / 2.0 + LABEL_CLEAR;
+    if let Some(c) = cap {
+        need = need.min(c);
+    }
+    base.max(need)
+}
+
+/// A label's knockout extent *across* the runs leaving a node `side` (M13):
+/// the runs follow the side's normal, so the covering reach is the knockout's
+/// width for a Top/Bottom side (vertical runs) and its height for a Left/Right
+/// side (horizontal runs). 0 for an unlabeled edge.
+fn side_label_cover(side: Side, size: Option<(f32, f32)>) -> f32 {
+    match (side, size) {
+        (Side::Top | Side::Bottom, Some((w, _))) => w,
+        (Side::Left | Side::Right, Some((_, h))) => h,
+        (_, None) => 0.0,
+    }
+}
+
+/// A label's knockout extent *across* a jog lane's run (M13): the run follows
+/// the cross axis, so the covering reach is the knockout's flow-axis extent —
+/// its height for a vertical flow (horizontal runs), its width for a
+/// horizontal flow (vertical runs). 0 for an unlabeled edge.
+fn lane_label_cover(axis: FlowAxis, size: Option<(f32, f32)>) -> f32 {
+    match (axis, size) {
+        (FlowAxis::Vertical, Some((_, h))) => h,
+        (FlowAxis::Horizontal, Some((w, _))) => w,
+        (_, None) => 0.0,
+    }
+}
+
+/// The rect a subgraph's rendered title text occupies (M13 — the label
+/// placement engine keeps knockouts off it): `x ∈ [frame.x + FRAME_TITLE_X,
+/// … + measured width]`, `y ∈ [frame.y + FRAME_TITLE_TOP, … + lines *
+/// line_height]` — matching the renderer's hanging-baseline title block.
+fn title_text_rect(frame: (f32, f32, f32, f32), title: &str) -> (f32, f32, f32, f32) {
+    let n = text::line_count(title);
+    let lh = text::line_height(FRAME_TITLE_FONT_SIZE);
+    let w = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
+    (
+        frame.0 + FRAME_TITLE_X,
+        frame.1 + FRAME_TITLE_TOP,
+        w,
+        n as f32 * lh,
+    )
+}
+
+/// Candidate tap fractions along a segment, in preference order — the segment
+/// midpoint (the classic longest-segment look) first.
+const LABEL_TAPS: [f32; 5] = [0.5, 1.0 / 3.0, 2.0 / 3.0, 0.25, 0.75];
+/// How much of its own line a graze (offset) label's knockout still covers:
+/// the graze slides the rect perpendicular to the line until only this much
+/// of its half-extent hangs over — the line still reads as broken behind the
+/// text while the bulk of the knockout clears one side.
+const LABEL_ON_LINE: f32 = 2.5;
+/// A peer edge line this close to the knockout edge still counts as covered:
+/// the drawn stroke is 1.5 px wide, centered on the centerline the clearance
+/// math uses.
+const LABEL_HIT_PAD: f32 = 1.0;
+// Scoring weights — deterministic, and the collision terms dominate the
+// preference terms (which only break ties between equally clear candidates;
+// their combined range is well below one covered pixel of peer line).
+/// Per pixel of a peer edge's line hidden under the knockout. High: covering
+/// a foreign line is exactly the defect this milestone eliminates.
+const COVER_W: f32 = 25.0;
+/// Per px² of another label's knockout overlapped, plus a flat term.
+const LABEL_OVERLAP_W: f32 = 0.35;
+const LABEL_OVERLAP_FLAT: f32 = 30.0;
+/// Per px² of node interior covered, plus a flat term (heaviest: a label on a
+/// node reads as part of the node).
+const NODE_OVERLAP_W: f32 = 1.0;
+const NODE_OVERLAP_FLAT: f32 = 120.0;
+/// Per px² of frame border/title covered, plus a flat term.
+const FRAME_OVERLAP_W: f32 = 0.4;
+const FRAME_OVERLAP_FLAT: f32 = 40.0;
+/// Preference terms: distance from the segment midpoint (keep labels
+/// centered on their run) and the graze variants' penalty (the on-line look
+/// wins wherever nothing collides).
+const TAP_W: f32 = 6.0;
+const OFFSET_W: f32 = 8.0;
+
+/// The static obstacles a label must dodge (M13): node interiors, subgraph
+/// frame border bands (see [`border_bands`]), and title rects. Peer edge
+/// segments and other labels' knockouts are handled separately — the former
+/// per-edge (a label is *supposed* to break its own line), the latter by the
+/// greedy and refinement passes.
+struct LabelWorld {
+    nodes: Vec<(f32, f32, f32, f32)>,
+    frames: Vec<(f32, f32, f32, f32)>,
+}
+
+/// One label's winning candidate: the anchor, its preference cost, and its
+/// total cost (collisions + preference).
+struct LabelChoice {
+    anchor: (f32, f32),
+    pref: f32,
+    total: f32,
+}
+
+/// Intersection area of two `(x, y, w, h)` rects (0 when disjoint).
+fn rect_overlap_area(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> f32 {
+    let w = (a.0 + a.2).min(b.0 + b.2) - a.0.max(b.0);
+    let h = (a.1 + a.3).min(b.1 + b.3) - a.1.max(b.1);
+    if w > 0.0 && h > 0.0 {
+        w * h
+    } else {
+        0.0
+    }
+}
+
+/// The length of the segment `p0`→`p1` hidden inside rect `r` — what a
+/// knockout placed there would cover of that line (Liang–Barsky via
+/// [`segment_rect_interval`]).
+fn segment_covered_len(p0: (f32, f32), p1: (f32, f32), r: (f32, f32, f32, f32)) -> f32 {
+    let len = (p1.0 - p0.0).hypot(p1.1 - p0.1);
+    match segment_rect_interval(p0, p1, r) {
+        Some((t0, t1)) if t1 > t0 => (t1 - t0).min(1.0) * len,
+        _ => 0.0,
+    }
+}
+
+/// Candidate anchors for a label of knockout `size` along `points` (M13) —
+/// "offsets along segments": for each segment, the taps in [`LABEL_TAPS`]
+/// (clamped so the knockout fits inside the segment where it is long enough
+/// to hold it), each in up to three variants — centered on the line (the
+/// classic knockout-breaks-the-line look) and the two perpendicular grazes
+/// (the knockout's edge still crosses the line by [`LABEL_ON_LINE`], so the
+/// break reads, but its bulk clears one side — the escape hatch for a crowded
+/// parallel run). Returned in preference order — longest segment first (its
+/// midpoint is the classic choice), then by tap, on-line before the grazes —
+/// each with its preference cost; equal-cost ties in [`best_label_anchor`]
+/// go to the earlier candidate.
+fn label_candidates(points: &[(f32, f32)], size: (f32, f32)) -> Vec<((f32, f32), f32)> {
+    let mut segs: Vec<(usize, f32)> = points
+        .windows(2)
+        .enumerate()
+        .map(|(i, w)| (i, (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)))
+        .filter(|&(_, l)| l > 1e-3)
+        .collect();
+    segs.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
+    let mut out: Vec<((f32, f32), f32)> = Vec::new();
+    for &(si, len) in &segs {
+        let (a, b) = (points[si], points[si + 1]);
+        let (ux, uy) = ((b.0 - a.0) / len, (b.1 - a.1) / len);
+        // Axis-aligned (the routed case): `along` is the knockout's extent
+        // along the run (rw for a horizontal one, rh for a vertical one) and
+        // `perp` its extent across it; the support form also covers a stray
+        // diagonal segment.
+        let along = (ux.abs() * size.0 + uy.abs() * size.1).max(1e-3);
+        let perp = (uy.abs() * size.0 + ux.abs() * size.1).max(1e-3);
+        for &t in &LABEL_TAPS {
+            let mut s = t * len;
+            if len >= along {
+                s = s.clamp(along / 2.0, len - along / 2.0);
+            }
+            let p = (a.0 + ux * s, a.1 + uy * s);
+            let tap_cost = TAP_W * (2.0 * (s / len) - 1.0).abs();
+            push_unique(&mut out, (p, tap_cost));
+            let d = perp / 2.0 - LABEL_ON_LINE;
+            if d > 0.5 {
+                let n = (-uy, ux);
+                push_unique(&mut out, ((p.0 + n.0 * d, p.1 + n.1 * d), tap_cost + OFFSET_W));
+                push_unique(&mut out, ((p.0 - n.0 * d, p.1 - n.1 * d), tap_cost + OFFSET_W));
+            }
+        }
+    }
+    out
+}
+
+/// Append candidate `c` unless an essentially identical anchor is already
+/// present (clamped taps on a short segment collapse onto each other).
+fn push_unique(out: &mut Vec<((f32, f32), f32)>, c: ((f32, f32), f32)) {
+    if out
+        .iter()
+        .any(|(p, _)| (p.0 - c.0 .0).abs() < 1e-3 && (p.1 - c.0 .1).abs() < 1e-3)
+    {
+        return;
+    }
+    out.push(c);
+}
+
+/// The collision cost of putting a label's knockout rect `r` at a candidate
+/// (M13): peer edge lines hidden under it (every edge but the label's own —
+/// the knockout is *supposed* to break its own line), overlap with other
+/// labels' knockouts, node interiors, and frame borders/titles. A pure
+/// function of the rect — the preference terms ride on the candidate — so the
+/// greedy and refinement passes compare like with like.
+fn label_cost(
+    r: (f32, f32, f32, f32),
+    own: usize,
+    paths: &[Vec<(f32, f32)>],
+    world: &LabelWorld,
+    placed: &[(usize, (f32, f32, f32, f32))],
+) -> f32 {
+    let mut c = 0.0_f32;
+    let hit = inflate(r, LABEL_HIT_PAD);
+    for (pi, pts) in paths.iter().enumerate() {
+        if pi == own {
+            continue;
+        }
+        for w in pts.windows(2) {
+            c += COVER_W * segment_covered_len(w[0], w[1], hit);
+        }
+    }
+    for &(_, lr) in placed {
+        let a = rect_overlap_area(r, lr);
+        if a > 1e-6 {
+            c += LABEL_OVERLAP_FLAT + LABEL_OVERLAP_W * a;
+        }
+    }
+    for &n in &world.nodes {
+        let a = rect_overlap_area(r, n);
+        if a > 1e-6 {
+            c += NODE_OVERLAP_FLAT + NODE_OVERLAP_W * a;
+        }
+    }
+    for &f in &world.frames {
+        let a = rect_overlap_area(r, f);
+        if a > 1e-6 {
+            c += FRAME_OVERLAP_FLAT + FRAME_OVERLAP_W * a;
+        }
+    }
+    c
+}
+
+/// The minimum-total-cost candidate for one label. Ties go to the earlier
+/// candidate — the generation order of [`label_candidates`] *is* the
+/// preference order — so the result is deterministic.
+fn best_label_anchor(
+    points: &[(f32, f32)],
+    size: (f32, f32),
+    own: usize,
+    paths: &[Vec<(f32, f32)>],
+    world: &LabelWorld,
+    placed: &[(usize, (f32, f32, f32, f32))],
+) -> Option<LabelChoice> {
+    let mut best: Option<LabelChoice> = None;
+    for (anchor, pref) in label_candidates(points, size) {
+        let total = label_cost(label_rect(anchor, size), own, paths, world, placed) + pref;
+        let better = match &best {
+            Some(b) => total < b.total - 1e-6,
+            None => true,
+        };
+        if better {
+            best = Some(LabelChoice { anchor, pref, total });
+        }
+    }
+    best
+}
+
+/// The pre-M13 anchor — the midpoint of the polyline's longest segment — as
+/// the fallback for a degenerate polyline without any candidate segment.
+fn fallback_label_anchor(points: &[(f32, f32)]) -> (f32, f32) {
+    if points.is_empty() {
+        return (0.0, 0.0);
+    }
+    if points.len() == 1 {
+        return points[0];
+    }
+    let mut best_i = 0usize;
+    let mut best_len = -1.0_f32;
+    for (i, w) in points.windows(2).enumerate() {
+        let l = (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1);
+        if l > best_len {
+            best_len = l;
+            best_i = i;
+        }
+    }
+    let (a, b) = (points[best_i], points[best_i + 1]);
+    ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5)
+}
+
+/// Place every labeled edge's label (M13). `labels` and `paths` are in
+/// declaration order (one entry per edge; `None` for an unlabeled edge),
+/// `world` carries the static obstacles. Returns each edge's anchor (`None`
+/// for unlabeled edges), ready to store on the [`EdgePath`].
+///
+/// Two deterministic passes, both in declaration order: a greedy pass where
+/// each label takes the minimum-cost candidate given the labels placed before
+/// it, then one refinement pass where each label re-optimizes against every
+/// *other* label's current rect and moves only on a strict improvement (so a
+/// later label that crowded an earlier one can be relieved by moving the
+/// earlier one to its next-best spot).
+fn place_labels(
+    labels: &[Option<&str>],
+    paths: &[Vec<(f32, f32)>],
+    world: &LabelWorld,
+) -> Vec<Option<(f32, f32)>> {
+    let mut anchors: Vec<Option<(f32, f32)>> = (0..labels.len()).map(|_| None).collect();
+    let mut prefs: Vec<f32> = (0..labels.len()).map(|_| 0.0).collect();
+    let mut placed: Vec<(usize, (f32, f32, f32, f32))> = Vec::new();
+    for ei in 0..labels.len() {
+        let Some(label) = labels[ei] else { continue };
+        let size = label_box(label);
+        let choice = best_label_anchor(&paths[ei], size, ei, paths, world, &placed).unwrap_or(
+            LabelChoice {
+                anchor: fallback_label_anchor(&paths[ei]),
+                pref: 0.0,
+                total: 0.0,
+            },
+        );
+        anchors[ei] = Some(choice.anchor);
+        prefs[ei] = choice.pref;
+        placed.push((ei, label_rect(choice.anchor, size)));
+    }
+    for ei in 0..labels.len() {
+        let Some(label) = labels[ei] else { continue };
+        let size = label_box(label);
+        let Some(cur) = anchors[ei] else { continue };
+        let others: Vec<(usize, (f32, f32, f32, f32))> =
+            placed.iter().filter(|(j, _)| *j != ei).cloned().collect();
+        let cur_total = label_cost(label_rect(cur, size), ei, paths, world, &others) + prefs[ei];
+        if let Some(ch) = best_label_anchor(&paths[ei], size, ei, paths, world, &others)
+            && ch.total < cur_total - 1e-3
+        {
+            anchors[ei] = Some(ch.anchor);
+            prefs[ei] = ch.pref;
+            for p in placed.iter_mut() {
+                if p.0 == ei {
+                    p.1 = label_rect(ch.anchor, size);
+                }
+            }
+        }
+    }
+    anchors
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4106,6 +4666,9 @@ mod tests {
         for e in &l.edges {
             for &(px, py) in &e.points {
                 assert!(px.is_finite() && py.is_finite());
+            }
+            if let Some((ax, ay)) = e.label_at {
+                assert!(ax.is_finite() && ay.is_finite(), "{}->{} label anchor", e.from, e.to);
             }
         }
         for s in &l.subgraphs {
@@ -6164,6 +6727,54 @@ src --> t
     }
 
     #[test]
+    fn canvas_keeps_the_page_margin_clear_of_every_object() {
+        // Whatever routes where — forced-side escapes past the margin,
+        // around-frame runs, label knockouts overhanging their line — every
+        // drawn object (node rect, frame rect, edge waypoint, label
+        // knockout) keeps at least [`MARGIN`] clear of every canvas edge.
+        // (Strokes and arrowheads paint within a few px of the geometry
+        // checked here; the margin absorbs that.)
+        let cases: [&str; 4] = [
+            include_str!("../examples/sides.mmd"),
+            include_str!("../examples/infra.mmd"),
+            include_str!("../examples/finance.mmd"),
+            "diagram top-down\na -- \"hit\" from=\"left\" --> b\n",
+        ];
+        for src in cases {
+            let (d, l) = lay(src);
+            let check = |what: &str, x0: f32, y0: f32, x1: f32, y1: f32| {
+                assert!(x0 >= MARGIN - 1e-2, "{what}: left {x0:.2} inside the page margin");
+                assert!(y0 >= MARGIN - 1e-2, "{what}: top {y0:.2} inside the page margin");
+                assert!(
+                    x1 <= l.width - MARGIN + 1e-2,
+                    "{what}: right {x1:.2} inside the page margin (canvas {})",
+                    l.width
+                );
+                assert!(
+                    y1 <= l.height - MARGIN + 1e-2,
+                    "{what}: bottom {y1:.2} inside the page margin (canvas {})",
+                    l.height
+                );
+            };
+            for n in &l.nodes {
+                check(&n.id, n.x, n.y, n.x + n.w, n.y + n.h);
+            }
+            for s in &l.subgraphs {
+                check("frame", s.x, s.y, s.x + s.w, s.y + s.h);
+            }
+            for (i, e) in l.edges.iter().enumerate() {
+                for &(px, py) in &e.points {
+                    check("edge point", px, py, px, py);
+                }
+                if e.label_at.is_some() {
+                    let (x, y, w, h) = label_knockout_of(&d, &l, i);
+                    check("edge label", x, y, x + w, y + h);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn forced_self_loop_same_side_makes_a_bump_loop() {
         // Same-side loop: a rectangular bump hanging off the right side,
         // instead of the fixed below-node stub.
@@ -6242,5 +6853,375 @@ src -- to="right" --> t
             assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
         }
         assert_no_edge_overlaps_or_node_passage(&d, &l);
+    }
+
+    // ================= M13 — label placement & parallel spacing =================
+
+    /// The knockout rect the renderer draws for edge `i`'s label.
+    fn label_knockout_of(d: &crate::ast::Diagram, l: &Layout, i: usize) -> (f32, f32, f32, f32) {
+        let label = d.edges[i].label.as_deref().expect("edge has a label");
+        let (ax, ay) = l.edges[i].label_at.expect("labeled edge has an anchor");
+        label_rect((ax, ay), label_box(label))
+    }
+
+    /// Assert the M13 label guarantees on a laid-out diagram: exactly the
+    /// labeled edges carry anchors; each knockout touches its own line (the
+    /// read-as-broken break) while covering no other edge's line, overlapping
+    /// no other label, covering no node interior, and crossing no frame border
+    /// or title.
+    fn assert_labels_resolved(d: &crate::ast::Diagram, l: &Layout) {
+        for (e, p) in d.edges.iter().zip(&l.edges) {
+            assert_eq!(
+                p.label_at.is_some(),
+                e.label.is_some(),
+                "edge {}->{} label/anchor mismatch",
+                e.from,
+                e.to
+            );
+        }
+        let mut placed: Vec<(usize, (f32, f32, f32, f32))> = Vec::new();
+        for i in 0..d.edges.len() {
+            if d.edges[i].label.is_none() {
+                continue;
+            }
+            let p = &l.edges[i];
+            let r = label_knockout_of(d, l, i);
+            // (1) The knockout touches its own line — on-line and graze
+            // placements alike keep the break behind the text.
+            assert!(
+                (0..p.points.len().saturating_sub(1))
+                    .any(|k| segment_intersects_rect(p.points[k], p.points[k + 1], r)),
+                "label {:?} is detached from its edge {}->{}",
+                d.edges[i].label,
+                p.from,
+                p.to
+            );
+            // (2) It covers no other edge's line — the defect M13 eliminates.
+            let hit = inflate(r, LABEL_HIT_PAD);
+            for (j, q) in l.edges.iter().enumerate() {
+                if j == i {
+                    continue;
+                }
+                for w in q.points.windows(2) {
+                    let covered = segment_covered_len(w[0], w[1], hit);
+                    assert!(
+                        covered < 0.5,
+                        "label {:?} covers {:.1}px of edge {}->{}",
+                        d.edges[i].label,
+                        covered,
+                        q.from,
+                        q.to
+                    );
+                }
+            }
+            // (3) It overlaps no other label's knockout.
+            for &(j, or_) in &placed {
+                assert!(
+                    rect_overlap_area(r, or_) <= 0.0,
+                    "labels {:?} (#{i}) and {:?} (#{j}) overlap",
+                    d.edges[i].label,
+                    d.edges[j].label
+                );
+            }
+            // (4) It covers no node interior.
+            for n in &l.nodes {
+                assert!(
+                    rect_overlap_area(r, (n.x, n.y, n.w, n.h)) <= 0.0,
+                    "label {:?} covers node {}",
+                    d.edges[i].label,
+                    n.id
+                );
+            }
+            // (5) It crosses no frame border and covers no frame title.
+            for s in &l.subgraphs {
+                for b in border_bands((s.x, s.y, s.w, s.h)) {
+                    assert!(
+                        rect_overlap_area(r, b) <= 0.0,
+                        "label {:?} crosses the border of frame #{}",
+                        d.edges[i].label,
+                        s.index
+                    );
+                }
+                if let Some(t) = d.subgraphs[s.index].title.as_deref() {
+                    let tr = title_text_rect((s.x, s.y, s.w, s.h), t);
+                    assert!(
+                        rect_overlap_area(r, tr) <= 0.0,
+                        "label {:?} covers the title {t:?} of frame #{}",
+                        d.edges[i].label,
+                        s.index
+                    );
+                }
+            }
+            placed.push((i, r));
+        }
+    }
+
+    #[test]
+    fn labels_are_resolved_on_the_samples() {
+        for src in [
+            include_str!("../examples/finance.mmd"),
+            include_str!("../examples/infra.mmd"),
+            include_str!("../examples/subdirection.mmd"),
+            include_str!("../examples/sides.mmd"),
+        ] {
+            let (d, l) = lay(src);
+            assert_labels_resolved(&d, &l);
+        }
+    }
+
+    #[test]
+    fn label_placement_is_deterministic() {
+        let src = include_str!("../examples/finance.mmd");
+        let (d1, l1) = lay(src);
+        let (d2, l2) = lay(src);
+        let a1: Vec<_> = d1
+            .edges
+            .iter()
+            .zip(&l1.edges)
+            .map(|(e, p)| (e.label.clone(), p.label_at))
+            .collect();
+        let a2: Vec<_> = d2
+            .edges
+            .iter()
+            .zip(&l2.edges)
+            .map(|(e, p)| (e.label.clone(), p.label_at))
+            .collect();
+        assert_eq!(a1, a2);
+    }
+
+    #[test]
+    fn clear_straight_edge_label_sits_at_its_midpoint() {
+        let (_d, l) = lay("diagram top-down\na -- \"sync\" --> b\n");
+        let (ax, ay) = l.edges[0].label_at.expect("anchor");
+        let p = &l.edges[0].points;
+        assert_eq!(p.len(), 2, "straight edge");
+        assert!((ax - (p[0].0 + p[1].0) / 2.0).abs() < 1e-3, "x off midpoint: {ax}");
+        assert!((ay - (p[0].1 + p[1].1) / 2.0).abs() < 1e-3, "y off midpoint: {ay}");
+    }
+
+    #[test]
+    fn unobstructed_label_sits_on_the_longest_run_midpoint() {
+        // The classic look kept: when nothing collides, the anchor is the
+        // longest segment's midpoint — the pre-M13 policy.
+        let labels = [Some("hello world"), None];
+        let paths = vec![
+            vec![(0.0, 0.0), (0.0, 10.0), (40.0, 10.0), (40.0, 20.0)],
+            Vec::new(),
+        ];
+        let world = LabelWorld {
+            nodes: Vec::new(),
+            frames: Vec::new(),
+        };
+        let anchors = place_labels(&labels, &paths, &world);
+        assert_eq!(anchors[0], Some((20.0, 10.0)));
+        assert_eq!(anchors[1], None);
+    }
+
+    #[test]
+    fn degenerate_polyline_falls_back_to_the_old_anchor() {
+        let labels = [Some("x"), Some("y")];
+        let world = LabelWorld {
+            nodes: Vec::new(),
+            frames: Vec::new(),
+        };
+        let anchors = place_labels(&labels, &[vec![(3.0, 4.0)], Vec::new()], &world);
+        assert_eq!(anchors[0], Some((3.0, 4.0)));
+        assert_eq!(anchors[1], Some((0.0, 0.0)));
+    }
+
+    #[test]
+    fn refinement_pass_frees_a_label_crowded_by_a_later_one() {
+        // L1 has a long free vertical run with several good spots; L2 sits on
+        // a short stub beside the best one and is forced onto it (its graze
+        // escapes are blocked by a third line and by L1's own line). The
+        // greedy pass — L1 first, blind to L2 — strands L1's knockout under
+        // L2's; the refinement pass moves L1 to its next-best spot. Geometry
+        // (derived from the real knockout sizes):
+        //
+        //   L1: vertical run at x1 (y 0..200); its midpoint knockout spans
+        //       [x1 - w1/2, x1 + w1/2].
+        //   L2: 8px stub at x2 = x1 - w2/2 - w1/4 — far enough that L2's
+        //       on-line knockout stops short of L1's line, near enough that it
+        //       still reaches into L1's midpoint knockout; L2's right graze
+        //       covers L1's line, its left graze a third line at
+        //       x3 = x2 - 0.75 * w2.
+        let l1 = "LLLLL";
+        let l2 = "HHHHHHHH";
+        let (w1, _h1) = label_box(l1);
+        let (w2, _h2) = label_box(l2);
+        let x1 = 200.0_f32;
+        let x2 = x1 - w2 / 2.0 - w1 / 4.0;
+        let x3 = x2 - 0.75 * w2;
+        let labels = [Some(l1), Some(l2), None];
+        let paths = vec![
+            vec![(x1, 0.0), (x1, 200.0)],
+            vec![(x2, 96.0), (x2, 104.0)],
+            vec![(x3, 85.0), (x3, 115.0)],
+        ];
+        let world = LabelWorld {
+            nodes: Vec::new(),
+            frames: Vec::new(),
+        };
+        let anchors = place_labels(&labels, &paths, &world);
+        let a1 = anchors[0].expect("L1 anchor");
+        let a2 = anchors[1].expect("L2 anchor");
+        // L2 keeps its one clear spot (mid-stub)...
+        assert!((a2.0 - x2).abs() < 1e-3, "L2 should stay on its stub: {a2:?}");
+        assert!((a2.1 - 100.0).abs() < 4.0, "L2 should stay mid-stub: {a2:?}");
+        // ...while L1, crowded there by L2's knockout, moves off the midpoint.
+        assert!(a1.1 < 80.0, "L1 should move clear of L2: {a1:?}");
+        assert_eq!(
+            rect_overlap_area(label_rect(a1, label_box(l1)), label_rect(a2, label_box(l2))),
+            0.0,
+            "refinement should leave the knockouts disjoint"
+        );
+    }
+
+    #[test]
+    fn label_pair_sep_grows_with_the_knockout_and_respects_its_bounds() {
+        // Unlabeled pairs keep the base gap.
+        assert_eq!(label_pair_sep(0.0, 0.0, FAN_SEP, None), FAN_SEP);
+        // A labeled pair clears the wider knockout's half-extent + LABEL_CLEAR.
+        assert_eq!(label_pair_sep(20.0, 0.0, FAN_SEP, None), 20.0 / 2.0 + LABEL_CLEAR);
+        assert_eq!(label_pair_sep(20.0, 30.0, FAN_SEP, None), 30.0 / 2.0 + LABEL_CLEAR);
+        // The fan bump is capped (a fan must fit real node sides); lanes are
+        // not (their gap band clamps them).
+        assert_eq!(
+            label_pair_sep(200.0, 200.0, FAN_SEP, Some(FAN_LABEL_CAP)),
+            FAN_LABEL_CAP
+        );
+        assert_eq!(
+            label_pair_sep(200.0, 200.0, FAN_SEP, None),
+            200.0 / 2.0 + LABEL_CLEAR
+        );
+        // The base floor wins where it already clears the label.
+        assert_eq!(label_pair_sep(4.0, 4.0, 30.0, None), 30.0);
+    }
+
+    #[test]
+    fn labeled_fan_ports_spread_wider_than_unlabeled() {
+        // Three edges sharing one node side, wanting nearly the same port
+        // cross. Unlabeled they keep their desired crosses; with labels they
+        // fan wider so an on-line knockout cannot reach the neighbor's line.
+        let mk = |cover: f32| -> Vec<PortEnd> {
+            [100.0, 110.0, 120.0]
+                .iter()
+                .enumerate()
+                .map(|(k, &x)| PortEnd {
+                    edge: k,
+                    is_from: true,
+                    node_idx: 0,
+                    node_rect: (0.0, 0.0, 300.0, 40.0),
+                    side: Side::Top,
+                    other_cross: x,
+                    cover,
+                })
+                .collect()
+        };
+        let sorted = |m: &std::collections::HashMap<(usize, bool), f32>| -> Vec<f32> {
+            let mut v: Vec<f32> = (0..3).map(|k| m[&(k, true)]).collect();
+            v.sort_by(|a, b| a.total_cmp(b));
+            v
+        };
+        let plain = sorted(&separate_ports(&mk(0.0)));
+        let labeled = sorted(&separate_ports(&mk(45.0)));
+        assert!(
+            plain[1] - plain[0] < 15.0 && plain[2] - plain[1] < 15.0,
+            "unlabeled fan keeps its tight desired crosses: {plain:?}"
+        );
+        // 45-wide knockouts: at least FAN_LABEL_CAP (>= 45/2 + LABEL_CLEAR)
+        // apart where the side has the room (it has: 300px wide).
+        assert!(
+            labeled[1] - labeled[0] >= FAN_LABEL_CAP - 1e-3
+                && labeled[2] - labeled[1] >= FAN_LABEL_CAP - 1e-3,
+            "labeled fan must spread: {labeled:?}"
+        );
+    }
+
+    #[test]
+    fn labeled_lanes_take_their_room_before_the_slack() {
+        // Three parallel cross-boundary edges in one gap: the first carries a
+        // wide (60px) two-line label, the others none. The labeled gap grows
+        // to clear its knockout (60/2 + LABEL_CLEAR) and the slack is shared
+        // on top — while an unlabeled group still spreads perfectly evenly
+        // (the pre-M13 behaviour).
+        let lanes = |covers: [f32; 3]| -> Vec<f32> {
+            let edges: Vec<LaneEdge> = covers
+                .iter()
+                .enumerate()
+                .map(|(k, &c)| LaneEdge {
+                    edge: k,
+                    rep_from: ItemRef::Node(0),
+                    from_side: Side::Bottom,
+                    rep_to: ItemRef::Node(1),
+                    from_flow: 0.0,
+                    to_flow: 100.0,
+                    from_cross: k as f32,
+                    axis: FlowAxis::Vertical,
+                    cover: c,
+                    obstacles: Vec::new(),
+                })
+                .collect();
+            let m = assign_lanes(&edges);
+            (0..3).map(|k| m[&k]).collect()
+        };
+        let plain = lanes([0.0, 0.0, 0.0]);
+        let labeled = lanes([60.0, 0.0, 0.0]);
+        assert!(
+            (plain[1] - plain[0] - (plain[2] - plain[1])).abs() < 1e-3,
+            "unlabeled lanes spread evenly: {plain:?}"
+        );
+        assert!(
+            labeled[1] - labeled[0] >= 60.0 / 2.0 + LABEL_CLEAR - 1e-3,
+            "the labeled lane's gap must clear its knockout: {labeled:?}"
+        );
+        assert!(
+            labeled[1] - labeled[0] > plain[1] - plain[0],
+            "labels must widen their lane gap: {labeled:?} vs {plain:?}"
+        );
+        assert!(
+            labeled[2] - labeled[1] >= FAN_SEP - 1e-3,
+            "the unlabeled gap keeps its floor: {labeled:?}"
+        );
+    }
+
+    // ================= M13 — label placement (inspection) =================
+    #[test]
+    #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
+    fn _dump_labels_for_inspection() {
+        for (name, src) in [
+            ("finance", include_str!("../examples/finance.mmd")),
+            ("infra", include_str!("../examples/infra.mmd")),
+            ("subdirection", include_str!("../examples/subdirection.mmd")),
+        ] {
+            let (d, l) = lay(src);
+            println!("== {name} ==");
+            for (i, e) in d.edges.iter().enumerate() {
+                let Some(label) = e.label.as_deref() else { continue };
+                let Some((ax, ay)) = l.edges[i].label_at else {
+                    println!("  {label:?} NO ANCHOR");
+                    continue;
+                };
+                let (w, h) = label_box(label);
+                let r = label_rect((ax, ay), (w, h));
+                // peer coverage
+                let hit = inflate(r, LABEL_HIT_PAD);
+                let mut covered = 0.0;
+                for (j, p) in l.edges.iter().enumerate() {
+                    if j == i { continue; }
+                    for s in p.points.windows(2) {
+                        let c = segment_covered_len(s[0], s[1], hit);
+                        if c > 0.05 {
+                            println!("    covers {}->{} {:.1}px", p.from, p.to, c);
+                        }
+                        covered += c;
+                    }
+                }
+                println!(
+                    "  {label:?} at ({:.1},{:.1}) rect [{:.1},{:.1},{:.1},{:.1}] peer_covered={:.1}",
+                    ax, ay, r.0, r.1, r.2, r.3, covered
+                );
+            }
+        }
     }
 }

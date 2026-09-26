@@ -23,3 +23,9 @@ dejavu = { workspace = true }
 [[bin]]
 name = "diagrammer"
 path = "src/main.rs"
+
+[profile.release]
+# Ship stripped binaries (no hand-run `strip` step). Debug info is not used by
+# anything in this project; keeping it out of the artifact keeps releases small
+# and the output deterministic across build machines.
+strip = true

@@ -1,21 +1,17 @@
 diagram top-down
-#    prddns "prd.finance.example.com"
-    user "User" fill="#c0e1fc" color="#2196F3"
 
-    group "Tencent" fill="#f2f8f4" color="#88BDA4"
-#        group "Public subnets" line="dotted"
-            pubclb "Public CLB" fill="#c0e1fc" color="#2196F3"
-            vpn "VPN Endpoint" fill="#c0e1fc" color="#2196F3"
-#        end
-        group "Private subnets" fill="#f2f8f4" color="#88BDA4"
-            prvclb "Private CLB" fill="#c0e1fc" color="#2196F3"
-#            prdtechdns "prd-tech.finance.example.com"
-            cvm1 "Middleware" fill="#c0e1fc" color="#2196F3"
-            cvm2 "Platform" fill="#c0e1fc" color="#2196F3"
-            cvm3 "Application" fill="#c0e1fc" color="#2196F3"
-            cvm4 "Algorithm" fill="#c0e1fc" color="#2196F3"
-            cvm5 "MultiDim DB" fill="#c0e1fc" color="#2196F3"
-            db "TDSQL DB" : cylinder fill="#c0e1fc" color="#2196F3"
+    user "User"
+    group "Tencent"
+        pubclb "Public CLB"
+        vpn "VPN Endpoint"
+        group "Private subnets"
+            prvclb "Private CLB"
+            cvm1 "Middleware"
+            cvm2 "Platform"
+            cvm3 "Application"
+            cvm4 "Algorithm"
+            cvm5 "MultiDim DB"
+            db "TDSQL DB" : cylinder
         end
     end
 

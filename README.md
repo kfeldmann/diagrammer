@@ -10,7 +10,7 @@ The written SVG is self-contained and GitHub-renderable (no scripts or external 
 
 ## Example SVGs
 
-!(snapshots/cluster.svg) !(snapshots/subdirection.svg)
+![Cluster diagram example](snapshots/cluster.svg) ![Example demonstrating mutliple group directions](snapshots/subdirection.svg)
 
 ## Usage
 

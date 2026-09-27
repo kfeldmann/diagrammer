@@ -1,0 +1,43 @@
+diagram top-down
+
+group left-right fill="#fff" color="#fff"
+  group "Application"
+    group "LB Security Group" line="dashed"
+      lb "Load\nBalancer"
+    end
+    group "DB Security Group" line="dashed"
+      db "Database" :cylinder
+    end
+    group "Cache Security Group" line="dashed"
+      cache "Cache" :cylinder
+    end
+  end
+  group "Shared Services"
+    group top-down "Kubernetes Node Group"
+      group "Node Group\nSecurity Group" line="dashed"
+        n1 "Node 1"
+        n2 "Node 2"
+        n3 "Node 3"
+      end
+    end
+  end
+end
+
+#user "User" -- "443" --> lb
+user "User" -- to="right" --> lb
+#user "User" -- to="left" --> lb
+
+lb -- "8080" color="#b00"--> n1
+lb -- "8080" color="#b00"--> n2
+lb -- "8080" color="#b00"--> n3
+
+n1 -- "3306" color="#00b" --> db
+n2 -- "3306" color="#00b" --> db
+n3 -- "3306" color="#00b" --> db
+
+n1 -- dashed color="#0b0" --> cache
+n2 -- dashed color="#0b0" --> cache
+n3 -- dashed color="#0b0" --> cache
+
+n1 -- dotted --> n2 -- dotted --> n3
+n3 -- dotted --> n2 -- dotted --> n1

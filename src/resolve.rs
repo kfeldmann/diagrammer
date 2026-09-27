@@ -272,22 +272,22 @@ impl Ctx {
             // only mean re-placement. Occurrences at top level never move a
             // node: membership is decided by group bodies alone, so source
             // order cannot silently un-group a node.
-            if let Some(g) = group {
-                if !info.placed_groups.contains(&g) {
-                    let cross_boundary_ref = !is_standalone && !info.placed_groups.is_empty();
-                    if !cross_boundary_ref {
-                        info.placed_groups.push(g);
-                        if info.placed_groups.len() >= 2 {
-                            return Err(Error::Resolve {
-                                offset: occ.offset,
-                                message: format!(
-                                    "node `{}` appears in more than one group",
-                                    occ.id
-                                ),
-                            });
-                        }
-                        info.membership = Some(g);
+            if let Some(g) = group
+                && !info.placed_groups.contains(&g)
+            {
+                let cross_boundary_ref = !is_standalone && !info.placed_groups.is_empty();
+                if !cross_boundary_ref {
+                    info.placed_groups.push(g);
+                    if info.placed_groups.len() >= 2 {
+                        return Err(Error::Resolve {
+                            offset: occ.offset,
+                            message: format!(
+                                "node `{}` appears in more than one group",
+                                occ.id
+                            ),
+                        });
                     }
+                    info.membership = Some(g);
                 }
             }
         } else {

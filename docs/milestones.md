@@ -6,8 +6,9 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0–M7.5 and M9–M13 are complete (M12 was absorbed by
-M11.5). **M8 (CLI polish) is the only remaining milestone.**
+**Current position:** M0–M7.5 and M9–M14 are complete (M12 was absorbed by
+M11.5), plus the post-M13 hardening pass below. **M8 (CLI polish) is the only
+remaining milestone.**
 
 ---
 
@@ -40,8 +41,11 @@ diagram. Layout and rendering are stubbed (`todo!()`).
       group membership (a node may belong to at most one group), reject
       per-group direction.
 - [x] Cross-boundary edges do **not** relocate a node (the Mermaid/dagre
-      behavior we want to escape). Standalone occurrences and new implicit
-      declarations set membership; edge endpoints are pure references.
+      behavior we want to escape). Occurrences inside a `group` body set
+      membership — standalone declarations and edge-chain endpoints alike
+      (an edge endpoint naming a node already placed in another group is a
+      cross-boundary reference and leaves it put); occurrences at top level
+      never move a node.
 - [x] Minimal CLI: `diagrammer <input.dgmr>` validates and prints a summary
       (`ok: N nodes, M edges, K groups (direction ...)`).
 - [x] Test suite: 20 tests covering parse, resolve, and error cases.
@@ -552,7 +556,9 @@ explicit to mitigate ugly routing.
       (direct edges) and `sides_along` (cross-boundary LCA segments).
 - [x] **Literal semantics** (decided): the forced side is **always honored** —
       the port lands on the requested side, with no automatic reversion to the
-      algorithm's choice. The attribute is an override; silently
+      algorithm's choice. (M14 later narrowed the *scope*: the forced side is
+      honored literally at the endpoint **node**; the group frames an edge
+      crosses keep their natural sides — see M14.) The attribute is an override; silently
       second-guessing it would leave the user unable to tell whether it did
       anything. A side that contradicts the approach direction is routed
       around (cf. `try_around_target_route`); the result may be ugly, and
@@ -681,6 +687,61 @@ flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
       grid, deterministic priority) — not another per-case patch. Record the
       verdict in this section; explicitly out of scope to build here.
 
+      **Verdict (recorded retroactively, post-M13): YES — the criterion is
+      met; the next routing move is the global pass, not another patch.** The
+      unified regime satisfies the invariants only through per-case fallbacks,
+      and they fire on the canonical samples:
+
+      1. **The last-resort Z is an invariant-breaking fallback, and it fires
+         on a sample.** A sweep of all 11 golden snapshots for edge segments
+         cutting node interiors finds exactly one violation:
+         `examples/sides.dgmr`, `api -- from="top" --> db` — the
+         kept-unconditional ladder fallback draws two segments through `api`,
+         against the M11 promise ("routed around … never through a node").
+         `bus -- from="right" to="left" --> queue` on the same sample also
+         falls through the entire ladder (2 of 7 edges). Structurally, both
+         `route_lca` Z rungs are dead for every *contradictory* forced side —
+         the escape plus the flow-first Z always re-crosses the source box —
+         so such edges are `track_route`-or-bust and the fallback fires
+         whenever the world is crowded.
+      2. **The root cause is a resource conflict the one-pass regime cannot
+         arbitrate — and it is a regression the per-case regime caused
+         itself.** Both failures seal a forced port's `SIDE_ESCAPE` pocket
+         inside the 8 px `SEGMENT_OBSTACLE_PAD` bands of already-routed peer
+         segments (margins observed: 0.31 px — `api --> cache`'s vertical run
+         vs. `db`'s top-port corridor — and 3 px — the worker self-loop's
+         stub); `seg_clear_padded` bars parallel overlap absolutely, so
+         `track_route`'s Dijkstra cannot leave the point and returns empty.
+         Reverting `SEGMENT_OBSTACLE_PAD` to the pre-hardening 5 px makes the
+         edge route exactly as expected (up, left, down into `db`): the
+         hardening's parallel-minimum bump, meeting immutable hard bands in a
+         declaration-order router, traded the no-node-pass-through invariant
+         for the no-parallel-riding one. Two invariants ping-ponging under
+         local tweaks is exactly the signal this item was written to catch.
+      3. **No per-case patch fixes it inside the invariants.** Restoring
+         "never through a node" requires moving an already-routed edge
+         (rip-up / simultaneous assignment — absent from the architecture) or
+         carving new exemptions (port-corridor escapes, pad shrink near
+         ports) — more per-case fallbacks, which is what this item rules out.
+         Extra ladder rungs (e.g. a cross-at-escape-height Z) fix one
+         instance's shape but not the seal. The adversarial shape is trivial:
+         any routed L-corner within ~8 px of another edge's port escape seals
+         it (the self-loop stub in `sides.dgmr` is exactly this).
+
+      So: the global pass, when scheduled, with three requirements the
+      failures dictate — peer edge segments as *soft* (negotiable) occupancy,
+      not hard bands; a reserved approach right-of-way for every node port (a
+      port must stay reachable — both failures are unreachable endpoints);
+      and rip-up-and-reroute or simultaneous assignment so route quality stops
+      depending on declaration order. Still explicitly out of scope here.
+      The post-M13 **sealed-port fallback** (see the hardening section above)
+      addresses the two named failures locally — when no route is found it
+      slides a lone side's port along its side until an escape pocket opens,
+      restoring "never through a node" on `examples/sides.dgmr` (swept with
+      no carve-out) — but it is a port-side mitigation, not the arbitration
+      this item calls for: the quality and order-dependence points above
+      stand until the global pass lands.
+
 **Blocked by:** M11. **Blocks:** M13 (they build on the final geometry so the
 cosmetic work is done once).
 
@@ -769,10 +830,169 @@ used to sit half-behind a node — `tech.finance.example.com\n443` over
 
 ---
 
+## ✅ Post-M13 hardening — nested title detours, title-fit frames, non-crossing fan lanes, sealed-port fallback
+
+Plus a **M13.1 obstacle-set flip** (recorded here; see its own entry below):
+label knockouts now dodge rendered **arrowheads** and deliberately pay no
+attention to **group frame borders** (a label may cross a group's outline;
+only the title text stays clear).
+
+Three defects found on a nested `cluster.dgmr` shape; all fixed in
+`src/layout.rs` with regression tests. Plus a later routing hardening item
+(the sealed-port fallback) that closes the M11.5 known-broken case.
+
+- [x] **Nested title detours.** The M5.5/M10 detour only fired for
+      single-frame chains (`chain.len() == 1`), so a stub entering a titled
+      frame nested inside another frame ran straight through the inner
+      title (`user --> lb` vs. "Application"). `title_detours` now builds a
+      per-chain-frame detour list (innermost first): each titled frame is
+      crossed beside its title with a jog below it, a clear/untitled frame
+      carries the descent coordinate straight through (an untitled frame
+      between two detoured ones costs no jog), and the rep port sits at the
+      outermost crossing coordinate. `cross_boundary_reach` grew to reserve
+      the jog band ([`CROSS_FRAME_PAD`]) for *titled* frames anywhere in a
+      top-down cross-boundary chain (untitled deeper frames never host a
+      jog; horizontal stubs never detour).
+- [x] **Titled frames fit their titles in any viewer.** The frame-width floor
+      was `title_w + 2·FRAME_TITLE_X` — 10 px per side, no font-fallback
+      allowance — so a title spilled its frame whenever the viewer resolved
+      a face wider than the measured one ("Kubernetes Node Group"). The
+      floor is now `FRAME_TITLE_X + title_w + title_clear_gap(title_w)` —
+      the same fallback-safe margin the detour entries use — for every
+      titled frame, any title width.
+- [x] **Non-crossing fan lane order.** Lanes were assigned in source-port
+      order, which forces crossings when a target's entry row falls between
+      the source fan's rows (a target nearly level with the source): one
+      sibling's descent crossed the next sibling's source run and then ran
+      parallel 2 px from it (`lb --> n2` on `lb --> n1`). `lane_order` now
+      topologically sorts the lane group by the non-crossing constraint
+      (for Z-routes, `a` before `b` is illegal when `b`'s source cross falls
+      in `V_a` or `a`'s target cross falls in `V_b`; a right-to-left gap
+      mirrors), deterministic with a base-order tie-break. The enforced
+      parallel minimum (`SEGMENT_OBSTACLE_PAD`) also grew 5 → 8 px — still
+      below `FAN_SEP` so fan lanes clear — keeping the invariant soft
+      (crossings legal, terminal fallback kept: "where achievable").
+- [x] **Sealed-port fallback — a lone side's port may slide.** The M11.5
+      verdict below records the ladder's sealed-port failure: a peer
+      segment's padded band within `SEGMENT_OBSTACLE_PAD` of a port escape
+      seals the pocket, `track_route` cannot leave the port at all, and the
+      kept-unconditional terminal Z is drawn even when it cuts through a
+      node (the `api -- from="top" --> db` and
+      `bus -- from="right" to="left" --> queue` shapes of
+      `examples/sides.dgmr`). Now, when *no* candidate route clears the
+      obstacle world, `route_edge`'s dispatch falls back to
+      `port_fallback_route`: the edge retries with its free ports slid
+      along their sides — the `PORT_INSET` corner ports (the same
+      usable-span ends the fan draws between, i.e. the "7 px from the
+      corner" positions), the partner-facing one first, one end moved
+      before both — and keeps the first alternative that routes clear.
+      A free port is a *lone* side's (a shared side is
+      [`separate_ports`](../src/layout.rs)'s to place), never a self-loop's
+      or an around-target entry's; a forced side (M11) keeps its side
+      literally — only the position along it moves. The fallback only ever
+      replaces a defective route with a clear one, never trades one defect
+      for another, and is deterministic (fixed try order). This is the
+      cheap local version of the global pass's "reserved approach
+      right-of-way for every node port" requirement: it removes the
+      known-broken pass-through (the `example_edges_never_pass_through_nodes`
+      sweep now covers all five samples with no carve-out) but not the
+      resource conflict itself — the global pass still owns route quality
+      and order-independence.
+- [x] **M13.1 — label obstacle-set flip: dodge arrowheads, ignore group
+      borders.** Two corrections to M13's scoring, from real output:
+      knockouts were kept off the (often large) frame *border bands* while
+      happily sitting on a rendered *arrowhead* (e.g. a label whose longest
+      segment is the final one into its target). Now:
+      - The `LabelWorld` no longer contains `border_bands` — a label may
+        cross a group's outline freely (only the frame **title** rect stays
+        an obstacle). `assert_labels_resolved` drops the border check
+        accordingly.
+      - Every routed polyline contributes an arrowhead obstacle:
+        [`arrowhead_rect`](../src/layout.rs) — the marker triangle's
+        bounding rect (tip on the last waypoint, base `ARROW_LEN` = 10 px —
+        the renderer's `markerHeight` — back along the final segment,
+        `ARROW_HALF_W` = 5 px perpendicular each side), padded by
+        `ARROW_PAD` = 1 px — scored with its own flat + area terms
+        (`ARROW_OVERLAP_FLAT` = 80, `ARROW_OVERLAP_W` = 1.2: heavier than a
+        title, approaching a node — a hidden arrowhead reads as a broken
+        edge). The arrowhead includes the label's *own* edge: a knockout on
+        the final segment backs off along the run instead of hiding the
+        target arrow.
+      - Tests: `label_clears_the_arrowhead_of_the_final_segment` (the bend
+        before the target pushes the knockout off the marker),
+        `arrowhead_rect_bounds_the_rendered_marker`, and
+        `assert_labels_resolved` now asserts no knockout covers any edge's
+        arrowhead. Snapshots regenerated (anchors moved only where they had
+        covered arrowheads or borders).
+
+---
+
+## ✅ M14 — Forced sides apply to the endpoint node only
+
+M11's literal semantics were implemented at *every* port-decision point: the
+forced side was also applied to the group frames the edge crosses, so
+`to="right"` on a cross-boundary edge dragged the LCA-level entry to the
+outer frame's **right** border — even when the source sat above the group.
+The visible result (the `cluster` shape): an excursion around the outer
+group's right border, then a cut back across the *other* branch's frames and
+under its nodes on the way to the node. The intended meaning is narrower:
+the attribute names the side of the endpoint **node**; the group boundaries
+between the endpoints keep the layout's natural crossings.
+
+- [x] Each end's sides are split in [`EdgeCtx`](../src/layout.rs): the node
+      side (forced or implicit) and the frame side (always [`sides_along`]'s
+      implicit one). Rep ports, chain crossings, title detours and the LCA
+      segment use the frame sides; only the node ports use the forced side.
+- [x] A **mismatched** end (forced side ≠ implicit side) gets a structured
+      stub ([`mismatched_stub`]): the rep crossing is clamped into the clear
+      corridor beside the node ([`mismatched_rep_cross`] — clear of the
+      node's siblings at every chain level and the chain frames' title
+      texts, on the side the other endpoint's port leans to), the descent
+      runs down it, and the final leg hooks into the forced-side port along
+      its outward line. Flow-parallel contradictory sides (`to="bottom"`
+      under top-down, facing away from the rep) wrap around the node the
+      same way (run below/above its far edge). Every group crossing is still
+      an explicit connection point (`line_rect_exit` clipping).
+- [x] **Routing must always succeed**: the old coupled reading (the forced
+      side applied to the frames too) remains as the terminal fallback
+      candidate in [`route_edge`]'s ladder, and an end whose corridor is
+      blocked demotes to it. Contradictory sides may still be ugly (M11's
+      contract) — but they no longer drag *other groups* into the ugliness.
+- [x] Direct edges are untouched ([`forced_direct_path`]); an edge with no
+      mismatched end routes byte-identically to M13 — all eleven pre-M14
+      snapshots pass unchanged.
+- [x] Tests: the cluster regression (corridor descent, no outer-border
+      excursion, no sibling-group crossing, both connection points
+      recorded), the single-group right-side entry, the contradictory
+      bottom-side wrap; `examples/cluster.dgmr` is the canonical sample
+      with a golden snapshot.
+
+**Blocked by:** M11/M11.5. **Blocks:** nothing.
+
+---
+
+## ✅ Post-M14 fix — edge-chain endpoints in a group body place their nodes
+
+Referencing a node in a group body is specified (`grammar.md`) to place it in
+that group, but `src/resolve.rs` only honored standalone declarations: the
+endpoints of an edge chain written inside a `group` body were treated as pure
+references, so pre-declared nodes stayed top-level and the group rendered
+empty (`examples/sides.dgmr`: `bus --> queue` in "Messaging"). Chain
+endpoints in a group body now place their nodes like standalone declarations,
+except that an endpoint already placed in a *different* group keeps its group
+(a cross-boundary reference — the M5 within-frame shape). The M1 invariant is
+symmetric now: top-level occurrences never move a node in either direction, so
+a declaration after a group body no longer un-groups its members and
+membership is order-independent. Resolve tests cover both chain shapes, the
+cross-boundary reference, and nesting; `snapshots/sides.svg` regenerated (the
+only golden file affected).
+
+---
+
 ### Dependency graph
 
 ```
-M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13
+M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13 ── M14
               │   │      └── M6 (interleaves)        │
               │   └──────── M8 (deferred) ───────────┘
               └── M5.5 ── M7 ─┘

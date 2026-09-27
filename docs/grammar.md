@@ -201,6 +201,15 @@ lie collinearly on top of each other, and several edges forced onto the
 same side of a node are fanned apart. An ugly route is the user's cue to
 change or drop the attribute.
 
+The attribute names the side of the **endpoint node** only (M14). The
+group frames an edge crosses between the endpoints keep the layout's
+natural connection points — the side facing the other endpoint — so a
+forced side never drags a frame crossing around a group. When the forced
+side faces away from where the edge arrives, the within-frame stub bends
+instead: it descends beside the node in a clear corridor and hooks into
+the forced side (e.g. `to="right"` under top-down enters the group from
+above and turns left into the node's right side).
+
 Unknown side values (e.g. `from="north"`) are resolve errors, like any
 unknown attribute value.
 
@@ -233,8 +242,9 @@ and **M11** (edge `from`/`to` side attributes; see
   - `color` — line and arrowhead color.
   - `text` — edge-label text color (M7.5). Applies only when the edge has
     a label.
-  - `from` / `to` — the page-space side of the source / target the edge
-    connects to (M11); see [Edge sides](#edge-sides).
+  - `from` / `to` — the page-space side of the source / target **node** the
+    edge connects to (M11; the node only, never the frames it sits in —
+    M14); see [Edge sides](#edge-sides).
 
 - **Groups:**
   - `color` — frame border / stroke color (M7.5). Defaults to `"#88BDA4"`.
@@ -278,8 +288,16 @@ end
 ```
 
 Referencing a node in a group places it in that group; a node not
-referenced by any group belongs to the top-level diagram. A node may
-not appear in more than one group (parse error).
+referenced by any group belongs to the top-level diagram. Both forms of
+reference count — a bare declaration and an edge-chain endpoint alike
+(`bus --> queue` inside a group declares `bus` and `queue` as members).
+A node may not be *declared* in more than one group (parse error); an
+edge endpoint naming a node that already belongs to a different group is
+a cross-boundary reference instead — the node keeps its group and the
+edge runs across the boundary (this is how a chain in an outer body
+targets a nested group's member). Occurrences outside any group never
+move a node, so membership is decided by group bodies alone and
+declaration order cannot silently un-group a node.
 
 A group's frame can be styled with `color` (border), `fill`
 (background), `line` (border style), and `text` (title color) attributes
@@ -311,12 +329,15 @@ one inherits the direction of its enclosing level.
 - Shapes beyond `box` and `cylinder`.
 - Cross-boundary edge routing that connects through group frames.
   Frame-aware routing is implemented (M5): an edge crossing a group boundary
-  runs to a connection point on the frame (at the frame's center, on the side
-  facing the other endpoint along the level's direction axis), then continues
+  runs to a connection point on the frame (on the side facing the other
+  endpoint along the level's direction axis, at the endpoint node's
+  cross-coordinate), then continues
   to the inner node, without disturbing the group's internal layout. The
   segments are routed orthogonally (M7): each is a right-angle path whose jog
   lands in an inter-rank gap or a frame's padding, and a stub crossing a
   titled frame's top side jogs just below the title rather than across it.
+  A forced endpoint side (`from=` / `to=`) bends the inner stub only (M14);
+  the frame crossings stay on their natural sides.
 - Explicit alignment or placement hints for nodes. Ranks center
   automatically on their parents' centroid (see the layout engine); if that
   proves insufficient for complex diagrams, per-node pinning/alignment

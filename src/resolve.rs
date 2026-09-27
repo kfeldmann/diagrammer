@@ -5,9 +5,12 @@
 //! - Deduplicate node declarations, enforcing label / shape / attribute
 //!   consistency across redeclarations.
 //! - Assign group membership. A node may be placed in at most one group;
-//!   placing it in two is an error. Declaring a node at top level and later
-//!   referencing it inside a `group` body moves it into that group (this is
-//!   the common pattern).
+//!   placing it in two is an error. Any reference inside a `group` body —
+//!   a standalone declaration or an edge-chain endpoint alike — moves the
+//!   node into that group (declaring at top level and referencing inside a
+//!   `group` body is the common pattern). Occurrences at top level never
+//!   move a node, and an edge endpoint naming a node already placed in a
+//!   *different* group is a cross-boundary reference that leaves it put.
 //! - Validate attributes strictly: unknown attributes and duplicate
 //!   attributes within a single declaration are errors. As of M11 the
 //!   recognized attributes are: nodes `color`/`fill`/`text`, edges
@@ -257,26 +260,34 @@ impl Ctx {
                     _ => unreachable!("validate_attrs ensures only known node attributes"),
                 }
             }
-            // Only a standalone occurrence (not an edge endpoint) places a
-            // node; edge endpoints are pure references and never move a node.
-            if is_standalone {
-                match group {
-                    Some(g) => {
-                        if !info.placed_groups.contains(&g) {
-                            info.placed_groups.push(g);
-                            if info.placed_groups.len() >= 2 {
-                                return Err(Error::Resolve {
-                                    offset: occ.offset,
-                                    message: format!(
-                                        "node `{}` appears in more than one group",
-                                        occ.id
-                                    ),
-                                });
-                            }
+            // Group placement: an occurrence inside a `group` body places
+            // the node in that group — standalone declarations and
+            // edge-chain endpoints alike (a chain in a group body declares
+            // its nodes as members). The one exception keeps cross-boundary
+            // edges writable from inside a body: an edge endpoint naming a
+            // node already placed in a *different* group is a cross-boundary
+            // reference and leaves the node where it is (an outer body's
+            // chain may target a nested group's member). A standalone
+            // declaration in a second group is still an error — it could
+            // only mean re-placement. Occurrences at top level never move a
+            // node: membership is decided by group bodies alone, so source
+            // order cannot silently un-group a node.
+            if let Some(g) = group {
+                if !info.placed_groups.contains(&g) {
+                    let cross_boundary_ref = !is_standalone && !info.placed_groups.is_empty();
+                    if !cross_boundary_ref {
+                        info.placed_groups.push(g);
+                        if info.placed_groups.len() >= 2 {
+                            return Err(Error::Resolve {
+                                offset: occ.offset,
+                                message: format!(
+                                    "node `{}` appears in more than one group",
+                                    occ.id
+                                ),
+                            });
                         }
                         info.membership = Some(g);
                     }
-                    None => info.membership = None,
                 }
             }
         } else {
@@ -513,6 +524,100 @@ mod tests {
         assert_eq!(d.edges.len(), 1);
         assert_eq!(d.edges[0].from, "b");
         assert_eq!(d.edges[0].to, "a");
+    }
+
+    #[test]
+    fn edge_chain_in_group_brings_predeclared_nodes_into_the_group() {
+        // The `sides.dgmr` shape: labels declared at top level, structure
+        // given by an edge chain inside the group body. The chain's
+        // endpoints become members of the group they're declared in.
+        let d = ok(
+            "diagram top-down\n\
+             bus \"Event Bus\"\n\
+             queue \"Queue\"\n\
+             group left-right \"Messaging\"\n\
+             bus -- from=\"right\" to=\"left\" --> queue\n\
+             end\n",
+        );
+        assert_eq!(node(&d, "bus").group, Some(0));
+        assert_eq!(node(&d, "queue").group, Some(0));
+        assert_eq!(d.groups[0].members, ["bus", "queue"]);
+        assert_eq!(d.groups[0].direction, Some(Direction::LeftRight));
+        assert_eq!(d.edges.len(), 1);
+    }
+
+    #[test]
+    fn edge_chain_nodes_first_seen_in_a_group_are_members() {
+        let d = ok(
+            "diagram top-down\n\
+             group left-right \"S\"\n\
+             a --> b\n\
+             end\n",
+        );
+        assert_eq!(d.groups[0].members, ["a", "b"]);
+    }
+
+    #[test]
+    fn top_level_declarations_after_a_group_do_not_un_group_its_members() {
+        // Membership is decided by group bodies alone: a later top-level
+        // declaration only merges label/shape/attributes, so "structure
+        // first, labels later" works as well as the reverse ordering.
+        let d = ok(
+            "diagram top-down\n\
+             group \"Messaging\"\n\
+             bus --> queue\n\
+             end\n\
+             bus \"Event Bus\"\n\
+             queue \"Queue\"\n",
+        );
+        assert_eq!(node(&d, "bus").group, Some(0));
+        assert_eq!(node(&d, "queue").group, Some(0));
+        assert_eq!(d.groups[0].members, ["bus", "queue"]);
+        assert_eq!(node(&d, "bus").label, "Event Bus");
+        assert_eq!(node(&d, "queue").label, "Queue");
+    }
+
+    #[test]
+    fn edge_chain_in_group_body_can_reference_another_groups_node() {
+        // A cross-boundary reference: `b --> a` inside B's body names `a`,
+        // which already belongs to A. The edge is cross-boundary; `a` keeps
+        // its group (an edge endpoint never relocates an already-placed
+        // node) and only `b` becomes a member of B.
+        let d = ok(
+            "diagram top-down\n\
+             group \"A\"\n\
+             a\n\
+             end\n\
+             group \"B\"\n\
+             b --> a\n\
+             end\n",
+        );
+        assert_eq!(node(&d, "a").group, Some(0));
+        assert_eq!(node(&d, "b").group, Some(1));
+        assert_eq!(d.groups[0].members, ["a"]);
+        assert_eq!(d.groups[1].members, ["b"]);
+        assert_eq!(d.edges.len(), 1);
+    }
+
+    #[test]
+    fn outer_body_chain_targeting_inner_member_keeps_nesting() {
+        // The within-frame cross-boundary shape: `x --> a` written in Outer's
+        // body targets `a` inside the nested Inner group; `a` must stay in
+        // Inner and only `x` joins Outer.
+        let d = ok(
+            "diagram top-down\n\
+             group \"Outer\"\n\
+             x\n\
+             group \"Inner\"\n\
+             a\n\
+             end\n\
+             x --> a\n\
+             end\n",
+        );
+        assert_eq!(node(&d, "x").group, Some(0));
+        assert_eq!(node(&d, "a").group, Some(1));
+        assert_eq!(d.groups[0].members, ["x"]);
+        assert_eq!(d.groups[1].members, ["a"]);
     }
 
     #[test]

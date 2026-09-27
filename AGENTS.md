@@ -28,7 +28,8 @@ source string
                     membership + containment tree, per-group direction)
   → layout.rs       Layout (Sugiyama flat engine + compound recursion +
                     cross-boundary frame routing + M9 edge separation &
-                    obstacle-aware LCA routing + M13 label placement)
+                    obstacle-aware LCA routing + M13 label placement;
+                    forced `from=`/`to=` sides bind the endpoint node only)
   → render/svg.rs   self-contained SVG string
   → main.rs         CLI: `diagrammer <in.dgmr> [-o <out.svg>]`
 ```
@@ -51,8 +52,11 @@ src/
   resolve.rs     raw → validated Diagram (dedup, attrs, group membership)
   layout.rs      ★ biggest file: flat Sugiyama engine + compound (per-group
                  direction) + cross-boundary edge routing + M9 edge
-                 separation & obstacle-aware LCA routing + M13 label
-                 placement & label-aware fan/lane spacing → Layout
+                 separation & obstacle-aware LCA routing + sealed-port
+                 fallback (a lone side's port slides when its escape pocket
+                 is sealed) + M13 label placement & label-aware fan/lane
+                 spacing + M14 forced sides decoupled from frame crossings
+                 → Layout
   text.rs        label measurement against the baked metrics table
   metrics_table.rs  GENERATED baked DejaVu metrics — never hand-edit;
                  regenerate: cargo run -p gen-metrics-table
@@ -156,7 +160,8 @@ breaks geometry):
   title's extent and labels would clear the wrong box.
 - `layout::STUB_JOG_CLEARANCE = 12.0` — how far a title-detour within-frame
   stub jogs from a node port (it sits in the grown `CROSS_FRAME_PAD` band just
-  below the title). It must exceed `render::ARROW_BACKOFF`
+  below the title). Detours apply per chain frame — one jog per titled frame
+  the stub would cross. It must exceed `render::ARROW_BACKOFF`
   (4.0), else the stub's final segment is shorter than the line-end
   shortening and the arrowhead tip pokes into the node; and it must exceed
   the arrowhead's back-extent (`render`'s `markerHeight`, 10.0 — the marker
@@ -166,8 +171,11 @@ breaks geometry):
   layout does not read the render constants, it just promises to stay above
   them.)
 - `layout::CROSS_FRAME_PAD = 12.0` — extra top + bottom padding added to a
-  group frame when a cross-boundary edge connects to one of its immediate
-  children, so the within-frame stub has room to jog. One group-title
+  group frame that hosts a cross-boundary within-frame stub's jog: a frame
+  with a cross-boundary edge to an immediate child, and — so a nested title
+  detour has its band — any *titled* frame in a cross-boundary chain under a
+  top-down LCA. The padding gives the stub room to jog (clear of the title
+  above the node and of the node's arrowhead below the jog). One group-title
   font height each side; keep in sync with `render::FRAME_TITLE_SIZE` (12.0).
   A group with no such edges keeps the default frame geometry.
 

@@ -1299,8 +1299,22 @@ mod tests {
     fn snapshot_sides() {
         // The M11 surface: forced page-space sides (`from=` / `to=`),
         // agreeable and contradictory alike, a forced self-loop, and a
-        // forced side on a cross-boundary edge inside a left-right group.
+        // forced side on an internal edge of a left-right group (the
+        // `Messaging` chain declares its endpoints as the group's members).
         assert_snapshot("sides", &render(include_str!("../../examples/sides.dgmr")));
+    }
+
+    #[test]
+    fn snapshot_cluster() {
+        // The M14 surface: `to="right"` on a cross-boundary edge lands on
+        // the node's right side while the group frames keep their natural
+        // crossings (down the corridor between the sibling groups, left
+        // into the node) — not the old coupled reading that dragged the
+        // frame crossings around the outer group.
+        assert_snapshot(
+            "cluster",
+            &render(include_str!("../../examples/cluster.dgmr")),
+        );
     }
 
     #[test]

@@ -29,6 +29,8 @@ web -- from="top" to="bottom" --> worker
 # a forced self-loop: out of the right side, around, back into the right side
 worker -- from="right" to="right" --> worker
 
+# the chain's endpoints are members of the group they're written in — the
+# top-level declarations above only supply their labels
 group left-right "Messaging"
     bus -- from="right" to="left" --> queue
 end

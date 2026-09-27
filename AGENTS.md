@@ -84,6 +84,12 @@ against a golden file in `snapshots/`. When rendering output intentionally
 changes, regenerate with `UPDATE_SNAPSHOTS=1` and commit the updated `.svg`
 files (don't hand-edit them).
 
+**Release builds** are Docker-based and live in `build/`: one script per
+platform (`build-linux-glibc`, `build-linux-musl`, `build-mac`), sharing
+`build/debian.Dockerfile` (glibc + macOS cross via `cargo-zigbuild`) and
+`build/alpine.Dockerfile` (musl). Each mounts the project at `/work` and runs
+as the host UID:GID. See `build/README.md`.
+
 ## Invariants — don't break these
 
 - **Index correspondence.** `Layout.nodes`/`Layout.edges`/`Layout.groups`

@@ -23,6 +23,18 @@ Without `-o`, `diagrammer` parses and validates the input and prints a
 one-line summary. With `-o <output.svg>`, it lays the diagram out and writes a
 self-contained SVG file. Run `diagrammer --help` for details.
 
+## Building release binaries
+
+Docker-based cross-platform release builds live in [`build/`](build):
+
+```bash
+build/build-linux-glibc   # x86_64 glibc (shared)
+build/build-linux-musl    # x86_64 musl (shared)
+build/build-mac           # aarch64 macOS
+```
+
+See [`build/README.md`](build/README.md) for details.
+
 ## Input language
 
 See [`docs/grammar.md`](docs/grammar.md) for the full grammar. Short example:
@@ -43,7 +55,11 @@ group "Kubernetes Cluster"
 end
 ```
 
-See [`examples/subdirection.dgmr`](examples/subdirection.dgmr) for a diagram
+See [`contrib/agent-skill/diagrammer/`](contrib/agent-skill/diagrammer) for an
+agent skill to teach your coding agent how to use diagrammer.
+
+See the [`examples/`](examples) directory for example files, including
+[`examples/subdirection.dgmr`](examples/subdirection.dgmr) for a diagram
 that puts two groups with *different* directions in one diagram.
 
 Highlights:

@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+#
+# Build the x86_64 musl (dynamically linked) release binary.
+#
+# Runs inside Alpine 3.24 (build/alpine.Dockerfile) using the distro rust/cargo
+# toolchain. The container runs as the host UID:GID so everything written into
+# the mounted project (target/) stays owned by you.
+#
+# The build is native (no --target): Alpine's rust package only ships the
+# x86_64-alpine-linux-musl std, which is ABI-compatible with generic x86_64
+# musl systems. "Shared" linking is set by RUSTFLAGS in the Dockerfile.
+
+set -euo pipefail
+
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd -- "$here/.." && pwd)"
+
+image="diagrammer-build-alpine:latest"
+uid="$(id -u)"
+gid="$(id -g)"
+
+docker build -f "$here/alpine.Dockerfile" -t "$image" "$here"
+
+# Cargo's home and $HOME live under the (gitignored) target/ directory, so the
+# container user can write them and they persist across runs.
+mkdir -p "$root/target/.cargo-home" "$root/target/.home"
+
+docker run --rm \
+  --user "$uid:$gid" \
+  -v "$root:/work" \
+  -w /work \
+  -e HOME=/work/target/.home \
+  -e CARGO_HOME=/work/target/.cargo-home \
+  "$image" \
+  cargo build --release -p diagrammer
+
+echo "built: $root/target/release/diagrammer"

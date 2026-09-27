@@ -2319,14 +2319,6 @@ fn segment_rect_interval(
     }
 }
 
-/// The `[t0, t1]` parameter interval of the segment `p0`→`p1` lying inside
-/// the closed axis-aligned rect `r` (Liang–Barsky clipping), or `None` when
-/// the segment misses `r` entirely. A segment merely touching the rect
-/// (degenerate interval, `t0 == t1`) yields `Some` — callers that mean
-/// "passes through" use [`segment_intersects_rect`], which requires a
-/// positive-length overlap; the obstacle-world checks use the raw interval
-/// to reason about *where* along the segment a rect is touched.
-
 // ============ Orthogonal edge routing (M7) ============
 
 /// Which page-space axis an edge flows along — the rank axis after the
@@ -4321,10 +4313,10 @@ fn title_detours(
     for &s in chain {
         let f = frame_rect(s);
         let mut clear = x;
-        if let Some(title_w) = frame_title_width(s) {
-            if let Some(c) = title_detour_clear_x(f, x, title_w) {
-                clear = c;
-            }
+        if let Some(title_w) = frame_title_width(s)
+            && let Some(c) = title_detour_clear_x(f, x, title_w)
+        {
+            clear = c;
         }
         any_jog |= (clear - x).abs() > 1e-6;
         out.push(TitleDetour {
@@ -5223,6 +5215,11 @@ struct LabelChoice {
     total: f32,
 }
 
+/// A placed edge label: its edge index and its `(x, y, w, h)` knockout rect
+/// in world space. Shared by the greedy pass, the refinement pass, and the
+/// tests that re-run the same placement logic.
+type PlacedLabel = (usize, (f32, f32, f32, f32));
+
 /// Intersection area of two `(x, y, w, h)` rects (0 when disjoint).
 fn rect_overlap_area(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> f32 {
     let w = (a.0 + a.2).min(b.0 + b.2) - a.0.max(b.0);
@@ -5347,7 +5344,7 @@ fn label_cost(
     own: usize,
     paths: &[Vec<(f32, f32)>],
     world: &LabelWorld,
-    placed: &[(usize, (f32, f32, f32, f32))],
+    placed: &[PlacedLabel],
 ) -> f32 {
     let mut c = 0.0_f32;
     let hit = inflate(r, LABEL_HIT_PAD);
@@ -5395,7 +5392,7 @@ fn best_label_anchor(
     own: usize,
     paths: &[Vec<(f32, f32)>],
     world: &LabelWorld,
-    placed: &[(usize, (f32, f32, f32, f32))],
+    placed: &[PlacedLabel],
 ) -> Option<LabelChoice> {
     let mut best: Option<LabelChoice> = None;
     for (anchor, pref) in label_candidates(points, size) {
@@ -5451,7 +5448,7 @@ fn place_labels(
 ) -> Vec<Option<(f32, f32)>> {
     let mut anchors: Vec<Option<(f32, f32)>> = (0..labels.len()).map(|_| None).collect();
     let mut prefs: Vec<f32> = (0..labels.len()).map(|_| 0.0).collect();
-    let mut placed: Vec<(usize, (f32, f32, f32, f32))> = Vec::new();
+    let mut placed: Vec<PlacedLabel> = Vec::new();
     for ei in 0..labels.len() {
         let Some(label) = labels[ei] else { continue };
         let size = label_box(label);
@@ -5470,7 +5467,7 @@ fn place_labels(
         let Some(label) = labels[ei] else { continue };
         let size = label_box(label);
         let Some(cur) = anchors[ei] else { continue };
-        let others: Vec<(usize, (f32, f32, f32, f32))> =
+        let others: Vec<PlacedLabel> =
             placed.iter().filter(|(j, _)| *j != ei).cloned().collect();
         let cur_total = label_cost(label_rect(cur, size), ei, paths, world, &others) + prefs[ei];
         if let Some(ch) = best_label_anchor(&paths[ei], size, ei, paths, world, &others)
@@ -8077,7 +8074,7 @@ src -- to="bottom" --> t
                 e.to
             );
         }
-        let mut placed: Vec<(usize, (f32, f32, f32, f32))> = Vec::new();
+        let mut placed: Vec<PlacedLabel> = Vec::new();
         for i in 0..d.edges.len() {
             if d.edges[i].label.is_none() {
                 continue;
@@ -8133,7 +8130,7 @@ src -- to="bottom" --> t
             // (5) It covers no rendered arrowhead and no group title. (Frame
             // borders are not obstacles — a label may cross a group outline,
             // M13.1.)
-            for (j, q) in l.edges.iter().enumerate() {
+            for q in l.edges.iter() {
                 if let Some(a) = arrowhead_rect(&q.points) {
                     assert!(
                         rect_overlap_area(r, a) <= 0.0,
@@ -8237,7 +8234,7 @@ src -- to="bottom" --> t
             frames: Vec::new(),
             arrows: arrowhead_rect(&path).into_iter().collect(),
         };
-        let anchors = place_labels(&labels, &[path.clone()], &world);
+        let anchors = place_labels(&labels, std::slice::from_ref(&path), &world);
         let (ax, ay) = anchors[0].expect("anchor");
         let r = label_rect((ax, ay), label_box("sync"));
         let a = arrowhead_rect(&path).expect("arrowhead rect");

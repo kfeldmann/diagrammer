@@ -8,6 +8,10 @@ SVG output. It exists to:
 
 The written SVG is self-contained and GitHub-renderable (no scripts or external references).
 
+## Example SVGs
+
+!(snapshots/cluster.svg) !(snapshots/subdirection.svg)
+
 ## Usage
 
 ```

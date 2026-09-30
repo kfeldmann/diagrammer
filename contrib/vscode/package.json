@@ -1,0 +1,36 @@
+{
+  "name": "dgmr-vscode",
+  "displayName": "diagrammer (dgmr)",
+  "description": "Syntax highlighting for diagrammer's Mermaid-like diagram DSL (.dgmr files).",
+  "version": "0.1.0",
+  "publisher": "diagrammer-contribs",
+  "private": true,
+  "engines": {
+    "vscode": "^1.63.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "dgmr",
+        "aliases": [
+          "diagrammer",
+          "dgmr"
+        ],
+        "extensions": [
+          ".dgmr"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "dgmr",
+        "scopeName": "source.dgmr",
+        "path": "./syntaxes/dgmr.tmLanguage.json"
+      }
+    ]
+  }
+}

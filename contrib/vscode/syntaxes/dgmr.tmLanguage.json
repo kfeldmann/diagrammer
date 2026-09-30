@@ -1,0 +1,173 @@
+{
+  "name": "diagrammer",
+  "scopeName": "source.dgmr",
+  "fileTypes": [
+    "dgmr"
+  ],
+  "comment": "TextMate grammar for diagrammer's v0 DSL, matched against docs/grammar.md. Mirrors contrib/vim/syntax/dgmr.vim. The language is contextual: directions only follow 'diagram'/'group', shapes only follow ':', edge styles only appear inside an edge body, and the reserved words diagram/group/end are only reserved at statement start (a node may legally be named box, thick, or end-2). The rules below are positional for the same reason. Everything is single-line -- the grammar is line-oriented and strings cannot wrap -- so unterminated constructs are closed with a (?=\\n) end instead of running away across lines.",
+  "patterns": [
+    {
+      "include": "#comment"
+    },
+    {
+      "include": "#string"
+    },
+    {
+      "include": "#reserved-err"
+    },
+    {
+      "include": "#direction"
+    },
+    {
+      "include": "#statement"
+    },
+    {
+      "include": "#shape"
+    },
+    {
+      "include": "#attr-name"
+    },
+    {
+      "include": "#attr-err"
+    },
+    {
+      "comment": "arrow: the '-->' of a plain edge (no body). Listed before the edge-body rule so the '--' never opens a body at the same position.",
+      "match": "-->",
+      "name": "constant.character.arrow.dgmr"
+    },
+    {
+      "comment": "edge body between '--' and '-->'. Everything between the dashes belongs to the edge: an optional style, label, and attrs. No keepend analogue is needed: the inner string rule consumes a '-->' inside a quoted label (e.g. A -- \"a --> b\" --> C) before the body's end pattern can see it. The (?=\\n) alternative closes a runaway '--' at end of line instead of swallowing the rest of the file.",
+      "begin": "--(?!>)",
+      "beginCaptures": {
+        "0": {
+          "name": "keyword.operator.edge.dgmr"
+        }
+      },
+      "end": "-->|(?=\\n)",
+      "endCaptures": {
+        "0": {
+          "name": "constant.character.arrow.dgmr"
+        }
+      },
+      "name": "meta.edge.dgmr",
+      "patterns": [
+        {
+          "comment": "edge style, valid only in this slot (a node named 'thick' outside a body stays plain)",
+          "match": "\\b(solid|dotted|dashed|thick)\\b(?!-[A-Za-z0-9_])",
+          "captures": {
+            "1": {
+              "name": "storage.type.edge-style.dgmr"
+            }
+          }
+        },
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#attr-name"
+        },
+        {
+          "include": "#attr-err"
+        },
+        {
+          "include": "#reserved-err"
+        }
+      ]
+    }
+  ],
+  "repository": {
+    "comment": {
+      "comment": "'#' to end of line; a literal '#' only ever appears inside a string, which the string rule consumes first. TODO/FIXME/XXX/NOTE are called out.",
+      "begin": "#",
+      "beginCaptures": {
+        "0": {
+          "name": "punctuation.definition.comment.dgmr"
+        }
+      },
+      "end": "(?=\\n)",
+      "name": "comment.line.number-sign.dgmr",
+      "patterns": [
+        {
+          "name": "keyword.other.todo.dgmr",
+          "match": "\\b(TODO|FIXME|XXX|NOTE)\\b"
+        }
+      ]
+    },
+    "string": {
+      "comment": "double-quoted; \\\" \\\\ \\n are the only escapes the lexer accepts, any other \\X is a grammar error and is painted as one. (?=\\n) in the end keeps an unterminated string single-line.",
+      "begin": "\"",
+      "end": "\"|(?=\\n)",
+      "name": "string.quoted.double.dgmr",
+      "patterns": [
+        {
+          "name": "constant.character.escape.dgmr",
+          "match": "\\\\[\"\\\\n]"
+        },
+        {
+          "name": "invalid.illegal.bad-escape.dgmr",
+          "match": "\\\\."
+        }
+      ]
+    },
+    "reserved-err": {
+      "comment": "diagram/group/end mid-line: a bare-id position where these words are illegal, so flag it. (?<![\\w-]) keeps hyphenated ids (api-end) and word-internal hits out; (?!-[A-Za-z0-9_]) keeps end-2 a plain id. Statement-initial occurrences never reach this rule: #statement matches earlier on the line and wins.",
+      "match": "(?<![\\w-])(diagram|group|end)\\b(?!-[A-Za-z0-9_])",
+      "captures": {
+        "1": {
+          "name": "invalid.illegal.reserved.dgmr"
+        }
+      }
+    },
+    "direction": {
+      "comment": "directions only in the slot right after 'diagram'/'group'. Written as one pattern with two captures because Oniguruma lookbehind would otherwise be variable-length.",
+      "match": "^[ \\t]*(diagram|group)\\b(?!-)[ \\t]+(top-down|bottom-up|left-right|right-left)\\b(?!-)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.dgmr"
+        },
+        "2": {
+          "name": "constant.language.direction.dgmr"
+        }
+      }
+    },
+    "statement": {
+      "comment": "reserved words at statement start (leading whitespace allowed, not significant).",
+      "match": "^[ \\t]*(diagram|group|end)\\b(?!-)",
+      "captures": {
+        "1": {
+          "name": "keyword.control.dgmr"
+        }
+      }
+    },
+    "shape": {
+      "comment": "shapes only after the ':' of a nodespec.",
+      "match": ":([ \\t]*)(box|cylinder)\\b(?!-)",
+      "captures": {
+        "2": {
+          "name": "storage.type.shape.dgmr"
+        }
+      }
+    },
+    "attr-name": {
+      "comment": "known attribute names before '=' (nodes color/fill/text, edges color/text/from/to, groups color/fill/line/text). Listed before #attr-err so a known name wins the same position.",
+      "match": "\\b(color|fill|text|line|from|to)[ \\t]*(?==)",
+      "captures": {
+        "1": {
+          "name": "entity.other.attribute-name.dgmr"
+        }
+      }
+    },
+    "attr-err": {
+      "comment": "any other id before '=': an unknown attribute and a resolve error, so flag it. Values are plain strings; position-specific validity is the parser's job.",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*)[ \\t]*(?==)",
+      "captures": {
+        "1": {
+          "name": "invalid.illegal.unknown-attr.dgmr"
+        }
+      }
+    }
+  }
+}

@@ -188,12 +188,15 @@ breaks geometry):
 ## Editor tooling
 
 - `contrib/vim/` — vim/neovim runtime files (syntax, ftdetect, ftplugin) for
-  `.dgmr` files. The syntax file mirrors `docs/grammar.md` (v0), including
+  `.dgmr` files.
+- `contrib/vscode/` — VS Code extension (TextMate grammar) for `.dgmr` files,
+  mirroring `contrib/vim/`. The syntax file mirrors `docs/grammar.md` (v0), including
   its contextuality: shapes only after `:`, edge styles only inside an edge
   body, directions only after `diagram`/`group`, only `diagram`/`group`/`end`
   reserved (and only at statement start). If the grammar changes — new
   keywords, shapes, styles, attributes — update `contrib/vim/syntax/dgmr.vim`
-  alongside the parser and `docs/grammar.md`.
+  and `contrib/vscode/syntaxes/dgmr.tmLanguage.json` alongside the parser and
+  `docs/grammar.md`.
 
 ## Test layout
 

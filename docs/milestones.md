@@ -1019,9 +1019,11 @@ edge existed to enforce it.
 - [x] Samples: `infra`'s "Kubernetes Cluster" and `finance`'s "Private
       subnets" declare `left-right` (their side-by-side member rows are the
       design), and `cluster`'s "Application" declares `top-down` (its
-      vertically-stacked security groups relied on the old fallback).
-      Snapshots `isolated_nodes`, `sides`, `group_style`, `finance`,
-      `cluster`, `infra` regenerated.
+      vertically-stacked security groups relied on the old fallback); the
+      `group_style` snapshot's inline test source likewise declares
+      `left-right` on its styled group (edge-less members C/D sat side by
+      side only via the old fallback). Snapshots `isolated_nodes`, `sides`,
+      `group_style`, `finance`, `cluster`, `infra` regenerated.
 - [x] Tests: edge-less nodes stack along the flow axis top-down and run
       left-to-right in left-right; an inherited-direction group's edge-less
       members follow the inherited axis.

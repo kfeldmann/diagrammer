@@ -1553,7 +1553,7 @@ mod tests {
                 "diagram top-down\n\
                  a \"A\" text=\"#0055ff\"\n\
                  b \"B\"\n\
-                 group \"Group\" color=\"#0a7\" fill=\"#cfe\" line=\"dashed\" text=\"#005\"\n\
+                 group left-right \"Group\" color=\"#0a7\" fill=\"#cfe\" line=\"dashed\" text=\"#005\"\n\
                  c \"C\"\n\
                  d \"D\" text=\"#a00\"\n\
                  end\n\

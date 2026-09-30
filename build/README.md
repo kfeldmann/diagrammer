@@ -12,7 +12,7 @@ build/build-mac           # aarch64-apple-darwin (Apple Silicon)
 
 | Script               | Image              | Command                                              | Artifact                                              |
 | -------------------- | ------------------ | ---------------------------------------------------- | ----------------------------------------------------- |
-| `build-linux-glibc`  | `debian.Dockerfile`| `cargo build --target x86_64-unknown-linux-gnu`      | `target/x86_64-unknown-linux-gnu/release/diagrammer`  |
+| `build-linux-glibc`  | `debian.Dockerfile`| `cargo zigbuild --target x86_64-unknown-linux-gnu.2.26` | `target/x86_64-unknown-linux-gnu/release/diagrammer`  |
 | `build-linux-musl`   | `alpine.Dockerfile`| `cargo build` (native musl)                          | `target/release/diagrammer`                           |
 | `build-mac`          | `debian.Dockerfile`| `cargo zigbuild --target aarch64-apple-darwin`       | `target/aarch64-apple-darwin/release/diagrammer`      |
 
@@ -30,10 +30,9 @@ Only the `diagrammer` package is built (`-p diagrammer`); the
   and `HOME` are redirected into the gitignored `target/` directory
   (`target/.cargo-home`, `target/.home`); this also persists the crate cache
   between builds.
-- **"Shared" = dynamically linked.** For glibc that is rustc's default. For
-  musl, rustc statically links by default, so `alpine.Dockerfile` sets
-  `RUSTFLAGS="-C target-feature=-crt-static"`. Remove that `ENV` to produce the
-  usual fully static musl binary.
+- **"Shared" = dynamically linked.** For glibc that is `cargo zigbuild` with
+  an explicit `x86_64-unknown-linux-gnu.2.26` triple, which caps the minimum
+  glibc version at 2.26 regardless of the Debian version inside the image.
 - **Toolchain choice.** The Debian image uses rustup rather than Debian's
   `rustc` because the macOS cross build needs the `aarch64-apple-darwin` std,
   which only rustup can add. The Alpine image uses the distro `rust`/`cargo`

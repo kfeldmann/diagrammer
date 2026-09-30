@@ -2,6 +2,9 @@
 #
 # Build the x86_64-unknown-linux-gnu (dynamically linked glibc) release binary.
 #
+# Uses cargo-zigbuild with an explicit glibc floor of 2.26, so the binary runs
+# on any x86_64 system with glibc >= 2.26.
+#
 # Runs inside the shared Debian trixie image (build/debian.Dockerfile). The
 # container runs as the host UID:GID so everything written into the mounted
 # project (target/) stays owned by you.
@@ -28,6 +31,6 @@ docker run --rm \
   -e HOME=/work/target/.home \
   -e CARGO_HOME=/work/target/.cargo-home \
   "$image" \
-  cargo build --release -p diagrammer --target x86_64-unknown-linux-gnu
+  cargo zigbuild --release -p diagrammer --target x86_64-unknown-linux-gnu.2.26
 
 echo "built: $root/target/x86_64-unknown-linux-gnu/release/diagrammer"

@@ -23,7 +23,7 @@ api2 -- "events" --> queue
 # edge with style + label + color, all between the dashes
 db -- thick "replication" color="#888" --> replica "Replica" : cylinder
 
-group "Kubernetes Cluster"
+group left-right "Kubernetes Cluster"
     api1
     api2
 end

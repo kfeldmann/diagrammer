@@ -6,9 +6,9 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0–M7.5 and M9–M14 are complete (M12 was absorbed by
-M11.5), plus the post-M13 hardening pass below. **M8 (CLI polish) is the only
-remaining milestone.**
+**Current position:** M0–M7.5, M9–M14 and M15 are complete (M12 was absorbed
+by M11.5), plus the post-M13 hardening pass below. **M8 (CLI polish) is the
+only remaining milestone.**
 
 ---
 
@@ -989,10 +989,63 @@ only golden file affected).
 
 ---
 
+## ✅ M15 — Component packing: direction is honored with no edges
+
+**The defect.** Longest-path ranking only constrains nodes that participate
+in an edge; edge-less nodes keep rank 0, so every edge-less node in a scope
+crowded into the source band — a single row (top-down) or column (left-right)
+running **perpendicular** to the declared flow axis. A top-down diagram's
+unconnected nodes laid out left-to-right; a left-right group's unconnected
+members stacked vertically. The declared direction was honored only where an
+edge existed to enforce it.
+
+- [x] **Component packing** (`pack_components`, run after `longest_path` and
+      before dummy insertion): union-find the weakly connected components of
+      the level's DAG (self-loops excluded — they don't constrain rank) and
+      re-base each component onto a disjoint run of ranks, stacked along the
+      rank axis in declaration order of each component's first member,
+      separated by one inter-rank gap. Within a component the relative ranks
+      (and therefore the internal arrangement) are preserved (a uniform
+      shift); a fully connected scope is unchanged byte-for-byte. Because it
+      re-bases *ranks* rather than post-translating y, every downstream phase
+      (dummies, crossing minimization, coordinate assignment, band stacking)
+      sees consistent global ranks for free, at every level of the compound
+      recursion.
+- [x] **Semantics (decided):** `group <direction>` (and the diagram header)
+      now names the internal shape *unconditionally*: `left-right` gives a
+      side-by-side row, `top-down` a vertical stack, edge or no edge. The
+      perpendicular band was never a feature — it was the ranking's
+      unconstrained fallback.
+- [x] Samples: `infra`'s "Kubernetes Cluster" and `finance`'s "Private
+      subnets" declare `left-right` (their side-by-side member rows are the
+      design), and `cluster`'s "Application" declares `top-down` (its
+      vertically-stacked security groups relied on the old fallback).
+      Snapshots `isolated_nodes`, `sides`, `group_style`, `finance`,
+      `cluster`, `infra` regenerated.
+- [x] Tests: edge-less nodes stack along the flow axis top-down and run
+      left-to-right in left-right; an inherited-direction group's edge-less
+      members follow the inherited axis.
+- [x] **Known limitation (recorded, deliberately not patched here):** a
+      frame whose members are stacked along its flow axis *and* receive
+      cross-boundary edges is a shape the per-case routing regime does not
+      satisfy — a within-frame stub can cut a stacked sibling, and routes
+      from different stacked sources sharing a frame side can coincide (the
+      regime separates fan lanes per source, not across sources). These
+      shapes were rare pre-M15 (only connected deep chains produced them,
+      partly handled by `try_around_target_route`); M15 makes them
+      user-reachable with plain edge-less members. Per the M11.5 verdict
+      below, the cure is the **global routing pass** (peer segments as soft
+      occupancy, reserved port right-of-way, rip-up), not another per-case
+      fallback; the samples avoid the shape by declaring the direction that
+      matches their cross-boundary traffic.
+
+**Blocked by:** nothing (ranking-level change). **Blocks:** nothing, but it
+broadens exposure to the known routing limitation above.
+
 ### Dependency graph
 
 ```
-M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13 ── M14
+M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13 ── M14 ── M15
               │   │      └── M6 (interleaves)        │
               │   └──────── M8 (deferred) ───────────┘
               └── M5.5 ── M7 ─┘

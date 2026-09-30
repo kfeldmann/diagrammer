@@ -50,13 +50,14 @@ src/
   parser.rs      winnow parser → raw AST
   ast.rs         Raw* + resolved Diagram/Node/Edge/Group + Shape/Style/Direction enums
   resolve.rs     raw → validated Diagram (dedup, attrs, group membership)
-  layout.rs      ★ biggest file: flat Sugiyama engine + compound (per-group
-                 direction) + cross-boundary edge routing + M9 edge
-                 separation & obstacle-aware LCA routing + sealed-port
-                 fallback (a lone side's port slides when its escape pocket
-                 is sealed) + M13 label placement & label-aware fan/lane
-                 spacing + M14 forced sides decoupled from frame crossings
-                 → Layout
+  layout.rs      ★ biggest file: flat Sugiyama engine + component packing
+                 (M15: edge-less items follow the scope's direction) +
+                 compound (per-group direction) + cross-boundary edge routing
+                 + M9 edge separation & obstacle-aware LCA routing +
+                 sealed-port fallback (a lone side's port slides when its
+                 escape pocket is sealed) + M13 label placement & label-aware
+                 fan/lane spacing + M14 forced sides decoupled from frame
+                 crossings → Layout
   text.rs        label measurement against the baked metrics table
   metrics_table.rs  GENERATED baked DejaVu metrics — never hand-edit;
                  regenerate: cargo run -p gen-metrics-table

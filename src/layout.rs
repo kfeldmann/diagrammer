@@ -6,7 +6,11 @@
 //! 1. **Cycle removal** — a DFS that reverses back-edges so the graph becomes
 //!    a DAG (the reversal is internal; the original edge direction is
 //!    preserved in the output).
-//! 2. **Layering** — longest-path ranking.
+//! 2. **Layering** — longest-path ranking, then component packing: each
+//!    weakly connected component (rank-0 singletons included) is re-based
+//!    onto a disjoint run of ranks so even edge-less nodes follow the
+//!    scope's flow axis instead of crowding into a perpendicular source
+//!    band.
 //! 3. **Crossing minimization** — barycenter sweeps, keeping the best ordering.
 //!    Long edges are routed through zero-size *dummy* nodes.
 //! 4. **Coordinate assignment** — centered block x-placement (each
@@ -4447,6 +4451,7 @@ fn layout_flat(
     remove_cycles(edges, n, &mut orig_edges, &mut dag_edges);
 
     longest_path(&mut nodes, &dag_edges);
+    pack_components(&mut nodes, &dag_edges);
 
     let layer_edges = insert_dummies(&mut nodes, &mut orig_edges);
 
@@ -4662,6 +4667,75 @@ fn longest_path(nodes: &mut [LNode], dag_edges: &[(usize, usize)]) {
     // If a cycle slipped through (it must not, post cycle-removal), the
     // remaining nodes keep rank 0 — they will still render, just stacked.
     debug_assert_eq!(processed, n, "cycle remained after cycle removal");
+}
+
+// ============ Phase 2b: component packing ============
+
+/// Re-base ranks so every weakly connected component of the DAG occupies its
+/// own disjoint run of ranks, stacked along the rank axis in declaration
+/// order (of each component's first-declared member).
+///
+/// Longest-path ranking only constrains nodes that participate in an edge;
+/// edge-less nodes keep rank 0 and would otherwise all crowd into the
+/// source band of the whole scope — a single row (top-down) or column
+/// (left-right) running *perpendicular* to the requested flow axis.
+/// Packing gives each component — including rank-0 singletons — its own
+/// band range, so every node follows its scope's direction, edge or no
+/// edge (the rank axis is the flow axis after the direction transform).
+///
+/// Runs before dummy insertion: dummies, crossing minimization, coordinate
+/// assignment and band stacking all operate on these (now packed) global
+/// ranks unchanged. Within a component, relative ranks — and therefore the
+/// internal arrangement — are preserved (a uniform shift). Consecutive
+/// components are separated by exactly one inter-rank gap, like
+/// consecutive ranks.
+fn pack_components(nodes: &mut [LNode], dag_edges: &[(usize, usize)]) {
+    let n = nodes.len();
+    if n <= 1 {
+        return; // one node is its own component at rank 0 — nothing to pack
+    }
+    // Union-find over nodes joined by DAG edges (self-loops excluded: they
+    // don't constrain rank). Roots are unioned toward the smaller index, so
+    // a component's root is its first-declared member.
+    let mut parent: Vec<usize> = (0..n).collect();
+    fn find(parent: &mut [usize], mut x: usize) -> usize {
+        while parent[x] != x {
+            parent[x] = parent[parent[x]]; // path halving
+            x = parent[x];
+        }
+        x
+    }
+    for &(u, v) in dag_edges {
+        if u == v {
+            continue;
+        }
+        let (ru, rv) = (find(&mut parent, u), find(&mut parent, v));
+        if ru != rv {
+            let (lo, hi) = (ru.min(rv), ru.max(rv));
+            parent[hi] = lo;
+        }
+    }
+    // Members per component, keyed by root (empty slots are non-roots).
+    let mut members: Vec<Vec<usize>> = vec![Vec::new(); n];
+    for i in 0..n {
+        members[find(&mut parent, i)].push(i);
+    }
+    // Walk components in root order (= declaration order of their first
+    // member) and shift each onto the next free rank range.
+    let mut base = 0usize;
+    for (root, comp) in members.iter().enumerate() {
+        if comp.is_empty() {
+            continue; // non-root index (or lone node in an empty scope)
+        }
+        debug_assert_eq!(root, find(&mut parent, root));
+        // Height of the component in ranks; its lowest rank is 0 by
+        // longest-path (every component has an in-component source).
+        let height = comp.iter().map(|&i| nodes[i].rank).max().unwrap_or(0);
+        for &i in comp {
+            nodes[i].rank += base;
+        }
+        base += height + 1;
+    }
 }
 
 // ============ Phase 3a: dummy insertion ============
@@ -5645,18 +5719,32 @@ mod tests {
     }
 
     #[test]
-    fn isolated_nodes_share_a_row() {
-        // Three disconnected nodes, top-down: all rank 0, laid in one row.
+    fn isolated_nodes_follow_the_flow_axis() {
+        // Three disconnected nodes, top-down: component packing re-bases each
+        // rank-0 singleton onto its own band, so they stack along the flow
+        // axis (top-to-bottom) in declaration order — the declared direction
+        // is honored even with no edges at all.
         let (_d, l) = lay("diagram top-down\na\nb\nc\n");
         assert_eq!(l.nodes.len(), 3);
         assert_all_finite(&l);
         assert_no_overlaps(&l);
-        // Same row ⇒ same top y (up to float equality, since one band).
+        // One column ⇒ same left x (all left-packed singletons).
+        let x0 = l.nodes[0].x;
+        assert!(l.nodes.iter().all(|n| (n.x - x0).abs() < 1e-3));
+        let ys: Vec<f32> = l.nodes.iter().map(|n| n.y).collect();
+        assert!(ys[0] < ys[1] && ys[1] < ys[2], "expected top-to-bottom order {ys:?}");
+    }
+
+    #[test]
+    fn isolated_nodes_run_horizontally_left_right() {
+        // The same three edge-less nodes under left-right: they run
+        // left-to-right, mirroring the top-down stacking.
+        let (_d, l) = lay("diagram left-right\na\nb\nc\n");
+        assert_all_finite(&l);
+        assert_no_overlaps(&l);
         let y0 = l.nodes[0].y;
         assert!(l.nodes.iter().all(|n| (n.y - y0).abs() < 1e-3));
-        // Distinct x.
         let xs: Vec<f32> = l.nodes.iter().map(|n| n.x).collect();
-        assert_eq!(xs.len(), 3);
         assert!(xs[0] < xs[1] && xs[1] < xs[2], "expected left-to-right order {xs:?}");
     }
 
@@ -6034,8 +6122,9 @@ mod tests {
     #[test]
     fn group_inherits_diagram_direction() {
         // A group with no explicit direction inherits the diagram's
-        // direction. With left-right, two isolated members share a column
-        // (stacked vertically), not a row.
+        // direction. With left-right, two edge-less members now follow that
+        // inherited flow axis: they run left-to-right (side by side), not
+        // stacked.
         let (_d, l) = lay(
             "diagram left-right\n\
              group \"S\"\n\
@@ -6045,10 +6134,10 @@ mod tests {
         );
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
-        // left-right ⇒ ranks flow along x, so two isolated nodes are stacked
-        // vertically ⇒ distinct y, same x-center.
-        assert!((a.y - b.y).abs() > 1.0, "members should stack vertically under left-right");
-        assert!(((a.x + a.w / 2.0) - (b.x + b.w / 2.0)).abs() < 1e-2);
+        // left-right ⇒ ranks flow along x, so the two isolated members are
+        // side by side ⇒ distinct x, same y-center.
+        assert!(a.x < b.x, "members should run horizontally under left-right");
+        assert!(((a.y + a.h / 2.0) - (b.y + b.h / 2.0)).abs() < 1e-2);
     }
 
     #[test]
@@ -6708,7 +6797,7 @@ group "Application"
 lb
 end
 group "Shared Services"
-group "Kubernetes Node Group"
+group top-down "Kubernetes Node Group"
 n1
 n2
 n3
@@ -6719,6 +6808,8 @@ user --> lb
 lb --> n1
 lb --> n2
 lb --> n3
+n1 -- dotted --> n2 -- dotted --> n3
+n3 -- dotted --> n2 -- dotted --> n1
 "#);
         let es: Vec<&EdgePath> = ["n1", "n2", "n3"]
             .iter()
@@ -7054,7 +7145,7 @@ src --> a
         // insets, so the group's internal arrangement is untouched.
         let (_d, l) = lay(r#"diagram top-down
 src
-group "A Very Long Group Title Indeed"
+group left-right "A Very Long Group Title Indeed"
 a
 b
 end
@@ -7101,8 +7192,11 @@ src --> b
             );
         }
         // The M5 guarantee: the children keep their internal arrangement
-        // (anchored at the left/top insets) — growth is sideways only.
-        assert!((b.x - s.x - (FRAME_PAD_X + a.w + NODE_SEP)).abs() < 1e-2);
+        // (anchored at the left/top insets) — growth is sideways only. The
+        // two edge-less members are packed onto adjacent ranks, so under
+        // left-right b sits a rank band right of a (band step = a's width
+        // + RANK_GAP), not a NODE_SEP row step.
+        assert!((b.x - s.x - (FRAME_PAD_X + a.w + RANK_GAP)).abs() < 1e-2);
         assert_all_finite(&l);
         assert_no_overlaps(&l);
     }
@@ -7419,7 +7513,7 @@ src --> b
         let (_d, l) = lay(r#"diagram top-down
 src1
 src2
-group "S"
+group left-right "S"
 a
 b
 end

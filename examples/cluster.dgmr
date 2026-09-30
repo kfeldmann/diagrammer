@@ -1,7 +1,7 @@
 diagram top-down
 
 group left-right fill="" color=""
-  group "Application"
+  group top-down "Application"
     group "LB Security Group" line="dashed"
       lb "Load\nBalancer"
     end

@@ -4,7 +4,7 @@ diagram top-down
     group "Tencent"
         pubclb "Public CLB"
         vpn "VPN Endpoint"
-        group "Private subnets"
+        group left-right "Private subnets"
             prvclb "Private CLB"
             cvm1 "Middleware"
             cvm2 "Platform"

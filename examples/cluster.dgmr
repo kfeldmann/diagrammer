@@ -1,6 +1,6 @@
 diagram top-down
 
-group left-right fill="#fff" color="#fff"
+group left-right fill="" color=""
   group "Application"
     group "LB Security Group" line="dashed"
       lb "Load\nBalancer"

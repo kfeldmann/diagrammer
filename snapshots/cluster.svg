@@ -23,7 +23,7 @@
     </marker>
   </defs>
   <g fill="none" stroke="#88BDA4" stroke-width="1" stroke-linejoin="round">
-    <rect x="20.00" y="129.50" width="531.82" height="484.80" rx="8" ry="8" fill="#fff" stroke="#fff" stroke-width="1"/>
+    <rect x="20.00" y="129.50" width="531.82" height="484.80" rx="8" ry="8" fill="none" stroke="none" stroke-width="1"/>
     <rect x="41.00" y="137.50" width="195.81" height="468.80" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
     <rect x="63.21" y="169.50" width="151.39" height="110.80" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>
     <rect x="62.00" y="325.30" width="153.81" height="108.00" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>

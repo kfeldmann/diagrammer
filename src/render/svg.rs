@@ -252,20 +252,34 @@ fn marker_id_for(color: &str, existing: &[(String, String)]) -> String {
 /// `line` (border style), and `text` (title color) are honored (M7.5); a
 /// frame with none of these falls back to the default frame palette
 /// ([`FRAME_STROKE`] border, [`FRAME_FILL`] interior, the group's default
-/// stroke-width, and a title color inherited from the group).
+/// stroke-width, and a title color inherited from the group). An **empty**
+/// `color` or `fill` (`color=""`/`fill=""`) suppresses that part of the frame
+/// entirely (`stroke="none"`/`fill="none"`), so `color="" fill=""` renders a
+/// fully invisible frame that still participates in layout.
 fn render_groups(groups: &[Group], rects: &[GroupRect]) -> String {
     let mut s = String::new();
-    // The group sets the default frame stroke/width (the M4 defaults); each
-    // frame's <rect> overrides fill/stroke/width/dasharray with its own
-    // `color`/`fill`/`line` (M7.5). A group with no `fill` gets the
-    // default frame fill ([`FRAME_FILL`]); an explicit `fill="none"` keeps
-    // the frame transparent so edges routed behind it stay visible.
     s.push_str(&format!(
         "  <g fill=\"none\" stroke=\"{FRAME_STROKE}\" stroke-width=\"{FRAME_STROKE_WIDTH}\" stroke-linejoin=\"round\">\n"
     ));
+    // `color`/`fill`/`line` (M7.5). An **empty** attribute value suppresses
+    // that part of the frame: `color=""` draws no border (`stroke="none"`)
+    // and `fill=""` no interior (`fill="none"`) — together they make a group
+    // visually invisible while it still groups + lays out its contents.
+    // Both are made explicit rather than left as `stroke=""`/`fill=""`, which
+    // is invalid SVG and would silently inherit from the enclosing `<g>`
+    // (the inherited `fill="none"` happens to look transparent, but the
+    // inherited frame stroke would keep a visible border).
     for (sg, r) in groups.iter().zip(rects.iter()) {
-        let stroke = escape_xml(sg.color.as_deref().unwrap_or(FRAME_STROKE));
-        let fill = escape_xml(sg.fill.as_deref().unwrap_or(FRAME_FILL));
+        let stroke = match sg.color.as_deref() {
+            Some("") => "none".to_string(),
+            Some(c) => escape_xml(c),
+            None => FRAME_STROKE.to_string(),
+        };
+        let fill = match sg.fill.as_deref() {
+            Some("") => "none".to_string(),
+            Some(c) => escape_xml(c),
+            None => FRAME_FILL.to_string(),
+        };
         let (width, dash) = frame_stroke(sg.line);
         s.push_str(&format!(
             "    <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"{}\"",
@@ -1445,6 +1459,34 @@ mod tests {
         assert!(!frame.contains("stroke-dasharray"), "{frame}");
         let title = svg.lines().find(|l| l.contains(">S</text>")).unwrap();
         assert!(!title.contains("fill="), "default title should inherit the group fill: {title}");
+    }
+
+    #[test]
+    fn empty_group_color_and_fill_suppress_frame_drawing() {
+        // An empty attribute value suppresses that part of the frame: no
+        // border (`stroke="none"`), no interior (`fill="none"`). Both are
+        // emitted explicitly — `stroke=""`/`fill=""` would be invalid SVG
+        // inheriting from the enclosing `<g>` (whose stroke is the default
+        // frame color, keeping a visible border). The group still lays out
+        // and titles normally.
+        let svg = render(
+            "diagram top-down\n\
+             group \"S\" color=\"\" fill=\"\"\n\
+             a\n\
+             end\n",
+        );
+        let frame = frame_rect(&svg);
+        assert!(frame.contains("stroke=\"none\""), "empty color should suppress the border: {frame}");
+        assert!(frame.contains("fill=\"none\""), "empty fill should suppress the interior: {frame}");
+        assert!(!frame.contains("stroke=\"#88BDA4\""), "border must not fall back to the default: {frame}");
+        assert!(!frame.contains("fill=\"#f2f8f4\""), "interior must not fall back to the default: {frame}");
+        // The group behaves normally otherwise: the title still renders.
+        assert!(svg.contains(">S</text>"), "invisible frame should still render its title: {svg}");
+        // Only one of the two suppressed: `color=""` with a real fill.
+        let svg = render("diagram top-down\ngroup \"S\" color=\"\" fill=\"#eef\"\na\nend\n");
+        let frame = frame_rect(&svg);
+        assert!(frame.contains("stroke=\"none\""), "{frame}");
+        assert!(frame.contains("fill=\"#eef\""), "{frame}");
     }
 
     #[test]

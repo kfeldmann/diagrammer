@@ -248,9 +248,11 @@ and **M11** (edge `from`/`to` side attributes; see
 
 - **Groups:**
   - `color` — frame border / stroke color (M7.5). Defaults to `"#88BDA4"`.
+    An **empty string** (`color=""`) draws no border at all.
   - `fill` — frame interior background color (M7.5). Defaults to
     `"#f2f8f4"`; an explicit `fill="none"` keeps the frame transparent so
-    edges routed behind a group stay visible through it.
+    edges routed behind a group stay visible through it. An **empty string**
+    (`fill=""`) is equivalent to `fill="none"`.
   - `line` — frame border line style (M7.5): one of `solid`, `dotted`,
     `dashed`, `thick` — the same set as edge styles, but supplied as a
     quoted attribute value (e.g. `line="dashed"`), since the group
@@ -259,6 +261,12 @@ and **M11** (edge `from`/`to` side attributes; see
     (e.g. `line="wavy"`) is a resolve error.
   - `text` — frame title text color (M7.5). Applies only when the group
     has a title.
+
+  A group with both `color=""` and `fill=""` renders **fully invisible** —
+  no border, no interior — which is useful when a group exists only to
+  control the layout of its contents (the group still behaves normally
+  otherwise: geometry, layout direction, and title placement are
+  unchanged).
 
 **Unknown attributes are a parse error.** An attribute is valid only if it
 is recognized for the position it appears in (see the per-position lists

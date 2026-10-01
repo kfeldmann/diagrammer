@@ -4941,14 +4941,17 @@ fn center_blocks(layers: &[Vec<usize>], upper_neighbors: &[Vec<usize>], w: &[f32
                 }
             }
         }
-        if parents.is_empty() {
-            continue; // source rank: keep left-packed init
-        }
-        let anchor = parents
-            .iter()
-            .map(|&u| x[u] + w[u] / 2.0)
-            .sum::<f32>()
-            / parents.len() as f32;
+        // Source ranks (no parents) center on 0.0 — the left-pack origin —
+        // so every component's block is centered rather than left-flush.
+        let anchor = if parents.is_empty() {
+            0.0
+        } else {
+            parents
+                .iter()
+                .map(|&u| x[u] + w[u] / 2.0)
+                .sum::<f32>()
+                / parents.len() as f32
+        };
 
         // Block span over real (non-dummy) nodes so zero-size dummies on long
         // edges don't skew the center; fall back to all if the rank is purely
@@ -5728,7 +5731,7 @@ mod tests {
         assert_eq!(l.nodes.len(), 3);
         assert_all_finite(&l);
         assert_no_overlaps(&l);
-        // One column ⇒ same left x (all left-packed singletons).
+        // One column ⇒ same left x (all singletons have equal width → same center → same left).
         let x0 = l.nodes[0].x;
         assert!(l.nodes.iter().all(|n| (n.x - x0).abs() < 1e-3));
         let ys: Vec<f32> = l.nodes.iter().map(|n| n.y).collect();

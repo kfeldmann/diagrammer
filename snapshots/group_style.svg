@@ -14,14 +14,14 @@
     <text x="30.00" y="133.50" fill="#005" text-anchor="start" dominant-baseline="hanging">Group</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="77.96,62.00 77.96,95.75 82.52,95.75 82.52,129.50 82.52,149.50 66.20,149.50 66.20,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="173.20,62.00 173.20,95.75 184.53,95.75 184.53,129.50 184.53,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="77.96,62.00 77.96,69.00 82.52,69.00 82.52,129.50 82.52,149.50 66.20,149.50 66.20,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="173.20,62.00 173.20,122.50 184.53,122.50 184.53,129.50 184.53,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g fill="#fff" stroke="none">
-    <rect x="63.12" y="69.88" width="29.67" height="18.00"/>
+    <rect x="67.69" y="90.25" width="29.67" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
-    <text x="77.96" y="78.88" fill="#0a7">sync</text>
+    <text x="82.52" y="99.25" fill="#0a7">sync</text>
   </g>
   <g>
     <rect x="52.85" y="20.00" width="50.23" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>

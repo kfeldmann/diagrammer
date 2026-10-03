@@ -23,20 +23,20 @@
     <polyline points="161.03,171.50 161.03,205.25 183.35,205.25 183.35,239.00 183.35,259.00 126.19,259.00 126.19,267.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="274.62,171.50 274.62,232.00 309.45,232.00 309.45,239.00 309.45,267.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="75.31,313.00 75.31,333.00 75.31,338.00 96.14,338.00 96.14,396.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="258.57,313.00 258.57,333.00 258.57,375.00 106.14,375.00 106.14,396.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="154.21,313.00 154.21,333.00 154.21,356.50 165.14,356.50 165.14,396.50" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
-    <polyline points="268.57,313.00 268.57,333.00 268.57,393.50 225.60,393.50 225.60,396.50" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
-    <polyline points="177.07,313.00 177.07,333.00 177.07,338.00 284.60,338.00 284.60,403.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="258.57,313.00 258.57,333.00 258.57,371.60 106.14,371.60 106.14,396.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="154.21,313.00 154.21,333.00 154.21,348.20 165.14,348.20 165.14,396.50" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
+    <polyline points="268.57,313.00 268.57,333.00 268.57,381.80 225.60,381.80 225.60,396.50" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
+    <polyline points="177.07,313.00 177.07,333.00 177.07,359.90 284.60,359.90 284.60,403.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="346.62,313.00 346.62,333.00 346.62,393.50 309.45,393.50 309.45,403.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
     <polyline points="66.57,456.50 66.57,520.00" stroke="#888" stroke-width="3" marker-end="url(#arrow-888)"/>
   </g>
   <g fill="#fff" stroke="none">
-    <rect x="210.47" y="329.00" width="40.73" height="18.00"/>
+    <rect x="210.47" y="350.90" width="40.73" height="18.00"/>
     <rect x="326.26" y="354.25" width="40.73" height="18.00"/>
     <rect x="36.39" y="481.25" width="60.36" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
-    <text x="230.84" y="338.00">events</text>
+    <text x="230.84" y="359.90">events</text>
     <text x="346.62" y="363.25">events</text>
     <text x="66.57" y="490.25">replication</text>
   </g>

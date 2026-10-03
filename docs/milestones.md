@@ -6,9 +6,9 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0–M7.5, M9–M14 and M15 are complete (M12 was absorbed
-by M11.5), plus the post-M13 hardening pass below. **M8 (CLI polish) is the
-only remaining milestone.**
+**Current position:** M0–M7.5, M9–M14, M15 and M16 are complete (M12 was
+absorbed by M11.5), plus the post-M13 hardening pass below. **M8 (CLI polish)
+is the only remaining milestone.**
 
 ---
 
@@ -687,12 +687,12 @@ flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
       grid, deterministic priority) — not another per-case patch. Record the
       verdict in this section; explicitly out of scope to build here.
 
-      **Verdict (recorded retroactively, post-M13): YES — the criterion is
+**Verdict (recorded retroactively, post-M13): YES — the criterion is
       met; the next routing move is the global pass, not another patch.** The
       unified regime satisfies the invariants only through per-case fallbacks,
       and they fire on the canonical samples:
 
-      1. **The last-resort Z is an invariant-breaking fallback, and it fires
+1. **The last-resort Z is an invariant-breaking fallback, and it fires
          on a sample.** A sweep of all 11 golden snapshots for edge segments
          cutting node interiors finds exactly one violation:
          `examples/sides.dgmr`, `api -- from="top" --> db` — the
@@ -704,7 +704,7 @@ flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
          the escape plus the flow-first Z always re-crosses the source box —
          so such edges are `track_route`-or-bust and the fallback fires
          whenever the world is crowded.
-      2. **The root cause is a resource conflict the one-pass regime cannot
+2. **The root cause is a resource conflict the one-pass regime cannot
          arbitrate — and it is a regression the per-case regime caused
          itself.** Both failures seal a forced port's `SIDE_ESCAPE` pocket
          inside the 8 px `SEGMENT_OBSTACLE_PAD` bands of already-routed peer
@@ -718,7 +718,7 @@ flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
          declaration-order router, traded the no-node-pass-through invariant
          for the no-parallel-riding one. Two invariants ping-ponging under
          local tweaks is exactly the signal this item was written to catch.
-      3. **No per-case patch fixes it inside the invariants.** Restoring
+3. **No per-case patch fixes it inside the invariants.** Restoring
          "never through a node" requires moving an already-routed edge
          (rip-up / simultaneous assignment — absent from the architecture) or
          carving new exemptions (port-corridor escapes, pad shrink near
@@ -728,19 +728,19 @@ flow)` vocabulary, the `route_lca` ladder, and all existing invariants.
          any routed L-corner within ~8 px of another edge's port escape seals
          it (the self-loop stub in `sides.dgmr` is exactly this).
 
-      So: the global pass, when scheduled, with three requirements the
+So: the global pass, when scheduled, with three requirements the
       failures dictate — peer edge segments as *soft* (negotiable) occupancy,
       not hard bands; a reserved approach right-of-way for every node port (a
       port must stay reachable — both failures are unreachable endpoints);
       and rip-up-and-reroute or simultaneous assignment so route quality stops
-      depending on declaration order. Still explicitly out of scope here.
-      The post-M13 **sealed-port fallback** (see the hardening section above)
-      addresses the two named failures locally — when no route is found it
-      slides a lone side's port along its side until an escape pocket opens,
-      restoring "never through a node" on `examples/sides.dgmr` (swept with
-      no carve-out) — but it is a port-side mitigation, not the arbitration
-      this item calls for: the quality and order-dependence points above
-      stand until the global pass lands.
+      depending on declaration order. **Scheduled and implemented as M16
+      below**; until it landed, the post-M13 **sealed-port fallback** (see the
+      hardening section above) addressed the two named failures locally —
+      when no route is found it slides a lone side's port along its side
+      until an escape pocket opens, restoring "never through a node" on
+      `examples/sides.dgmr` (swept with no carve-out) — but it was a port-side
+      mitigation, not the arbitration this item calls for: the quality and
+      order-dependence points above stood until the global pass landed.
 
 **Blocked by:** M11. **Blocks:** M13 (they build on the final geometry so the
 cosmetic work is done once).
@@ -1037,17 +1037,140 @@ edge existed to enforce it.
       partly handled by `try_around_target_route`); M15 makes them
       user-reachable with plain edge-less members. Per the M11.5 verdict
       below, the cure is the **global routing pass** (peer segments as soft
-      occupancy, reserved port right-of-way, rip-up), not another per-case
-      fallback; the samples avoid the shape by declaring the direction that
-      matches their cross-boundary traffic.
+      occupancy, reserved port right-of-way, rip-up) — implemented as **M16**
+      below, with the stacked shape as a regression test
+      (`stacked_group_cross_traffic_keeps_ports_reachable`).
 
 **Blocked by:** nothing (ranking-level change). **Blocks:** nothing, but it
 broadens exposure to the known routing limitation above.
 
+### ✅ M16 — Global routing pass (the M11.5 verdict, implemented)
+
+The M11.5 verdict recorded that the one-pass regime satisfies the invariants
+only through per-case fallbacks, because it cannot arbitrate a resource
+conflict: an already-routed peer segment's hard band can seal a later edge's
+port escape pocket, and whose route yields then depends on declaration order.
+Its three requirements are implemented here as a two-phase routing regime in
+`assemble`, on top of the unified M11.5 machinery (one obstacle world, one
+ladder, one dispatch point — all kept).
+
+- [x] **Soft peer occupancy.** `Obstacles` splits peer segments into a hard
+      list (empty in the global pass; kept for the unit fixtures and as an
+      absolute backstop for callers that want it) and a soft list
+      (`SOFT_RIDE_COST` = 100 per parallel-riding band). Nothing is barred by
+      soft occupancy: `route_lca`'s ladder and `route_edge`'s dispatch accept
+      the least-conflicting hard-clear candidate (first zero-conflict
+      candidate wins outright; earliest wins ties), and `track_route` charges
+      soft bands in its Dijkstra cost so routes prefer clear corridors but
+      may cross negotiated space. A conflict is resolved by rip-up, never by
+      forcing the current edge into a worse shape to dodge an earlier edge's
+      parked band.
+- [x] **Reserved port right-of-way.** Every routed edge reserves the pocket
+      each of its ports escapes through — `pocket_rects`: the swept rect of
+      the *actual* terminal approach segment (first/last, truncated to
+      `PORT_RIGHT_OF_WAY` = `SIDE_ESCAPE`, grown by `PORT_CORRIDOR_PAD` = 3).
+      Derived from the route itself rather than the nominal side, so an edge
+      whose real entry is perpendicular (an around-target route, M14's
+      decoupled bends) reserves the corridor it uses and never blocks a
+      sibling's straight approach through its unused nominal port. Pockets
+      are hard for peers (parallel riding inside barred, perpendicular
+      crossing legal — the `seg_clear_padded` polarity), invisible to the
+      edge's own route, and re-derived from the live polylines each repair
+      pass so a moved approach also moves its reservation.
+- [x] **Simultaneous pass + rip-up-and-reroute.** Phase 1 routes every edge
+      against the base world only (nodes + LCA-level frame borders) — the
+      simultaneous assignment: every edge gets its unconstrained-best route,
+      independent of declaration order (verified: phase-1 polylines are
+      identical under edge permutations). Phase 2 is a bounded
+      (`MAX_RIPUP_PASSES` = 8) repair loop: `scan_violations` finds (a)
+      hard-world defects (a segment through a node or riding a border — the
+      kept-unconditional terminal) and (b) collinear peer riding within
+      `SEGMENT_OBSTACLE_PAD`, attributing each ride by the pockets — a rider
+      inside the *other* edge's pocket yields alone (right-of-way), a rider
+      inside its *own* pocket stays while the other yields, a mid-route ride
+      away from any pocket is mutual; the ripped edges reroute in index
+      order against the live paths (a later ripped edge sees an earlier
+      one's already-moved segments, so two edges that parked on the same slot
+      cannot both keep it), and an edge still violating after its pass is
+      frozen (its violation is the bounded best effort, like the ladder's
+      terminal).
+- [x] **Gap-wide lane coordination (M9 refinement, absorbed here).** M9's
+      lane separation grouped jogs by (source, side, gap), which left
+      cross-source sharers of one gap uncoordinated — two edges from
+      different sources could park their jogs a few px apart and only the
+      declaration-order hard bands kept them apart. `assign_lanes` now
+      groups by (side, gap) alone and shrinks the band away from the union
+      of the members' source-side obstacles, so every jog in one band is
+      spread together — the simultaneous-assignment reading of lane
+      separation. Per-source separation still holds (a superset); the M9/M13
+      lane tests pass unchanged.
+- [x] **The two recorded failures now route by negotiation.** On
+      `examples/sides.dgmr`, `api -- from="top" --> db` and
+      `bus -- from="right" to="left" --> queue` — the sealed-pocket edges —
+      route clear without the port-fallback carve-out, and the former is
+      simpler than its pre-M16 shape (escape top, across, down into db — no
+      ladder fallback needed); the sealed-port fallback stays as the
+      backstop for ports that still cannot escape.
+- [x] **Frame rep-crossing fan (finishing pass).** Cross-boundary edges whose
+      chains are non-empty converge on their representative's frame crossing
+      at the member's own cross (node-aligned entry); when several edges hit
+      the same member — or members placed level — the crossing coordinates
+      are fanned apart on the frame side, minimum [`FAN_SEP`] (like node
+      sides, [`separate_ports`] with `frame: true`). Mismatched ends keep
+      their M14 corridor clamp (no fan entry); an around-target edge's
+      crossing is unused by its own generator but still fanned, so its
+      fallback path gets a crossing of its own — its node ports are fanned
+      on the implicit side for the same reason (the around-router reads node
+      geometry directly, so neither move disturbs the around-route).
+- [x] **Negotiation vocabulary widened (finishing pass).** The repair loop
+      needs candidate generators that can actually *step aside*; four gaps
+      the dense-graph stress sweep exposed are closed:
+      `track_route` seeds tracks at a band's centerline, so a route crosses
+      a frame's drawn outline legally in two perpendicular hops (riding
+      along it stays barred — the crossing waypoints survive collapse via
+      `record_border_crossings`); the within-frame stub's sibling-avoidance
+      detour ([`force_stub_around_siblings`]) now applies to unforced ends
+      too (port separation can clamp a port cross onto a sibling's column)
+      and detours inside the chain frame's border bands with the routing
+      world's peer occupancy as soft cost, so two edges' detours around one
+      sibling negotiate into distinct corridors; the around-target
+      generator jogs its initial descent around whatever blocks the source
+      column (track-routed), records crossings against the whole world's
+      borders (not just its own frames), and fans its side-run outward in
+      [`FAN_SEP`] steps when the nearest corridor is occupied; and
+      `assign_lanes` groups edges by gap-span *overlap* per side (not by
+      the exact span), so a wide-gap edge and a narrow-gap edge sharing one
+      band spread their jog rows together — the group's band is the
+      intersection of its members' spans, shrunk away from the band
+      obstacles.
+- [x] Tests: the stacked-group M15-limitation regression (no pass-through,
+      no overlap, every edge on its target's boundary — a reachable port);
+      cross-source gap-lane coordination (≥ [`FAN_SEP`] apart); a unit sweep
+      of `scan_violations`' attribution (clean / hard defect / mutual ride /
+      pocket invader); and a dense deterministic compound stress graph (24
+      nested-group nodes, ~17 edges from a fixed LCG) sweeping all the
+      invariants at once. `example_edges_never_pass_through_nodes` and the
+      M9/M11 invariant suites sweep all six samples with no carve-out.
+      Snapshots regenerated where negotiation improved a route: `finance`
+      (the cross-source fan lanes respread; the big port-list label now has
+      a clean anchor), `group_style` (two cross-boundary lanes spread to the
+      band's edges instead of coinciding at the midpoint), `sides` (the two
+      forced edges renegotiated). All other snapshots byte-identical.
+- [x] **Bounded residue (documented).** When the repair cannot fix an edge
+      (no candidate clears the world and no port alternative opens), the
+      edge freezes with its least-bad route — the same bounded best-effort
+      the ladder's kept-unconditional terminal always represented. Phase 2's
+      conflict splitting is index-ordered (deterministic); it only fires
+      among directly conflicting edges, which the gap-wide lane grouping and
+      the port fans make rare.
+
+**Blocked by:** M11.5 (the unified regime it refines). **Blocks:** nothing
+new; M8 remains the only open milestone.
+
 ### Dependency graph
 
 ```
-M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13 ── M14 ── M15
+M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13 ── M14 ── M15 ── M16
               │   │      └── M6 (interleaves)        │
               │   └──────── M8 (deferred) ───────────┘
               └── M5.5 ── M7 ─┘

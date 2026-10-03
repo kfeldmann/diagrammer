@@ -57,7 +57,10 @@ src/
                  sealed-port fallback (a lone side's port slides when its
                  escape pocket is sealed) + M13 label placement & label-aware
                  fan/lane spacing + M14 forced sides decoupled from frame
-                 crossings → Layout
+                 crossings + M16 global routing pass (a simultaneous pass
+                 against the shared obstacle world — no peer segments — then
+                 a bounded rip-up-and-repair loop with soft peer occupancy
+                 and reserved port pockets) → Layout
   text.rs        label measurement against the baked metrics table
   metrics_table.rs  GENERATED baked DejaVu metrics — never hand-edit;
                  regenerate: cargo run -p gen-metrics-table

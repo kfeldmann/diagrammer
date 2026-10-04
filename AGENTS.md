@@ -60,7 +60,9 @@ src/
                  crossings + M16 global routing pass (a simultaneous pass
                  against the shared obstacle world — no peer segments — then
                  a bounded rip-up-and-repair loop with soft peer occupancy
-                 and reserved port pockets) → Layout
+                 and reserved port pockets) + M17 union-merge lane grouping
+                 with content-keyed (endpoint-id) sort tie-breaks, so phase-1
+                 routing is invariant under edge permutation → Layout
   text.rs        label measurement against the baked metrics table
   metrics_table.rs  GENERATED baked DejaVu metrics — never hand-edit;
                  regenerate: cargo run -p gen-metrics-table
@@ -206,6 +208,11 @@ breaks geometry):
 
 - `src/render/svg.rs` — unit checks + golden snapshots (`assert_snapshot`).
 - `src/layout.rs` — geometry/alignment/cross-boundary tests (the bulk).
+  Two `#[ignore]`d inspection tests dump a layout (`--ignored --nocapture`):
+  `_dump_infra_for_inspection` reads `DIAG_SRC` (path to a `.dgmr` file) to
+  dump an arbitrary source, `_dump_labels_for_inspection` reports edge-label
+  anchor coverage on the samples. These are the only env-driven debug
+  switches; production code has none.
 - `src/resolve.rs` — validation + error-case tests.
 - `src/text.rs` — measurement sanity tests + `font_verification` (proves the
   baked table ≡ live font lookups, exhaustively over all Unicode codepoints;

@@ -444,6 +444,19 @@ fn cyl_height(shape: crate::ast::Shape, text_height: f32) -> f32 {
 /// Lay out a resolved [`Diagram`], honoring group containment and
 /// per-group direction.
 pub fn layout(diagram: &Diagram) -> Layout {
+    layout_impl(diagram, false)
+}
+
+/// Test hook: stop after the M16 routing pass's phase 1, so tests can
+/// compare the simultaneous routes (which do not depend on the edges'
+/// declaration order) rather than the post-repair final ones (which do, by
+/// design — phase 2 negotiates in index order).
+#[cfg(test)]
+fn layout_phase1(diagram: &Diagram) -> Layout {
+    layout_impl(diagram, true)
+}
+
+fn layout_impl(diagram: &Diagram, phase1_only: bool) -> Layout {
     if diagram.nodes.is_empty() {
         // Still produce frames for any (empty) groups, sized to their
         // padding, so they render as small labeled boxes rather than vanish.
@@ -455,7 +468,7 @@ pub fn layout(diagram: &Diagram) -> Layout {
             &Default::default(),
             &Default::default(),
         );
-        return assemble(diagram, top, &[]);
+        return assemble(diagram, top, &[], phase1_only);
     }
 
     // Map node id -> index, matching `diagram.nodes` order.
@@ -495,7 +508,7 @@ pub fn layout(diagram: &Diagram) -> Layout {
     let (cross_subs, cross_nodes) = cross_boundary_reach(diagram, &edge_infos, &id_index);
 
     let top = layout_level(diagram, None, diagram.direction, &edge_infos, &cross_subs, &cross_nodes);
-    assemble(diagram, top, &edge_infos)
+    assemble(diagram, top, &edge_infos, phase1_only)
 }
 
 /// The absolute geometry `assemble` works from, shared by the context
@@ -742,7 +755,12 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
 /// simultaneous pass against the shared world (nodes, borders, reserved
 /// port corridors, no peer segments), then a bounded rip-up-and-repair
 /// loop against the negotiated world (surviving peers' segments soft).
-fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout {
+fn assemble(
+    diagram: &Diagram,
+    top: LevelOut,
+    edge_infos: &[EdgeInfo],
+    phase1_only: bool,
+) -> Layout {
     use std::collections::{HashMap, HashSet};
 
     let id_index: HashMap<&str, usize> = diagram
@@ -837,6 +855,8 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
             side: ctx.from_side,
             other_cross: cross_of(center(ctx.to_rect), ctx.from_side),
             cover: side_label_cover(ctx.from_side, label_sizes[ctx.ei]),
+            from_id: ctx.from_id.clone(),
+            to_id: ctx.to_id.clone(),
         });
         // An around-target-frame edge enters its target from a perpendicular
         // side, so its own side node port is unused — but it is still
@@ -853,6 +873,8 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
             side: ctx.to_side,
             other_cross: cross_of(center(ctx.from_rect), ctx.to_side),
             cover: side_label_cover(ctx.to_side, label_sizes[ctx.ei]),
+            from_id: ctx.from_id.clone(),
+            to_id: ctx.to_id.clone(),
         });
     }
     let sep = separate_ports(&port_ends);
@@ -937,6 +959,8 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
                 side: ctx.from_frame_side,
                 other_cross: ctx.from_cross,
                 cover: side_label_cover(ctx.from_frame_side, label_sizes[ctx.ei]),
+                from_id: ctx.from_id.clone(),
+                to_id: ctx.to_id.clone(),
             });
         }
         if !ctx.to_mismatched
@@ -951,6 +975,8 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
                 side: ctx.to_frame_side,
                 other_cross: ctx.to_cross,
                 cover: side_label_cover(ctx.to_frame_side, label_sizes[ctx.ei]),
+                from_id: ctx.from_id.clone(),
+                to_id: ctx.to_id.clone(),
             });
         }
     }
@@ -1013,6 +1039,8 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
             axis: ctx.flow,
             cover: lane_label_cover(ctx.flow, label_sizes[ctx.ei]),
             obstacles,
+            from_id: ctx.from_id.clone(),
+            to_id: ctx.to_id.clone(),
         });
     }
     let lanes = assign_lanes(&lane_edges);
@@ -1076,8 +1104,12 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
     // (two edges that parked on the same slot cannot both keep it; the
     // deterministic order splits them, and the pre-passes make such
     // conflicts rare).
+    // Test hook: `phase1_only` skips the repair loop, leaving the
+    // simultaneous phase-1 routes in place for permutation-invariance
+    // checks. Production layout always runs the full loop.
+    let passes = if phase1_only { 0 } else { MAX_RIPUP_PASSES };
     let mut frozen: std::collections::BTreeSet<usize> = std::collections::BTreeSet::new();
-    for _pass in 0..MAX_RIPUP_PASSES {
+    for _pass in 0..passes {
         // Each edge's reserved pocket is derived from its *current* polyline
         // (the escape a router would take from each port), so a repair
         // reroute that moved an approach also moves its reservation.
@@ -1117,14 +1149,6 @@ fn assemble(diagram: &Diagram, top: LevelOut, edge_infos: &[EdgeInfo]) -> Layout
         for &ei in &rip {
             if still.contains(&ei) {
                 frozen.insert(ei);
-            }
-        }
-    }
-    if std::env::var("DIAG_DBG").is_ok() {
-        for (ctx, e) in ctxs.iter().zip(&paths) {
-            if let Some(pts) = e {
-                let s: Vec<String> = pts.iter().map(|(x, y)| format!("({x:.1},{y:.1})")).collect();
-                eprintln!("DBG fin {}->{} : {}", ctx.from_id, ctx.to_id, s.join(" "));
             }
         }
     }
@@ -1454,7 +1478,7 @@ fn direct_chain_route(raw: &[(f32, f32)], axis: FlowAxis, obs: &Obstacles) -> Ve
             if obs.clear(&seg) {
                 out.push(p1);
             } else {
-                let tr = track_route(p0, p1, obs);
+                let tr = track_route(p0, p1, obs, Escapes::default());
                 if !tr.is_empty() && obs.clear(&tr) {
                     out.extend(tr.into_iter().skip(1));
                 } else {
@@ -1465,7 +1489,7 @@ fn direct_chain_route(raw: &[(f32, f32)], axis: FlowAxis, obs: &Obstacles) -> Ve
             }
         } else {
             let jf = jog_flow(f0, f1);
-            out.extend(route_lca(p0, p1, axis, jf, obs));
+            out.extend(route_lca(p0, p1, axis, jf, obs, Escapes::default()));
         }
     }
     dedup_consecutive(&mut out);
@@ -1867,7 +1891,17 @@ fn lca_segment(
     let b_perp = side_perpendicular(b_side, axis);
     let a_out = if a_perp { escape_point(a, a_side, SIDE_ESCAPE) } else { a };
     let b_out = if b_perp { escape_point(b, b_side, SIDE_ESCAPE) } else { b };
-    let mut pts = route_lca(a_out, b_out, axis, lane, obs);
+    let mut pts = route_lca(
+        a_out,
+        b_out,
+        axis,
+        lane,
+        obs,
+        Escapes {
+            start: a_perp.then(|| Dir::of_side(a_side)),
+            end: b_perp.then(|| Dir::of_side(b_side)),
+        },
+    );
     if a_perp {
         pts.insert(0, a_out);
         pts.insert(0, a);
@@ -3003,9 +3037,6 @@ fn scan_violations(
     for (ei, path) in paths.iter().enumerate() {
         let Some(pts) = path else { continue };
         if !edge_world(geom, &ctxs[ei]).clear(pts) {
-            if std::env::var("DIAG_DBG").is_ok() {
-                eprintln!("DBG scan defect {}->{}", ctxs[ei].from_id, ctxs[ei].to_id);
-            }
             out.insert(ei);
         }
     }
@@ -3037,12 +3068,6 @@ fn scan_violations(
                 }
             }
             if let Some(v) = verdict {
-                if std::env::var("DIAG_DBG").is_ok() {
-                    eprintln!(
-                        "DBG scan ride {}->{} vs {}->{} -> {:?}",
-                        ctxs[i].from_id, ctxs[i].to_id, ctxs[j].from_id, ctxs[j].to_id, v
-                    );
-                }
                 for &k in &v {
                     out.insert(k);
                 }
@@ -3333,6 +3358,101 @@ fn escape_point(p: (f32, f32), side: Side, d: f32) -> (f32, f32) {
     }
 }
 
+/// One of the four axis-aligned directions, as a unit step — the outward
+/// normal of a port escape. The router uses it to bar legs that double back
+/// over the edge's *own* escape stub (a first leg running toward the start
+/// port, or a final leg running outward into the end escape point): the
+/// obstacle world contains nodes and peers but never the edge's own stub,
+/// so without this bar a reroute may ride the stub's line back toward the
+/// port and reverse over it — an out-and-back spike on the page.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Dir {
+    PosX,
+    NegX,
+    PosY,
+    NegY,
+}
+
+impl Dir {
+    /// The outward normal of `side` (the direction [`escape_point`] moves
+    /// along).
+    fn of_side(side: Side) -> Dir {
+        match side {
+            Side::Top => Dir::NegY,
+            Side::Bottom => Dir::PosY,
+            Side::Left => Dir::NegX,
+            Side::Right => Dir::PosX,
+        }
+    }
+
+    fn opposite(self) -> Dir {
+        match self {
+            Dir::PosX => Dir::NegX,
+            Dir::NegX => Dir::PosX,
+            Dir::PosY => Dir::NegY,
+            Dir::NegY => Dir::PosY,
+        }
+    }
+
+    /// The Dijkstra direction code [`track_route`] uses (0=+x, 1=-x, 2=+y,
+    /// 3=-y).
+    fn code(self) -> usize {
+        match self {
+            Dir::PosX => 0,
+            Dir::NegX => 1,
+            Dir::PosY => 2,
+            Dir::NegY => 3,
+        }
+    }
+}
+
+/// The outward escape directions of the port stubs attached around a routed
+/// span (M11), when the caller escapes a port first. `None` on an end means
+/// no stub is attached there (the route leg meets its continuation at a
+/// plain corner). Constrains the ladder: a first leg may not run opposite
+/// the start escape (back toward its port), and a final leg may not run
+/// along the end escape's outward direction (into its escape point from
+/// inside the stub span) — both ride the stub and reverse over it.
+#[derive(Clone, Copy, Default)]
+struct Escapes {
+    start: Option<Dir>,
+    end: Option<Dir>,
+}
+
+impl Escapes {
+    /// Does a candidate polyline double back over an escape stub — its
+    /// first leg running toward the start port, or its final leg running
+    /// outward into the end escape point? A same-direction first leg is a
+    /// harmless collinear extension of the stub; an inward final leg is the
+    /// appended stub leg itself.
+    fn defective(&self, pts: &[(f32, f32)]) -> bool {
+        if pts.len() < 2 {
+            return false;
+        }
+        let code = |p0: (f32, f32), p1: (f32, f32)| -> usize {
+            if (p1.0 - p0.0).abs() >= (p1.1 - p0.1).abs() {
+                if p1.0 > p0.0 { Dir::PosX } else { Dir::NegX }.code()
+            } else if p1.1 > p0.1 {
+                Dir::PosY.code()
+            } else {
+                Dir::NegY.code()
+            }
+        };
+        if let Some(d) = self.start {
+            if code(pts[0], pts[1]) == d.opposite().code() {
+                return true;
+            }
+        }
+        if let Some(d) = self.end {
+            let n = pts.len();
+            if code(pts[n - 2], pts[n - 1]) == d.code() {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 /// The flow-coordinate of the port on `rect`'s `side` at cross-axis
 /// coordinate `cross`, along `axis`. Unlike [`side_flow_coord`] — which
 /// assumes the side lies along the flow axis (the implicit choice always
@@ -3399,6 +3519,11 @@ struct PortEnd {
     /// no label knockout (labels anchor at node ports and lane runs), so
     /// their fan gaps stay at plain [`FAN_SEP`].
     frame: bool,
+    /// M17: the owning edge's endpoint ids — a content key for sorting, so
+    /// tie-breaks never fall back to the declaration order (permuting the
+    /// edges must permute nothing).
+    from_id: String,
+    to_id: String,
 }
 
 /// Assign fanned port cross-coordinates to node sides carrying more than one
@@ -3430,9 +3555,22 @@ fn separate_ports(ends: &[PortEnd]) -> std::collections::HashMap<(usize, bool), 
             continue;
         }
         // Sort by the other endpoint's cross-coordinate (a stable ordering
-        // that keeps fanned edges from crossing each other).
+        // that keeps fanned edges from crossing each other). Ties break on
+        // the edge's endpoint ids (M17), never on declaration order.
         let mut order: Vec<usize> = idxs.clone();
-        order.sort_by(|&a, &b| ends[a].other_cross.total_cmp(&ends[b].other_cross));
+        order.sort_by(|&a, &b| {
+            ends[a]
+                .other_cross
+                .total_cmp(&ends[b].other_cross)
+                .then_with(|| {
+                    (ends[a].from_id.as_str(), ends[a].to_id.as_str(), ends[a].is_from)
+                        .cmp(&(
+                            ends[b].from_id.as_str(),
+                            ends[b].to_id.as_str(),
+                            ends[b].is_from,
+                        ))
+                })
+        });
         // Desired port = the other endpoint's cross, clamped to the side.
         let mut assigned: Vec<f32> = order
             .iter()
@@ -3512,6 +3650,11 @@ struct LaneEdge {
     /// ([`lane_label_cover`]; 0 when unlabeled) — the lane gap grows with it
     /// (see [`label_pair_sep`]).
     cover: f32,
+    /// M17: the edge's endpoint ids — a content key for sorting, so
+    /// tie-breaks never fall back to the declaration order (permuting the
+    /// edges must permute nothing).
+    from_id: String,
+    to_id: String,
 }
 
 /// Assign distinct jog flow-coordinates (lanes) to parallel cross-boundary LCA
@@ -3557,6 +3700,12 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
     // of the band obstacles below.
     // Sweep the edges per side by gap-span and merge overlapping spans into
     // one group (deterministic: sorted by (side, lo, hi), then index).
+    // M17 — union by interval merge: a group's membership test runs against
+    // the running union (min lo, max hi) of its members' spans, not the head
+    // edge's span, so chained overlaps (A[0,10], B[5,15], C[12,20]) land in
+    // one group even though C misses the head. (M16 tested the head only,
+    // which split such chains — and could seat a group whose members pairwise
+    // overlap the head but not each other, an empty intersection.)
     let mut sweep: Vec<usize> = (0..edges.len()).collect();
     sweep.sort_by(|&a, &b| {
         edges[a]
@@ -3567,20 +3716,33 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
                 let (lb, hb) = gap_span(edges, b);
                 la.total_cmp(&lb)
                     .then_with(|| ha.total_cmp(&hb))
-                    .then_with(|| a.cmp(&b))
+                    .then_with(|| {
+                        (edges[a].from_id.as_str(), edges[a].to_id.as_str())
+                            .cmp(&(edges[b].from_id.as_str(), edges[b].to_id.as_str()))
+                    })
             })
     });
     let mut groups: Vec<Vec<usize>> = Vec::new();
+    let mut unions: Vec<(f32, f32)> = Vec::new();
     for &k in &sweep {
         let (lo, hi) = gap_span(edges, k);
-        match groups.iter_mut().find(|g| {
-            let (m0, m1) = gap_span(edges, g[0]);
-            edges[g[0]].from_side == edges[k].from_side
-                && m0 < hi - 1e-6
-                && lo < m1 - 1e-6
-        }) {
-            Some(g) => g.push(k),
-            None => groups.push(vec![k]),
+        let hit = groups
+            .iter()
+            .zip(unions.iter())
+            .position(|(g, &(m0, m1))| {
+                edges[g[0]].from_side == edges[k].from_side
+                    && m0 < hi - 1e-6
+                    && lo < m1 - 1e-6
+            });
+        match hit {
+            Some(gi) => {
+                groups[gi].push(k);
+                unions[gi] = (unions[gi].0.min(lo), unions[gi].1.max(hi));
+            }
+            None => {
+                groups.push(vec![k]);
+                unions.push((lo, hi));
+            }
         }
     }
     let mut out: HashMap<usize, f32> = HashMap::new();
@@ -3670,6 +3832,62 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
                 if k < seps.len() {
                     lane += seps[k];
                 }
+            }
+        } else if gap_lo > gap_hi {
+            // Empty intersection (M17's union merge can group chained
+            // overlaps with no coordinate inside every member's own gap): no
+            // common lane band exists, so each lane is clamped into its own
+            // edge's gap — never outside the jogger's own gap, unlike the old
+            // `gap_lo` default. The clamped fan below starts each lane at its
+            // own gap's midpoint and pushes lanes apart left-to-right (and
+            // back right-to-left where a clamp bunched an end), so members
+            // with identical or nested gaps still get distinct jogs instead
+            // of parking collinearly on one shared midpoint.
+            let spans: Vec<(f32, f32)> = order
+                .iter()
+                .map(|&i| {
+                    let (lo, hi) = gap_span(edges, i);
+                    (lo + LANE_INSET, hi - LANE_INSET)
+                })
+                .collect();
+            let mut assigned: Vec<f32> = spans
+                .iter()
+                .map(|&(lo, hi)| lo + (hi - lo).max(0.0) / 2.0)
+                .collect();
+            let seps: Vec<f32> = (0..n - 1)
+                .map(|g| {
+                    label_pair_sep(
+                        edges[order[g]].cover,
+                        edges[order[g + 1]].cover,
+                        FAN_SEP,
+                        None,
+                    )
+                })
+                .collect();
+            // Left-to-right push, clamp, right-to-left restore — the same
+            // three passes [`separate_ports`] fans with.
+            for k in 1..n {
+                let s = seps[k - 1];
+                if assigned[k] - assigned[k - 1] < s {
+                    assigned[k] = assigned[k - 1] + s;
+                }
+            }
+            for (k, v) in assigned.iter_mut().enumerate() {
+                let (lo, hi) = spans[k];
+                *v = v.clamp(lo.min(hi), hi.max(lo));
+            }
+            for k in (1..n).rev() {
+                let s = seps[k - 1];
+                if assigned[k] - assigned[k - 1] < s {
+                    assigned[k - 1] = assigned[k] - s;
+                }
+            }
+            for (k, v) in assigned.iter_mut().enumerate() {
+                let (lo, hi) = spans[k];
+                *v = v.clamp(lo.min(hi), hi.max(lo));
+            }
+            for (k, &i) in order.iter().enumerate() {
+                out.insert(edges[i].edge, assigned[k]);
             }
         } else {
             for &i in &order {
@@ -3774,8 +3992,10 @@ fn simple_z(a: (f32, f32), b: (f32, f32), axis: FlowAxis, lane: f32) -> Vec<(f32
 /// available. When nothing blocks the only corridors, no route is found
 /// and the caller falls back (the bounded ladder). Used when the simple Z
 /// is blocked; returns the polyline `a -> ... -> b`, or an empty vec if no
-/// route exists (caller falls back to the simple Z).
-fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles) -> Vec<(f32, f32)> {
+/// route exists (caller falls back to the simple Z). `esc` bars the
+/// double-back-over-own-escape-stub legs when the span starts/ends at an
+/// escaped port (see [`Escapes`]).
+fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> Vec<(f32, f32)> {
     // Vertical tracks (x) and horizontal tracks (y), seeded from node rects
     // and frame bands. A frame band also seeds its centerline (the drawn
     // outline) itself: stopping on the centerline is a designated crossing,
@@ -3869,6 +4089,12 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles) -> Vec<(f32, f32)>
     // can be penalised. 4 dirs; the start has no incoming dir (use 4 = none).
     // A binary heap with lazy deletion keeps the work proportional to the
     // graph size (the state count grows with the world's obstacle count).
+    // Escape bars (M11): the first leg out of `a` may not run back over the
+    // start stub, and the last leg into `b` may not run outward along the
+    // end stub — both would draw an out-and-back spike over the edge's own
+    // escape segment.
+    let bar_first = esc.start.map(|d| d.opposite().code());
+    let bar_last = esc.end.map(|d| d.code());
     let n_states = n * 5;
     let mut dist = vec![f32::INFINITY; n_states];
     let mut prev = vec![(usize::MAX, usize::MAX); n_states];
@@ -3895,6 +4121,12 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles) -> Vec<(f32, f32)>
         let i = node / nh;
         let j = node % nh;
         for (ni, nj, d_out, len, soft) in neighbours(i, j) {
+            if node == start && Some(d_out) == bar_first {
+                continue;
+            }
+            if ni * nh + nj == goal && Some(d_out) == bar_last {
+                continue;
+            }
             let v = ni * nh + nj;
             let cost = len
                 + soft
@@ -3985,6 +4217,7 @@ fn route_lca(
     axis: FlowAxis,
     lane: f32,
     obs: &Obstacles,
+    esc: Escapes,
 ) -> Vec<(f32, f32)> {
     if obs.is_empty() {
         return simple_z(a, b, axis, lane);
@@ -3993,7 +4226,11 @@ fn route_lca(
     // among the hard-clear rungs the least soft-conflicting wins (earliest
     // rung on ties). A parked peer's soft band therefore steers the route
     // away from it only when a clean shape exists at some rung — soft
-    // occupancy never blocks the ladder outright.
+    // occupancy never blocks the ladder outright. Rungs that double back
+    // over the span's own escape stubs are not candidates at all (M11):
+    // the obstacle world never contains the edge's own stub, so without
+    // this an otherwise-cheap rung could ride the stub's line back toward
+    // the port and reverse over it.
     let mut best: Option<(Vec<(f32, f32)>, f32)> = None;
     fn consider(
         obs: &Obstacles,
@@ -4008,24 +4245,37 @@ fn route_lca(
         }
     }
     let z = simple_z(a, b, axis, lane);
-    consider(obs, &mut best, z.clone());
-    if best.as_ref().is_some_and(|(_, c)| *c < 1e-6) {
-        return z;
+    if !esc.defective(&z) {
+        consider(obs, &mut best, z.clone());
+        if best.as_ref().is_some_and(|(_, c)| *c < 1e-6) {
+            return z;
+        }
     }
     let mid = jog_flow(cross_flow(a, axis).1, cross_flow(b, axis).1);
     let zm = simple_z(a, b, axis, mid);
-    consider(obs, &mut best, zm);
-    if best.as_ref().is_some_and(|(_, c)| *c < 1e-6) {
-        return best.expect("clean rung").0;
+    if !esc.defective(&zm) {
+        consider(obs, &mut best, zm.clone());
+        if best.as_ref().is_some_and(|(_, c)| *c < 1e-6) {
+            return best.expect("clean rung").0;
+        }
     }
-    let tr = track_route(a, b, obs);
+    let tr = track_route(a, b, obs, esc);
     if !tr.is_empty() {
         consider(obs, &mut best, tr);
     }
     match best {
         Some((pts, _)) => pts,
-        // Last resort: the simple Z at the lane (may cross, but is shortest).
-        None => z,
+        // Last resort: the simple Z at the lane (may cross, but is shortest)
+        // — or, when that would spike over an escape stub, the midpoint Z if
+        // it would not. Something must be returned; this is the bounded
+        // fallback.
+        None => {
+            if esc.defective(&z) && !esc.defective(&zm) {
+                zm
+            } else {
+                z
+            }
+        }
     }
 }
 
@@ -4063,7 +4313,17 @@ fn forced_direct_path(
     let b = escape_point(to_port, to_side, SIDE_ESCAPE);
     let lane = jog_flow(cross_flow(a, axis).1, cross_flow(b, axis).1);
     let mut pts = vec![from_port];
-    pts.extend(route_lca(a, b, axis, lane, obs));
+    pts.extend(route_lca(
+        a,
+        b,
+        axis,
+        lane,
+        obs,
+        Escapes {
+            start: Some(Dir::of_side(from_side)),
+            end: Some(Dir::of_side(to_side)),
+        },
+    ));
     pts.push(to_port);
     dedup_consecutive(&mut pts);
     pts
@@ -4206,10 +4466,26 @@ fn force_stub_around_siblings(
     obs.segments = world.segments.clone();
     obs.corridors = world.corridors.clone();
     let a = escape_point(node_port, side, SIDE_ESCAPE);
-    let tr = if inward {
-        track_route(rep_port, a, &obs)
+    // The stub's fixed legs hang off the node port's escape on one side of
+    // the routed span (the rep crossing on the other end is a plain corner
+    // into the next piece): bar the leg that would double back over the
+    // escape — toward the node port when routing outward, outward into the
+    // escape point when routing inward.
+    let esc = if inward {
+        Escapes {
+            start: None,
+            end: Some(Dir::of_side(side)),
+        }
     } else {
-        track_route(a, rep_port, &obs)
+        Escapes {
+            start: Some(Dir::of_side(side)),
+            end: None,
+        }
+    };
+    let tr = if inward {
+        track_route(rep_port, a, &obs, esc)
+    } else {
+        track_route(a, rep_port, &obs, esc)
     };
     if !tr.is_empty() && obs.clear(&tr) {
         if inward {
@@ -4687,7 +4963,7 @@ fn try_around_target_route(
                 (s, from_cc)
             } else {
                 let goal = with_flow(from_cc, descend_to, axis);
-                let tr = track_route(s[0], goal, obs);
+                let tr = track_route(s[0], goal, obs, Escapes::default());
                 if !tr.is_empty() && obs.clear(&tr) {
                     let end_cc = cross_flow(*tr.last().unwrap(), axis).0;
                     (tr, end_cc)
@@ -4698,7 +4974,20 @@ fn try_around_target_route(
         };
         let mut cf: Vec<(f32, f32)> = vec![(desc_cc, descend_to)];
         if outside {
-            cf.push((ac, to_fc));
+            // The lane waypoint (`ac`) is the around-run outside the frame.
+            // When the descent column already ends on the target's side of
+            // it — between the frame border and the lane, most often —
+            // touching the lane first would ride out to it and reverse
+            // straight back through the crossing: an out-and-back spike
+            // over the descent's own tail. The lane detour is for a descent
+            // that ends on the frame's side of the lane, where running
+            // along it keeps [`AROUND_CLEAR`] off the outline up to the
+            // crossing row; past it, cross into the frame directly.
+            let past_lane = (desc_cc < ac) == (node_ac < ac);
+            if !past_lane {
+                cf.push((ac, to_fc));
+            }
+            cf.push((node_ac, to_fc));
         } else {
             cf.push((ac, descend_to));
             cf.push((ac, to_fc));
@@ -6310,7 +6599,7 @@ mod tests {
             println!("  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h);
         }
         for e in &l.edges {
-            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.0},{:.0})", x, y)).collect();
+            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
             println!("  {:<8} -> {:<8} : {}", e.from, e.to, pts.join(" "));
         }
     }
@@ -8251,6 +8540,24 @@ a --> b
                 }
             }
         }
+        // No edge rides over itself either (M11): two of its own segments
+        // sharing a collinear overlapping span — an out-and-back spike, e.g.
+        // a route doubling back over its own escape stub. Adjacent
+        // perpendicular segments share only their corner, and the border
+        // crossings re-inserted along a straight run ([
+        // `record_border_crossings`]) are collinear but non-overlapping, so
+        // neither false-positives.
+        for e in &l.edges {
+            for k in 0..e.points.len().saturating_sub(1) {
+                for m in (k + 1)..e.points.len().saturating_sub(1) {
+                    assert!(
+                        !segments_overlap(e.points[k], e.points[k + 1], e.points[m], e.points[m + 1]),
+                        "edge {}->{} overlaps itself (seg {k} / {m})",
+                        e.from, e.to
+                    );
+                }
+            }
+        }
         // No edge passes through a node that is not one of its endpoints.
         for (ei, e) in l.edges.iter().enumerate() {
             let from_idx = id_index[e.from.as_str()];
@@ -9064,6 +9371,8 @@ src -- to="bottom" --> t
                     other_cross: x,
                     cover,
                     frame: false,
+                    from_id: format!("f{k}"),
+                    to_id: format!("t{k}"),
                 })
                 .collect()
         };
@@ -9109,6 +9418,8 @@ src -- to="bottom" --> t
                     to_cross: k as f32,
                     axis: FlowAxis::Vertical,
                     cover: c,
+                    from_id: format!("f{k}"),
+                    to_id: format!("t{k}"),
                     obstacles: Vec::new(),
                 })
                 .collect();
@@ -9478,6 +9789,88 @@ src -- to="bottom" --> t
                 e.from,
                 e.to
             );
+        }
+    }
+
+    // ============ M17 — phase-1 permutation invariance ======================
+    // M16 finding 2, enshrined: the routing pass's phase 1 is simultaneous —
+    // every edge routes against the same world (nodes, frame borders,
+    // reserved port pockets; no peer segments) — so its polylines must not
+    // depend on the edges' declaration order. (The *final*, post-phase-2
+    // routes deliberately may: the repair loop negotiates in index order —
+    // the documented bounded residue in milestones.md.)
+    #[test]
+    fn phase1_polylines_do_not_depend_on_edge_order() {
+        // All nodes are declared up front, so reordering the edge lines
+        // cannot shift node declaration order (the order resolve()'s dedup
+        // commits to). Every (from, to) pair is unique, so routes can be
+        // matched across the two layouts by endpoint ids.
+        let head = r#"diagram top-down
+
+api "API" : cylinder
+db "Postgres" : cylinder
+cache "Redis" : cylinder
+
+group left-right "Services"
+    worker "Worker"
+    queue "Queue"
+    relay "Relay"
+end
+
+"#;
+        let edges_a = [
+            "api --> worker",
+            "api --> queue",
+            "api -- \"poll\" --> relay",
+            "worker --> db",
+            "queue --> db",
+            "relay -- dotted \"pub\" --> cache",
+            "cache --> api",
+        ];
+        let mut edges_b = edges_a.to_vec();
+        edges_b.reverse();
+        let build = |edges: &[&str]| {
+            let mut src = head.to_string();
+            for line in edges {
+                src.push_str(line);
+                src.push('\n');
+            }
+            let raw = parser::parse_diagram(&src).expect("parse");
+            resolve::resolve(&raw).expect("resolve")
+        };
+        let la = layout_phase1(&build(&edges_a));
+        let lb = layout_phase1(&build(&edges_b));
+
+        // Node placement is edge-order independent too.
+        for n in &la.nodes {
+            let m = lb
+                .nodes
+                .iter()
+                .find(|o| o.id == n.id)
+                .unwrap_or_else(|| panic!("node `{}` missing after permutation", n.id));
+            assert_eq!(n, m, "node `{}` moved under edge permutation", n.id);
+        }
+
+        for e in &la.edges {
+            let other = lb
+                .edges
+                .iter()
+                .find(|o| o.from == e.from && o.to == e.to)
+                .unwrap_or_else(|| panic!("edge `{}->{}` missing after permutation", e.from, e.to));
+            assert_eq!(
+                e.points.len(),
+                other.points.len(),
+                "{}->{} waypoint count changed under edge permutation",
+                e.from,
+                e.to
+            );
+            for (k, (p, q)) in e.points.iter().zip(&other.points).enumerate() {
+                assert_eq!(
+                    p, q,
+                    "{}->{} waypoint #{k} moved under edge permutation",
+                    e.from, e.to
+                );
+            }
         }
     }
 

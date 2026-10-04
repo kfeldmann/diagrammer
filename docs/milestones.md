@@ -6,8 +6,9 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅ done · ▶ next · ⬜ planned
 
-**Current position:** M0–M7.5, M9–M14, M15 and M16 are complete (M12 was
-absorbed by M11.5), plus the post-M13 hardening pass below. **M8 (CLI polish)
+**Current position:** M0–M7.5, M9–M15, M16 and M17 are complete (M12 was
+absorbed by M11.5), plus the post-M13 hardening pass below and the post-M17
+routing hardening (escape-stub spikes) recorded under M17. **M8 (CLI polish)
 is the only remaining milestone.**
 
 ---
@@ -1081,7 +1082,7 @@ ladder, one dispatch point — all kept).
       against the base world only (nodes + LCA-level frame borders) — the
       simultaneous assignment: every edge gets its unconstrained-best route,
       independent of declaration order (verified: phase-1 polylines are
-      identical under edge permutations). Phase 2 is a bounded
+      identical under edge permutations — enshrined as a test in M17). Phase 2 is a bounded
       (`MAX_RIPUP_PASSES` = 8) repair loop: `scan_violations` finds (a)
       hard-world defects (a segment through a node or riding a border — the
       kept-unconditional terminal) and (b) collinear peer riding within
@@ -1167,10 +1168,87 @@ ladder, one dispatch point — all kept).
 **Blocked by:** M11.5 (the unified regime it refines). **Blocks:** nothing
 new; M8 remains the only open milestone.
 
+### ✅ M17 — Post-M16 review fixes (lane union-merge, permutation proof,
+### cleanup)
+
+Three findings from the M16 review, all minor — no behavior regression, one
+snapshot regenerated:
+
+- [x] **`assign_lanes` groups by union interval merge.** M16 tested group
+      membership against the *head* edge's span only, which (a) split
+      chained overlaps (A[0,10], B[5,15], C[12,20] left C unmerged despite
+      overlapping B) and (b) admitted groups whose members pairwise overlap
+      the head but not each other — an empty intersection, under which every
+      member then got the lane `gap_lo`, possibly *outside* its own gap.
+      Membership is now tested against the running union `(min lo, max hi)`,
+      so chains merge. When the merged members' intersection is empty there
+      is no common band: each lane is clamped into its own edge's gap — it
+      starts at its own gap's midpoint and is fanned apart left-to-right,
+      then restored right-to-left where a clamp bunched an end (the same
+      three passes [`separate_ports`] fans with), so identical or nested gaps
+      still get distinct jogs instead of parking collinearly on one
+      midpoint. The dense stress graph exercises the empty-intersection
+      branch; only `snapshots/sides.svg` changed (one cross-boundary jog
+      took its union-merged fan slot), all other snapshots byte-identical.
+- [x] **Phase-1 permutation invariance enshrined in a test.**
+      `phase1_polylines_do_not_depend_on_edge_order` lays out the same
+      diagram twice — edge lines reversed — and asserts node rects and
+      phase-1 polylines identical per id. Making the claim true in general
+      surfaced two latent tie-break leaks: both the lane sweep's sort and
+      `separate_ports`' stable sort broke exact-tie ties by edge *index*,
+      i.e. by declaration order; they now break on the edge's endpoint ids
+      (`LaneEdge`/`PortEnd` carry `from_id`/`to_id`). Note the *final*
+      (post-phase-2) routes still differ under permutation on
+      `sides`/`cluster`-shaped conflicts — the documented bounded residue:
+      phase 2 negotiates in index order by design, so the headline only
+      holds for the simultaneous phase.
+- [x] **Debug scaffolding stripped.** The `DIAG_DBG` eprintln blocks in
+      `assemble` and `scan_violations` are gone. The `#[ignore]`d dump test
+      keeps `DIAG_SRC` (documented in AGENTS.md) as inspection tooling.
+
+**Blocked by:** M16. **Blocks:** nothing; M8 remains the only open
+milestone.
+
+### ✅ Post-M17 hardening — no route doubles back over its own escape stub
+
+Reported on `examples/sides.dgmr`: the `api --> cache` edge (forced
+`from="left" to="right"`) escaped API's left port, then rode *back* along its
+own escape stub's line to a free track before descending — an out-and-back
+spike the obstacle world can never see (it contains nodes, peers, corridors
+and borders, but never the edge's own stub). Two defects of one class:
+
+- [x] **Escape-stub bars in the ladder.** The router now carries the
+      outward direction of each port stub attached around a routed span
+      (`Escapes`, threaded through [`route_lca`]/[`track_route`], populated
+      by `forced_direct_path`, `lca_segment` and
+      `force_stub_around_siblings`). A Z rung whose first leg runs toward
+      the start port or whose final leg runs outward into the end escape
+      point is not a candidate; the Dijkstra bars the same two leg shapes,
+      so it finds the best *constrained* route (here: descending straight
+      at the escape point) instead of the spiked one.
+- [x] **Around-target lane spike.** The stricter check then exposed a
+      second, pre-existing spike: in the around-target builder's `outside`
+      shape, a descent ending between the frame border and the around-lane
+      rode out to the lane and reversed back through the crossing
+      (exercised by `stacked_group_cross_traffic_keeps_ports_reachable`'s
+      `s2 --> m2`). The lane waypoint is now skipped when the descent
+      already ends on the target's side of it — it crosses into the frame
+      directly.
+- [x] **Invariant enshrined.**
+      `assert_no_edge_overlaps_or_node_passage` also asserts no edge
+      overlaps *itself* (two of its own segments sharing a collinear
+      overlapping span — a spike; perpendicular corners and re-inserted
+      border-crossing waypoints don't false-positive).
+
+`examples/cluster.dgmr` and every other example render byte-identically;
+only `snapshots/sides.svg` changed (the fixed `api --> cache` route plus its
+downstream negotiation with the `api --> db` forced-top edge, which moved
+its descent corridor to stay clear of the new lane).
+
 ### Dependency graph
 
 ```
-M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13 ── M14 ── M15 ── M16
+M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13 ── M14 ── M15 ── M16 ── M17
               │   │      └── M6 (interleaves)        │
               │   └──────── M8 (deferred) ───────────┘
               └── M5.5 ── M7 ─┘

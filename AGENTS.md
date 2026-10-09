@@ -1,6 +1,6 @@
 # AGENTS.md — diagrammer
 
-Read these two docs **first**, before touching code — they tell you where the
+Read these docs **first**, before touching code — they tell you where the
 project is and what's next without reading source:
 
 - [`docs/milestones.md`](docs/milestones.md) — status + plan (what's done,
@@ -8,6 +8,9 @@ project is and what's next without reading source:
   says which milestone is in flight.
 - [`docs/grammar.md`](docs/grammar.md) — the v0 input-language spec the
   parser/lexer are built against.
+- FUTURE: [`docs/checker-spec.md`](docs/checker-spec.md) — the routing checker spec
+  (agent-based routing improvement work; read before touching
+  `tools/checker/` or any `experiments/` prototype).
 
 ## What this is
 

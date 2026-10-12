@@ -1,11 +1,11 @@
 ---
 name: diagrammer
-description: Write diagrams in the diagrammer (.dgmr) DSL — a line-oriented language for infrastructure and architecture diagrams with boxes and arrows. It produces a self-contained SVG file that works on GitHub. Use when creating, editing, or validating .dgmr files, or when a user asks for a diagram in "diagrammer format".
+description: Write diagrams in the diagrammer (.dgmr) DSL — a line-oriented language for infrastructure and architecture diagrams with boxes and arrows. It produces a self-contained SVG file that works on GitHub. Use when creating, editing, or validating .dgmr files, or when a user asks for a diagram in "diagrammer format" (981 words, 81 lines).
 ---
 
 # Diagrammer DSL
 
-Write diagrams as `.dgmr` text files. Validate each file with the CLI. Repeat the validation until the file produces no errors. Full language specification: `docs/grammar.md` (in the diagrammer repository). Standard examples: `examples/*.dgmr`.
+Write diagrams as `.dgmr` text files. Validate each file with the CLI. Repeat the validation until the file produces no errors. [Full language specification here](https://raw.githubusercontent.com/kfeldmann/diagrammer/refs/heads/main/docs/grammar.md) (2090 words, 356 lines).
 
 ## Validation procedure
 

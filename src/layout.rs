@@ -444,7 +444,7 @@ fn cyl_height(shape: crate::ast::Shape, text_height: f32) -> f32 {
 /// Lay out a resolved [`Diagram`], honoring group containment and
 /// per-group direction.
 pub fn layout(diagram: &Diagram) -> Layout {
-    layout_impl(diagram, false)
+    layout_impl(diagram, false, None)
 }
 
 /// Test hook: stop after the M16 routing pass's phase 1, so tests can
@@ -453,10 +453,17 @@ pub fn layout(diagram: &Diagram) -> Layout {
 /// design — phase 2 negotiates in index order).
 #[cfg(test)]
 fn layout_phase1(diagram: &Diagram) -> Layout {
-    layout_impl(diagram, true)
+    layout_impl(diagram, true, None)
 }
 
-fn layout_impl(diagram: &Diagram, phase1_only: bool) -> Layout {
+/// Test hook: the full pipeline with a trace callback into the phase-2
+/// negotiation (which edges get ripped up / frozen each pass).
+#[cfg(test)]
+fn layout_trace(diagram: &Diagram, trace: &dyn Fn(&str)) -> Layout {
+    layout_impl(diagram, false, Some(trace))
+}
+
+fn layout_impl(diagram: &Diagram, phase1_only: bool, trace: Option<&dyn Fn(&str)>) -> Layout {
     if diagram.nodes.is_empty() {
         // Still produce frames for any (empty) groups, sized to their
         // padding, so they render as small labeled boxes rather than vanish.
@@ -468,7 +475,7 @@ fn layout_impl(diagram: &Diagram, phase1_only: bool) -> Layout {
             &Default::default(),
             &Default::default(),
         );
-        return assemble(diagram, top, &[], phase1_only);
+        return assemble(diagram, top, &[], phase1_only, trace);
     }
 
     // Map node id -> index, matching `diagram.nodes` order.
@@ -508,7 +515,7 @@ fn layout_impl(diagram: &Diagram, phase1_only: bool) -> Layout {
     let (cross_subs, cross_nodes) = cross_boundary_reach(diagram, &edge_infos, &id_index);
 
     let top = layout_level(diagram, None, diagram.direction, &edge_infos, &cross_subs, &cross_nodes);
-    assemble(diagram, top, &edge_infos, phase1_only)
+    assemble(diagram, top, &edge_infos, phase1_only, trace)
 }
 
 /// The absolute geometry `assemble` works from, shared by the context
@@ -760,6 +767,7 @@ fn assemble(
     top: LevelOut,
     edge_infos: &[EdgeInfo],
     phase1_only: bool,
+    trace: Option<&dyn Fn(&str)>,
 ) -> Layout {
     use std::collections::{HashMap, HashSet};
 
@@ -1081,6 +1089,12 @@ fn assemble(
     // ([`route_edge`]) plus the sealed-port fallback.
     let attempt = |ctx: &EdgeCtx, world: &Obstacles| -> Vec<(f32, f32)> {
         let mut pts = route_edge(ctx, world, &geom, (top.w, top.h));
+        if let Some(t) = trace {
+            t(&format!(
+                "attempt {}->{} clear={}",
+                ctx.from_id, ctx.to_id, world.clear(&pts)
+            ));
+        }
         // Sealed-port fallback: no candidate route cleared the world, so
         // retry with the free ports slid along their sides before keeping
         // the defective route.
@@ -1125,6 +1139,9 @@ fn assemble(
             break;
         }
         for &ei in &rip {
+            if let Some(t) = trace {
+                t(&format!("pass {}: rip {}->{}", _pass, ctxs[ei].from_id, ctxs[ei].to_id));
+            }
             let mut world = edge_world(&geom, &ctxs[ei]);
             for (j, ps) in pockets.iter().enumerate() {
                 if j != ei {
@@ -1443,10 +1460,11 @@ fn route_edge(
             best = Some((idx, c));
         }
     }
-    match best {
+    let keep = match best {
         Some((idx, _)) => candidates[idx].clone(),
         None => candidates.last().expect("at least one candidate").clone(),
-    }
+    };
+    keep
 }
 
 /// Route a direct internal edge through the same ladder every edge uses
@@ -3778,7 +3796,6 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
             .iter()
             .map(|&k| gap_span(edges, k).1)
             .fold(f32::INFINITY, f32::min);
-        let span = (gap_hi - gap_lo).max(0.0);
         let mut usable_lo = gap_lo + LANE_INSET;
         let mut usable_hi = gap_hi - LANE_INSET;
         let n = order.len();
@@ -4225,6 +4242,53 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> V
     pts
 }
 
+/// [`track_route`] with one bounded negotiation retry (M18): when the
+/// routed polyline still rides parked peer bands ([`Obstacles::soft`]), the
+/// soft occupancy is meant as negotiable space — but a bare Dijkstra over
+/// the same graph can return the same ridden corridor when the ridden
+/// shape is otherwise best. The retry pins every soft band the first route
+/// rides as a hard segment and routes again: if a corridor exists that is
+/// clear of the *whole* world (including the pinned bands) and strictly
+/// less soft-conflicting, it moves; otherwise the ridden route stands (the
+/// bounded-ladder convention). Phase-1 routing has no peers (empty soft),
+/// so the retry only ever fires in the phase-2 repair loop — the routing
+/// result stays simultaneous-assignment-clean.
+fn track_route_negotiated(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> Vec<(f32, f32)> {
+    let first = track_route(a, b, obs, esc);
+    if first.is_empty() || obs.soft_cost(&first) <= 1e-6 {
+        return first;
+    }
+    let mut around = obs.clone();
+    let mut pinned = false;
+    for w in first.windows(2) {
+        for &r in &obs.soft {
+            // Pin only the *exact* rides (same centerline, overlapping
+            // span) — the invariant-level defect this retry exists to
+            // clear. Near-but-offset rides are the ordinary soft cost the
+            // first route already paid; pinning those as well can seal the
+            // only corridor instead of moving the exact rider.
+            if rides_exactly(w[0], w[1], r) {
+                // Push the pinned band as a *border* rather than a bare
+                // segment: the border semantics bar the parallel ride on
+                // the centerline (why we pin) AND seed its edges as track
+                // rows, so the retry can fan onto a neighboring corridor
+                // row instead of finding no route at all.
+                around.borders.push(r);
+                pinned = true;
+            }
+        }
+    }
+    if !pinned {
+        return first;
+    }
+    let second = track_route(a, b, &around, esc);
+    if !second.is_empty() && obs.clear(&second) && obs.soft_cost(&second) < obs.soft_cost(&first) - 1e-6 {
+        second
+    } else {
+        first
+    }
+}
+
 /// Drop interior points that lie on the straight line through their neighbours
 /// (collinear), leaving only the corners of the polyline.
 fn collapse_collinear(pts: &mut Vec<(f32, f32)>) {
@@ -4299,7 +4363,7 @@ fn route_lca(
             return best.expect("clean rung").0;
         }
     }
-    let tr = track_route(a, b, obs, esc);
+    let tr = track_route_negotiated(a, b, obs, esc);
     if !tr.is_empty() {
         consider(obs, &mut best, tr);
     }
@@ -4559,9 +4623,9 @@ fn force_stub_around_siblings(
         }
     };
     let routed = if inward {
-        track_route(rep_port, a, &obs, esc)
+        track_route_negotiated(rep_port, a, &obs, esc)
     } else {
-        track_route(a, rep_port, &obs, esc)
+        track_route_negotiated(a, rep_port, &obs, esc)
     };
     if !routed.is_empty() && obs.clear(&routed) {
         // Attach the ends and record the chain frames' crossings the routed
@@ -4588,15 +4652,25 @@ fn force_stub_around_siblings(
 }
 
 /// The escape point for a stub detour's Dijkstra seed (M18): the plain
-/// [`escape_point`] walk, clamped so the seed is not born inside an
-/// obstacle. The escape line (port → `escape_point(port, side, d)`) is
-/// cut at the last clear position before it first pierces an obstacle
-/// (inflated by [`ROUTE_PAD`]), and the seed sits there — so the track
-/// graph's start is in free space and the tracks seeded from the blocking
-/// obstacle's own edges provide the jog around it. When even the port
-/// itself is enclosed (the escape pierces an obstacle immediately), the
-/// seed falls back to the plain escape point: the Dijkstra will fail, and
-/// the caller keeps the straight stub (the bounded-ladder convention).
+/// [`escape_point`] walk, clamped so the seed is not born inside (or just
+/// ahead of) an obstacle. The escape line (port → the escape point and, if
+/// still clear, further outward on the same ray) is cut at the last clear
+/// position before it first runs into a *barrier of the escape line's own
+/// orientation*: a node an [`ROUTE_PAD`]-inflated clearance check would
+/// pierce, a reserved port pocket or hard peer band the line would ride
+/// parallel inside, or a border band it would cross without a designated
+/// end-on-centerline. (Barrier kinds with the opposite orientation — a
+/// perpendicular crossing — are not barriers here: the detour the seed
+/// begins is legal through them, and [`track_route`] treats their edges as
+/// tracks.)
+///
+/// The seed sits just short of the cut, so the track graph's start is in
+/// free space and the tracks seeded from the blocking obstacle's own edges
+/// (± [`TRACK_OFF`]) provide the jog around it. The plain escape point is
+/// kept when nothing blocks the ray, and again when even the port itself is
+/// enclosed: the Dijkstra then fails and the caller keeps the straight stub
+/// (the bounded-ladder convention).
+#[allow(clippy::too_many_arguments)]
 fn clamped_escape(
     port: (f32, f32),
     side: Side,
@@ -4605,50 +4679,109 @@ fn clamped_escape(
     world: &Obstacles,
 ) -> (f32, f32) {
     let target = escape_point(port, side, d);
-    // Candidate cut positions: each obstacle's inflated boundary crossed by
-    // the escape line (a small linear walk in the escape direction).
     let (dx, dy) = match side {
         Side::Top => (0.0, -1.0),
         Side::Bottom => (0.0, 1.0),
         Side::Left => (-1.0, 0.0),
         Side::Right => (1.0, 0.0),
     };
-    let mut best: Option<(f32, f32)> = None;
-    let rects = obs
-        .nodes
-        .iter()
-        .chain(world.nodes.iter())
-        .copied()
-        .collect::<Vec<_>>();
-    for r in rects {
+    // Distance along the escape line of the first barrier (None = clear):
+    // each blocker kind reports the parameter t where the escape line
+    // first runs into it, considering only entries from outside the
+    // blocker's inflated extent (a port inside one cannot be dodged; the
+    // bail-out below keeps the plain escape).
+    let mut best: Option<f32> = None;
+    let mut consider = |t: Option<f32>| {
+        if let Some(t) = t
+            && t > 1e-3
+            && best.map(|b| t < b - 1e-6).unwrap_or(true)
+        {
+            best = Some(t);
+        }
+    };
+    // Node interiors (ready-padded by the clearance rule's own inflations):
+    // the entry parameter of the ray into the inflated rect, only when the
+    // ray starts strictly outside it on the escape face.
+    let node_block = |r: (f32, f32, f32, f32)| {
         let (rx, ry, rw, rh) = inflate(r, ROUTE_PAD);
-        // Where does the ray port → port + t·(dx, dy) enter this rect?
-        // Axis-aligned ray: entry is on one of the rect's faces.
         let t_enter = match side {
-            Side::Top => if port.1 >= ry + rh { (port.1 - (ry + rh)) / -dy } else { f32::INFINITY },
-            Side::Bottom => if port.1 <= ry { (ry - port.1) / dy } else { f32::INFINITY },
-            Side::Left => if port.0 >= rx + rw { (port.0 - (rx + rw)) / -dx } else { f32::INFINITY },
-            Side::Right => if port.0 <= rx { (rx - port.0) / dx } else { f32::INFINITY },
+            Side::Top => i32::from(port.1 >= ry + rh) as f32 * (port.1 - (ry + rh)),
+            Side::Bottom => i32::from(port.1 <= ry) as f32 * (ry - port.1),
+            Side::Left => i32::from(port.0 >= rx + rw) as f32 * (port.0 - (rx + rw)),
+            Side::Right => i32::from(port.0 <= rx) as f32 * (rx - port.0),
         };
-        if t_enter.is_finite() && t_enter > 1e-3 {
-            let px = port.0 + dx * t_enter;
-            let py = port.1 + dy * t_enter;
-            // The entry point must lie on the rect (within its other span).
-            let on = match side {
-                Side::Top | Side::Bottom => px >= rx - 1e-2 && px <= rx + rw + 1e-2,
-                Side::Left | Side::Right => py >= ry - 1e-2 && py <= ry + rh + 1e-2,
-            };
-            if on && best.map(|(bx, _)| t_enter < (bx - port.0).abs().max((py - port.1).abs())).unwrap_or(true) {
-                best = Some((px, py));
-            }
+        if t_enter <= 0.0 || (side == Side::Top || side == Side::Bottom) && t_enter.is_infinite() {
+            return None;
+        }
+        // The entry point must lie within the rect's other span.
+        let px = port.0 + dx * t_enter;
+        let py = port.1 + dy * t_enter;
+        let on = match side {
+            Side::Top | Side::Bottom => px >= rx - 1e-2 && px <= rx + rw + 1e-2,
+            Side::Left | Side::Right => py >= ry - 1e-2 && py <= ry + rh + 1e-2,
+        };
+        on.then_some(t_enter)
+    };
+    // Only blockers the escape line's own orientation bars.
+    let vertical_escape = dx.abs() < 1e-6;
+    for &r in obs.nodes.iter().chain(world.nodes.iter()) {
+        consider(node_block(r));
+    }
+    for &r in obs.corridors.iter() {
+        if vertical_escape == (r.3 > r.2) {
+            consider(into_param(port, dx, dy, r));
         }
     }
-    // Just short of the first entry (with a hair of clearance), or the
-    // plain escape when nothing is pierced.
+    for &r in obs.segments.iter() {
+        if vertical_escape == (r.3 > r.2) {
+            consider(into_param(port, dx, dy, r));
+        }
+    }
+    for &b in obs.borders.iter() {
+        // A border band is run into when the line rides it parallel; a
+        // perpendicular transversal is legal *with a waypoint*, which the
+        // seed's closing leg would not carry either — both bar.
+        consider(into_param(port, dx, dy, b));
+    }
     match best {
-        Some((bx, by)) => (bx - dx * 1.0, by - dy * 1.0),
+        Some(t) => (port.0 + dx * (t - 1.0).max(0.0), port.1 + dy * (t - 1.0).max(0.0)),
         None => target,
     }
+}
+
+/// The parameter at which the ray `port + t·(dx, dy)` first enters the
+/// rect `r`, or `None` when it never does (or starts inside it, which
+/// cannot be dodged along the ray).
+fn into_param(
+    port: (f32, f32),
+    dx: f32,
+    dy: f32,
+    r: (f32, f32, f32, f32),
+) -> Option<f32> {
+    let (rx, ry, rw, rh) = r;
+    if (rx..rx + rw).contains(&port.0) && (ry..ry + rh).contains(&port.1) {
+        return None;
+    }
+    // Axis-aligned ray: at most one face can be entered.
+    let t_axis = |p: f32, lo: f32, hi: f32, d: f32| -> Option<f32> {
+        if d.abs() < 1e-9 {
+            return None;
+        }
+        let t = if d > 0.0 { (lo - p) / d } else { (hi - p) / d };
+        (t > 1e-3).then_some(t)
+    };
+    [t_axis(port.0, rx, rx + rw, dx), t_axis(port.1, ry, ry + rh, dy)]
+        .into_iter()
+        .filter_map(|t| t)
+        .find(|&t| {
+            // The other coordinate must put the entry point on the rect.
+            let px = port.0 + dx * t;
+            let py = port.1 + dy * t;
+            px >= rx - 1e-2
+                && px <= rx + rw + 1e-2
+                && py >= ry - 1e-2
+                && py <= ry + rh + 1e-2
+        })
 }
 
 /// Record the chain frames' border crossings along a stub polyline (M18):
@@ -4675,6 +4808,101 @@ fn record_chain_crossings(
         return pts;
     }
     record_border_crossings(&pts, &bands)
+}
+
+/// The S19a dispatch reroute for a failing straight stub span: route the
+/// node-port → rep-port span through [`track_route`] against a stub-local
+/// world — the shared routing world plus the chain frames' border bands —
+/// and return the route with its ends attached when it clears that world.
+/// M18's machinery's geometry, generalized to any failing straight stub
+/// (not only the sibling-pierce trigger): the chain bands are hard (the
+/// detour stays inside the frames and only crosses an outline
+/// perpendicular, at a recorded waypoint), peer occupancy carries over
+/// from the shared world as soft cost, and the escape seed is clamped so
+/// the Dijkstra starts in free space. `None` — no clear route — leaves
+/// the caller on the kept-unconditional straight stub (the bounded-ladder
+/// convention). The detour's own transversals of the chain frames are
+/// recorded as explicit waypoints ([`record_chain_crossings`]).
+#[allow(clippy::too_many_arguments)]
+fn reroute_stub_span(
+    node_port: (f32, f32),
+    rep_port: (f32, f32),
+    side: Side,
+    node: (f32, f32, f32, f32),
+    inner_frame: (f32, f32, f32, f32),
+    chain_frames: &[(f32, f32, f32, f32)],
+    frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
+    chain_ids: &[usize],
+    world: &Obstacles,
+    axis: FlowAxis,
+    inward: bool,
+) -> Option<Vec<(f32, f32)>> {
+    // Siblings of the endpoint under its innermost frame: a detour must not
+    // cross a sibling of any kind (nodes and nested frames alike, solid).
+    let siblings: Vec<(f32, f32, f32, f32)> = chain_ids
+        .first()
+        .map(|&s| frame_children(s))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| !rects_near(*r, node))
+        .collect();
+    let mut obs = Obstacles::empty();
+    for &s in &siblings {
+        obs.push_node(s);
+    }
+    obs.borders = border_bands(inner_frame);
+    for &f in chain_frames.iter().skip(1) {
+        obs.borders.extend(border_bands(f));
+    }
+    obs.soft = world.soft.clone();
+    obs.segments = world.segments.clone();
+    obs.corridors = world.corridors.clone();
+    // The seed lives just short of the first barrier on the port's escape
+    // line, so the Dijkstra starts in free space even in a tight sibling
+    // band (M18's clamped escape — the geometry carries over).
+    let a = clamped_escape(node_port, side, SIDE_ESCAPE, &obs, world);
+    // The stub's fixed legs hang off the node port's escape on one side of
+    // the routed span: bar the leg that would double back over the escape —
+    // toward the node port when routing outward, outward into the escape
+    // point when routing inward.
+    let esc = if inward {
+        Escapes {
+            start: None,
+            end: Some(Dir::of_side(side)),
+        }
+    } else {
+        Escapes {
+            start: Some(Dir::of_side(side)),
+            end: None,
+        }
+    };
+    let routed = if inward {
+        track_route_negotiated(rep_port, a, &obs, esc)
+    } else {
+        track_route_negotiated(a, rep_port, &obs, esc)
+    };
+    if routed.is_empty() || !obs.clear(&routed) {
+        return None;
+    }
+    let mut stub = if inward {
+        let mut s = routed;
+        s.push(node_port);
+        s
+    } else {
+        let mut s = vec![node_port];
+        s.extend(routed);
+        s
+    };
+    // Record the detour's own chain-frame transversals, then verify the
+    // recorded stub clears the world: a mid-segment transversal without a
+    // waypoint would be barred by the clearance rule, so the recording
+    // must happen before the check clears it (M18's convention).
+    stub = record_chain_crossings(stub, chain_frames, axis);
+    if obs.clear(&stub) {
+        Some(stub)
+    } else {
+        None
+    }
 }
 
 /// One endpoint's stub geometry for [`cross_boundary_path`] (M14).
@@ -4704,11 +4932,14 @@ struct StubEnd<'a> {
 }
 
 /// The within-frame stub for one endpoint: empty for a direct child of the
-/// LCA, [`mismatched_stub`] for a mismatched forced side (M14), the
-/// sibling-avoidance stub ([`force_stub_around_siblings`]) when the straight
-/// stub would pierce a sibling (single-frame chains always; multi-frame
-/// chains — M18 — when the straight stub is blocked against the chain
-/// frames), else the node-aligned [`build_stub`].
+/// LCA, [`mismatched_stub`] for a mismatched forced side (M14), the S19a
+/// dispatch reroute ([`reroute_stub_span`]) when the straight node-to-rep
+/// span fails the shared obstacle world (multi-frame chains; the chain
+/// frames' bands join the world for exactly that span), the
+/// sibling-avoidance stub ([`force_stub_around_siblings`], which the S19a
+/// reroute now fires ahead of for blocked multi-frame chains) when the
+/// straight stub would pierce a sibling, else the node-aligned
+/// [`build_stub`].
 #[allow(clippy::too_many_arguments)]
 fn stub_for(
     end: &StubEnd,
@@ -4725,6 +4956,44 @@ fn stub_for(
     }
     if end.mismatched {
         return mismatched_stub(end, rep_port, axis, frame_rect, inward);
+    }
+    // S19a: a straight stub span whose node-to-rep-port leg fails the
+    // shared obstacle world is rerouted at the dispatch through the track
+    // router against a stub-local world that carries the chain frames'
+    // bands — the shared world only has the LCA-level frames' ([`edge_world`]),
+    // so without the chain bands a rerouted leg could graze a nested frame
+    // outline unchecked (the straight stub's designated crossings are
+    // legal; a detoured leg's transversals are recorded, M18's convention).
+    // The straight stub remains the kept-unconditional fallback when no
+    // clear route exists (the bounded-ladder convention). The gate keeps
+    // single-frame chains out: their straight resets go through M18's
+    // `force_stub_around_siblings` below unchanged this session — a
+    // detour's escape lands inside this would-be obstacle world there
+    // (a sibling 24 px out on the escape normal), so routing against it
+    // here could flip that accepted fallback to a *different* accepted
+    // fallback and shift pinned single-frame geometry (the
+    // unit expectations) — output must stay byte-identical until S19b,
+    // which absorbs the special case and retires the gate with it.
+    let straight = [end.port, rep_port];
+    if !world.clear(&straight) && end.chain.len() > 1 {
+        let chain_frames: Vec<(f32, f32, f32, f32)> =
+            end.chain.iter().map(|&s| frame_rect(s)).collect();
+        let rerouted = reroute_stub_span(
+            end.port,
+            rep_port,
+            end.node_side,
+            end.node,
+            frame_rect(end.chain[0]),
+            &chain_frames,
+            frame_children,
+            end.chain,
+            world,
+            axis,
+            inward,
+        );
+        if let Some(r) = rerouted {
+            return r;
+        }
     }
     if detours.is_empty() {
         // M11: a forced side is honored literally; if the straight stub
@@ -6667,11 +6936,23 @@ mod tests {
     use crate::parser;
     use crate::resolve;
 
-    fn lay(src: &str) -> (crate::ast::Diagram, Layout) {
+    /// The full pipeline (`phase1` stops after the M16 pass's simultaneous
+    /// phase — phase 2's negotiation is declaration-order-dependent by
+    /// design).
+    fn lay(src: &str, phase1: bool) -> (crate::ast::Diagram, Layout) {
         let raw = parser::parse_diagram(src).expect("parse");
         let d = resolve::resolve(&raw).expect("resolve");
-        let l = layout(&d);
+        let l = if phase1 {
+            layout_phase1(&d)
+        } else {
+            layout(&d)
+        };
         (d, l)
+    }
+
+    /// Convenience: the full pipeline (phase 2 included).
+    fn lay_final(src: &str) -> (crate::ast::Diagram, Layout) {
+        lay(src, false)
     }
 
     fn node_rect<'a>(l: &'a Layout, id: &str) -> &'a NodeRect {
@@ -6756,7 +7037,7 @@ mod tests {
 
     #[test]
     fn infra_example_layouts() {
-        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         assert_eq!(l.nodes.len(), 8);
         assert_eq!(l.edges.len(), 10);
         assert_eq!(l.groups.len(), 1);
@@ -6767,7 +7048,7 @@ mod tests {
     #[test]
     #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
     fn _dump_subdirection_for_inspection() {
-        let (d, l) = lay(include_str!("../examples/subdirection.dgmr"));
+        let (d, l) = lay_final(include_str!("../examples/subdirection.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
         nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
@@ -6786,7 +7067,7 @@ mod tests {
     #[test]
     #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
     fn _dump_infra_for_inspection() {
-        let (d, l) = lay(&if let Ok(p) = std::env::var("DIAG_SRC") {
+        let (d, l) = lay_final(&if let Ok(p) = std::env::var("DIAG_SRC") {
             std::fs::read_to_string(p).unwrap()
         } else {
             include_str!("../examples/infra.dgmr").to_string()
@@ -6808,7 +7089,7 @@ mod tests {
 
     #[test]
     fn every_node_has_a_rect() {
-        let (d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         for n in &d.nodes {
             assert!(l.nodes.iter().any(|r| r.id == n.id), "missing rect for {}", n.id);
         }
@@ -6816,7 +7097,7 @@ mod tests {
 
     #[test]
     fn empty_diagram_is_empty_layout() {
-        let (_d, l) = lay("diagram top-down\n");
+        let (_d, l) = lay_final("diagram top-down\n");
         assert!(l.nodes.is_empty());
         assert!(l.edges.is_empty());
         assert_eq!(l.width, 0.0);
@@ -6829,7 +7110,7 @@ mod tests {
         // rank-0 singleton onto its own band, so they stack along the flow
         // axis (top-to-bottom) in declaration order — the declared direction
         // is honored even with no edges at all.
-        let (_d, l) = lay("diagram top-down\na\nb\nc\n");
+        let (_d, l) = lay_final("diagram top-down\na\nb\nc\n");
         assert_eq!(l.nodes.len(), 3);
         assert_all_finite(&l);
         assert_no_overlaps(&l);
@@ -6844,7 +7125,7 @@ mod tests {
     fn isolated_nodes_run_horizontally_left_right() {
         // The same three edge-less nodes under left-right: they run
         // left-to-right, mirroring the top-down stacking.
-        let (_d, l) = lay("diagram left-right\na\nb\nc\n");
+        let (_d, l) = lay_final("diagram left-right\na\nb\nc\n");
         assert_all_finite(&l);
         assert_no_overlaps(&l);
         let y0 = l.nodes[0].y;
@@ -6855,7 +7136,7 @@ mod tests {
 
     #[test]
     fn chain_aligns_vertically_top_down() {
-        let (_d, l) = lay("diagram top-down\na-->b-->c-->d\n");
+        let (_d, l) = lay_final("diagram top-down\na-->b-->c-->d\n");
         // All on the same vertical line ⇒ equal x-centers.
         let cx = |id: &str| {
             let r = node_rect(&l, id);
@@ -6872,7 +7153,7 @@ mod tests {
 
     #[test]
     fn left_right_chain_is_horizontal() {
-        let (_d, l) = lay("diagram left-right\na-->b-->c\n");
+        let (_d, l) = lay_final("diagram left-right\na-->b-->c\n");
         assert!(node_rect(&l, "a").x < node_rect(&l, "b").x);
         assert!(node_rect(&l, "b").x < node_rect(&l, "c").x);
         // Same horizontal line ⇒ equal y-centers.
@@ -6889,7 +7170,7 @@ mod tests {
         // Labels are never rotated, so a box must always be wide enough to fit
         // its horizontal text — even in left-right, where the rank axis is
         // horizontal. Only the box's *position* is rotated, not its size.
-        let (_d, l) = lay("diagram left-right\nauth --> users --> orders\n");
+        let (_d, l) = lay_final("diagram left-right\nauth --> users --> orders\n");
         for id in ["auth", "users", "orders"] {
             let r = node_rect(&l, id);
             // Wide-and-short, never tall-and-narrow.
@@ -6917,7 +7198,7 @@ mod tests {
         // In left-right, an internal edge should leave the source's right side
         // and enter the target's left side (horizontal flow), not the
         // top/bottom.
-        let (_d, l) = lay("diagram left-right\nalpha --> beta\n");
+        let (_d, l) = lay_final("diagram left-right\nalpha --> beta\n");
         let a = node_rect(&l, "alpha");
         let b = node_rect(&l, "beta");
         assert!(a.x < b.x, "alpha should be left of beta");
@@ -6933,8 +7214,8 @@ mod tests {
 
     #[test]
     fn direction_swaps_dimensions_for_a_chain() {
-        let (_d, l_td) = lay("diagram top-down\na-->b-->c-->d\n");
-        let (_d, l_lr) = lay("diagram left-right\na-->b-->c-->d\n");
+        let (_d, l_td) = lay_final("diagram top-down\na-->b-->c-->d\n");
+        let (_d, l_lr) = lay_final("diagram left-right\na-->b-->c-->d\n");
         // A 4-rank chain is tall top-down, wide left-right.
         assert!(l_td.height > l_td.width, "top-down chain should be tall");
         assert!(l_lr.width > l_lr.height, "left-right chain should be wide");
@@ -6943,7 +7224,7 @@ mod tests {
     #[test]
     fn cycle_is_handled_without_overlap() {
         // A <-> B (a 2-cycle). One edge is reversed internally; both still draw.
-        let (_d, l) = lay("diagram top-down\na-->b\nb-->a\n");
+        let (_d, l) = lay_final("diagram top-down\na-->b\nb-->a\n");
         assert_eq!(l.nodes.len(), 2);
         assert_eq!(l.edges.len(), 2);
         assert_all_finite(&l);
@@ -6957,7 +7238,7 @@ mod tests {
     #[test]
     fn long_edge_gets_intermediate_waypoint() {
         // A->C spans two ranks (B sits between); A->C should route via a dummy.
-        let (_d, l) = lay("diagram top-down\na-->b\nc\nb-->c\na-->c\n");
+        let (_d, l) = lay_final("diagram top-down\na-->b\nc\nb-->c\na-->c\n");
         let ac = edge_path(&l, "a", "c");
         // path = [a, dummy@rank1, c] ⇒ 3 waypoints.
         assert!(
@@ -6969,7 +7250,7 @@ mod tests {
 
     #[test]
     fn self_loop_does_not_panic() {
-        let (_d, l) = lay("diagram top-down\na-->a\n");
+        let (_d, l) = lay_final("diagram top-down\na-->a\n");
         assert_eq!(l.nodes.len(), 1);
         assert_eq!(l.edges.len(), 1);
         assert_all_finite(&l);
@@ -6984,7 +7265,7 @@ mod tests {
         // each edge's own endpoints to agree: (order(a) < order(b)) ==
         // (order(d) < order(c)).
         let src = "diagram top-down\na\nc\nb\nd\na-->d\nb-->c\n";
-        let (_d, l) = lay(src);
+        let (_d, l) = lay_final(src);
         assert_all_finite(&l);
         assert_no_overlaps(&l);
         let ax = node_rect(&l, "a").x + node_rect(&l, "a").w / 2.0;
@@ -7001,7 +7282,7 @@ mod tests {
 
     #[test]
     fn diamond_lays_out_symmetric() {
-        let (_d, l) = lay("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
+        let (_d, l) = lay_final("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
         assert_all_finite(&l);
         assert_no_overlaps(&l);
         let cx = |id: &str| node_rect(&l, id).x + node_rect(&l, id).w / 2.0;
@@ -7016,8 +7297,8 @@ mod tests {
     #[test]
     fn bottom_up_reverses_top_down() {
         let src = "diagram top-down\na-->b-->c\n";
-        let (_d, l_td) = lay(src);
-        let (_d, l_bu) = lay("diagram bottom-up\na-->b-->c\n");
+        let (_d, l_td) = lay_final(src);
+        let (_d, l_bu) = lay_final("diagram bottom-up\na-->b-->c\n");
         // In top-down, a is at the top (smallest y); in bottom-up, a is at the
         // bottom (largest y).
         let a_td = node_rect(&l_td, "a");
@@ -7030,8 +7311,8 @@ mod tests {
 
     #[test]
     fn right_left_reverses_left_right() {
-        let (_d, l_lr) = lay("diagram left-right\na-->b-->c\n");
-        let (_d, l_rl) = lay("diagram right-left\na-->b-->c\n");
+        let (_d, l_lr) = lay_final("diagram left-right\na-->b-->c\n");
+        let (_d, l_rl) = lay_final("diagram right-left\na-->b-->c\n");
         // In left-right, a is leftmost (small x); in right-left, a is rightmost.
         let a_lr = node_rect(&l_lr, "a");
         let a_rl = node_rect(&l_rl, "a");
@@ -7043,7 +7324,7 @@ mod tests {
 
     #[test]
     fn edge_endpoints_touch_node_bounds() {
-        let (_d, l) = lay("diagram top-down\na-->b\n");
+        let (_d, l) = lay_final("diagram top-down\na-->b\n");
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let e = edge_path(&l, "a", "b");
@@ -7062,7 +7343,7 @@ mod tests {
         // for the centered label (see `cyl_height`), so it is taller than a
         // box with the same label — and tall enough that the label clears the
         // lid (the guarantee exercised in the render tests).
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             "diagram top-down\n\n\
              box \"Pg\"\n\
              cyl \"Pg\" : cylinder\n",
@@ -7088,7 +7369,7 @@ mod tests {
 
     #[test]
     fn group_frame_contains_its_members() {
-        let (d, l) = lay(
+        let (d, l) = lay_final(
             "diagram top-down\n\
              group \"Cluster\"\n\
              a\n\
@@ -7115,7 +7396,7 @@ mod tests {
     fn frame_grows_to_fit_a_wider_title() {
         // A long title on a narrow group: the frame must widen so the
         // title text fits, rather than the title spilling out of the frame.
-        let (d, l) = lay(
+        let (d, l) = lay_final(
             "diagram top-down\n\
              group \"A Very Long Cluster Title\"\n\
              a\n\
@@ -7144,7 +7425,7 @@ mod tests {
     fn multiline_label_sizes_the_node_box() {
         // "Kubernetes\nCluster": the box spans the widest line and is tall
         // enough for both lines (first em box + one line height).
-        let (_d, l) = lay("diagram top-down\napp \"Kubernetes\\nCluster\"\n");
+        let (_d, l) = lay_final("diagram top-down\napp \"Kubernetes\\nCluster\"\n");
         let r = node_rect(&l, "app");
         let wide = text::measure("Kubernetes", FONT_SIZE).width;
         let m = text::measure("Kubernetes\nCluster", FONT_SIZE);
@@ -7168,13 +7449,13 @@ mod tests {
         // A two-line title's frame is taller than the same diagram with a
         // one-line title: the top inset grows by one title line height (the
         // band the stacked lines ride in).
-        let (_d1, l1) = lay(
+        let (_d1, l1) = lay_final(
             "diagram top-down\n\
              group \"Cluster\"\n\
              a\n\
              end\n",
         );
-        let (_d2, l2) = lay(
+        let (_d2, l2) = lay_final(
             "diagram top-down\n\
              group \"Kubernetes\\nCluster\"\n\
              a\n\
@@ -7199,7 +7480,7 @@ mod tests {
 
     #[test]
     fn nested_group_frame_inside_outer_frame() {
-        let (d, l) = lay(
+        let (d, l) = lay_final(
             "diagram top-down\n\
              group \"Outer\"\n\
              group \"Inner\"\n\
@@ -7230,7 +7511,7 @@ mod tests {
         // direction. With left-right, two edge-less members now follow that
         // inherited flow axis: they run left-to-right (side by side), not
         // stacked.
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             "diagram left-right\n\
              group \"S\"\n\
              a\n\
@@ -7257,8 +7538,8 @@ mod tests {
              group left-right \"S\"\n\
              a --> b --> c\n\
              end\n";
-        let (_d, l_td) = lay(src_td);
-        let (_d, l_lr) = lay(src_lr);
+        let (_d, l_td) = lay_final(src_td);
+        let (_d, l_lr) = lay_final(src_lr);
         let f_td = sub_rect(&l_td, 0);
         let f_lr = sub_rect(&l_lr, 0);
 
@@ -7294,7 +7575,7 @@ mod tests {
 
     #[test]
     fn top_level_nodes_and_group_coexist_without_overlap() {
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             "diagram top-down\n\
              x\n\
              group \"S\"\n\
@@ -7317,7 +7598,7 @@ mod tests {
     #[test]
     fn cross_boundary_edge_renders_between_actual_endpoints() {
         // lb (top-level) -> api (inside group): a cross-boundary edge.
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             "diagram top-down\n\
              lb\n\
              group \"S\"\n\
@@ -7350,7 +7631,7 @@ mod tests {
     fn internal_group_edge_uses_internal_layout() {
         // An edge fully inside a group is a direct internal edge: laid out
         // within the group, so b sits strictly below a (top-down group).
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             "diagram top-down\n\
              group \"S\"\n\
              a --> b\n\
@@ -7373,7 +7654,7 @@ mod tests {
         // that internal arrangement even when edges cross its boundary.
         // Here the group is left-right with a chain; external edges attach
         // to its members but the chain still runs horizontally.
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             "diagram top-down\n\
              src\n\
              sink\n\
@@ -7396,7 +7677,7 @@ mod tests {
 
     #[test]
     fn every_descendant_node_present_with_nested_groups() {
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             "diagram top-down\n\
              group \"A\"\n\
              group \"B\"\n\
@@ -7421,7 +7702,7 @@ mod tests {
 
     #[test]
     fn empty_group_renders_a_frame() {
-        let (d, l) = lay(
+        let (d, l) = lay_final(
             "diagram top-down\n\
              group \"Empty\"\n\
              end\n",
@@ -7506,7 +7787,7 @@ mod tests {
         // route through a connection point on S's frame rather than piercing
         // it. With lb above S (top-down), the connection point is on S's top
         // edge, at S's center-x (the representative's port).
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 lb
 group "S"
 api
@@ -7545,7 +7826,7 @@ lb --> api
         // a (in A) -> b (in B): both endpoints are inside frames. The path
         // runs a port -> A port -> B port -> b port, with a connection point
         // on each frame.
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 group "A"
 a
 end
@@ -7578,7 +7859,7 @@ a --> b
         // The headline M5 guarantee: a group's own direction is kept even
         // when edges cross its frame, AND those edges route through frame
         // connection points rather than piercing the frame.
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 src
 sink
 group left-right "S"
@@ -7622,7 +7903,7 @@ c --> sink
         // api2's port up to the K8s frame's connection point — is checked,
         // not just the first segment. The frame connection point itself is
         // found by value (it is no longer at a fixed index after the Z).
-        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         let api1 = node_rect(&l, "api1");
         let api2 = node_rect(&l, "api2");
         let k8s = sub_rect(&l, 0);
@@ -7671,7 +7952,7 @@ c --> sink
         // center-x). Instead the edge routes around the Storage frame and
         // enters Database from the side, so it clears Cache and stays
         // distinct from the Cache->Database edge.
-        let (_d, l) = lay(include_str!("../examples/subdirection.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/subdirection.dgmr"));
         let cache = node_rect(&l, "cache");
         let db = node_rect(&l, "db");
         let e = edge_path(&l, "orders", "db");
@@ -7734,7 +8015,7 @@ c --> sink
         // enters b from the side — the case where the source node is NOT
         // already clear of the frame on one side (it sits above the frame
         // within the frame's cross-span), so the route takes a gap jog first.
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 src
 group top-down "S"
 a --> b
@@ -7776,7 +8057,7 @@ src --> b
         // ext (top-level) -> inner (inside Inner inside Outer): a cross-
         // boundary edge crossing two nested frames. It must record a
         // connection point on each frame it passes through.
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 ext
 group "Outer"
 group "Inner"
@@ -7851,7 +8132,7 @@ ext --> inner
         // lb sitting under both titles' spans. The stub must enter each
         // frame beside its title and jog below it — no edge segment may
         // touch either title text (the cluster.dgmr user --> lb shape).
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 ext
 group "Outer"
 group "Application"
@@ -7895,7 +8176,7 @@ ext --> lb
         // otherwise lb->n1 crosses lb->n2's source run and then lies almost
         // on top of it. No two of the three routes may cross, and no two
         // may run parallel within the riding pad.
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 user
 group left-right
 group "Application"
@@ -7950,14 +8231,14 @@ n3 -- dotted --> n2 -- dotted --> n1
         // the default frame geometry. Both diagrams here hold the *same*
         // single-node content inside "S", so the only difference is the extra
         // padding.
-        let with = lay(r#"diagram top-down
+        let with = lay_final(r#"diagram top-down
 src
 group "S"
 a
 end
 src --> a
 "#);
-        let without = lay(r#"diagram top-down
+        let without = lay_final(r#"diagram top-down
 group "S"
 a
 end
@@ -8002,14 +8283,14 @@ end
         // but with a two-line title: the title band itself grows by one title
         // line height *before* the cross-boundary padding, so the stub's jog
         // still lands below the whole title.
-        let one_line = lay(r#"diagram top-down
+        let one_line = lay_final(r#"diagram top-down
 src
 group "Kubernetes Cluster"
 a
 end
 src --> a
 "#);
-        let two_lines = lay(r#"diagram top-down
+        let two_lines = lay_final(r#"diagram top-down
 src
 group "Kubernetes\nCluster"
 a
@@ -8064,7 +8345,7 @@ src --> a
         // the stub detours past the title and jogs across to the node below it.
         // (A node already clear of the title would route straight, with no jog
         // to check.)
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 src
 group left-right "Services"
 a --> b
@@ -8133,7 +8414,7 @@ src --> a
         // the fallback-safe right margin — a viewer whose font stack
         // resolves wider than the measured face must not spill the title out
         // of the frame (the "Kubernetes Node Group" shape).
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 group "Kubernetes Node Group"
 n1
 n2
@@ -8162,7 +8443,7 @@ end"#);
     /// the title (the child is too narrow to widen it), and `a` sits under
     /// the title's left half — the shape of the M10 left-side detour.
     fn left_detour_setup() -> (crate::ast::Diagram, Layout) {
-        lay(r#"diagram top-down
+        lay_final(r#"diagram top-down
 src
 group "A Very Long Group Title Indeed"
 a
@@ -8248,7 +8529,7 @@ src --> a
         // the title. Now the frame grows sideways so the entry past the
         // title exists; growing keeps the children anchored at the left/top
         // insets, so the group's internal arrangement is untouched.
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 src
 group left-right "A Very Long Group Title Indeed"
 a
@@ -8313,7 +8594,7 @@ src --> b
         // gap now includes the fixed + proportional fallback margins, so a
         // viewer rendering the title with a wider fallback face still does
         // not reach the entry.
-        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         let s = sub_rect(&l, 0);
         let title = "Kubernetes Cluster";
         let tw = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
@@ -8348,7 +8629,7 @@ src --> b
         // children keep their left-to-right order and gaps, but the *block*
         // (span left..right) centers on the parent — not left-packed under
         // it.
-        let (_d, l) = lay("diagram top-down\np\na\nbb\nccc\np-->a\np-->bb\np-->ccc\n");
+        let (_d, l) = lay_final("diagram top-down\np\na\nbb\nccc\np-->a\np-->bb\np-->ccc\n");
         let p = node_rect(&l, "p");
         let a = node_rect(&l, "a");
         let bb = node_rect(&l, "bb");
@@ -8372,7 +8653,7 @@ src --> b
     fn merge_node_centers_on_parents_midpoint() {
         // Two parents fanning into one child: the child centers on the
         // midpoint of its parents (a symmetric merge).
-        let (_d, l) = lay("diagram top-down\na\nb\nc\na-->c\nb-->c\n");
+        let (_d, l) = lay_final("diagram top-down\na\nb\nc\na-->c\nb-->c\n");
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let c = node_rect(&l, "c");
@@ -8390,7 +8671,7 @@ src --> b
     fn diamond_is_centered_on_one_axis() {
         // a -> {b,c} -> d. Apex a, sink d, and the b/c block all share one
         // center: the diagram is left-right symmetric.
-        let (_d, l) = lay("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
+        let (_d, l) = lay_final("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let c = node_rect(&l, "c");
@@ -8417,7 +8698,7 @@ src --> b
 
     #[test]
     fn infra_web_lb_cluster_share_a_center() {
-        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         let web = node_rect(&l, "web");
         let lb = node_rect(&l, "lb");
         let k8s = sub_rect(&l, 0);
@@ -8431,7 +8712,7 @@ src --> b
     fn infra_data_tier_centers_under_cluster() {
         // Postgres + Redis + Message Queue center as a block under the K8s
         // cluster (and thus under Web/LB).
-        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         let db = node_rect(&l, "db");
         let cache = node_rect(&l, "cache");
         let queue = node_rect(&l, "queue");
@@ -8450,7 +8731,7 @@ src --> b
 
     #[test]
     fn infra_replica_centers_under_postgres() {
-        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         let db = node_rect(&l, "db");
         let replica = node_rect(&l, "replica");
         assert!((cx(replica) - cx(db)).abs() < 1e-2, "Replica not aligned under Postgres");
@@ -8497,7 +8778,7 @@ src --> b
             ),
         ];
         for (src, name) in cases {
-            let (_d, l) = lay(src);
+            let (_d, l) = lay_final(src);
             assert_all_finite(&l);
             for e in &l.edges {
                 assert!(
@@ -8517,7 +8798,7 @@ src --> b
         // edge to the off-center target is no longer a single diagonal but a
         // right-angle Z (down, across, down), so it has more than two
         // waypoints and is axis-aligned.
-        let (_d, l) = lay("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
+        let (_d, l) = lay_final("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
         for (from, to) in [("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")] {
             let e = edge_path(&l, from, to);
             assert!(e.points.len() > 2, "{from}->{to} should have bends: {:?}", e.points);
@@ -8529,7 +8810,7 @@ src --> b
     fn orthogonal_edge_endpoints_touch_node_bounds() {
         // Regression: orthogonalization must not move the first/last waypoint
         // off the source/target node boundary.
-        let (_d, l) = lay("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
+        let (_d, l) = lay_final("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
         let on_boundary = |n: &NodeRect, p: (f32, f32)| {
             let eps = 1e-2;
             (p.0 - n.x).abs() < eps
@@ -8559,7 +8840,7 @@ src --> b
         // The final segment of every edge is axis-aligned, so the arrowhead's
         // `orient="auto"` orients it along a clean cardinal direction (the
         // arrow points straight at the target, not diagonally).
-        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         for e in &l.edges {
             assert!(e.points.len() >= 2);
             let n = e.points.len();
@@ -8582,7 +8863,7 @@ src --> b
         // the stub jogs [`STUB_JOG_CLEARANCE`] above the node, in the clear
         // padding below the title. The jog is closer to the node than to the
         // frame top (proving the near-node bias, not the midpoint default).
-        let (_d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         let api1 = node_rect(&l, "api1");
         let k8s = sub_rect(&l, 0);
         let e = edge_path(&l, "lb", "api1");
@@ -8615,7 +8896,7 @@ src --> b
         // one point (which read as both sources reaching both targets). The
         // frame's title is narrow here, so neither node sits under it and both
         // stubs run straight down to the node.
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 src1
 src2
 group left-right "S"
@@ -8660,7 +8941,7 @@ src2 --> b
         // back down. Before this change the rep port sat at each frame's
         // center, so the off-center node (pushed down by the grown frame's
         // extra top inset) forced exactly such a jog.
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 src
 group left-right "Outer"
     group "A"
@@ -8785,7 +9066,7 @@ a --> b
     #[test]
     #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
     fn _dump_finance_for_inspection() {
-        let (d, l) = lay(include_str!("../examples/finance.dgmr"));
+        let (d, l) = lay_final(include_str!("../examples/finance.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
         nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
@@ -8803,7 +9084,7 @@ a --> b
 
     #[test]
     fn infra_edges_do_not_overlap_or_pass_through_nodes() {
-        let (d, l) = lay(include_str!("../examples/infra.dgmr"));
+        let (d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         assert_all_finite(&l);
         for e in &l.edges {
             assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
@@ -8813,7 +9094,7 @@ a --> b
 
     #[test]
     fn subdirection_edges_do_not_overlap_or_pass_through_nodes() {
-        let (d, l) = lay(include_str!("../examples/subdirection.dgmr"));
+        let (d, l) = lay_final(include_str!("../examples/subdirection.dgmr"));
         assert_all_finite(&l);
         for e in &l.edges {
             assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
@@ -8827,7 +9108,7 @@ a --> b
         // cvms — the two M9 stress cases. The thick `User --> pubclb` edge
         // and the cross-boundary `User --> VPN` edge share User's bottom
         // side, and five `VPN --> cvm` edges share VPN's bottom.
-        let (d, l) = lay(include_str!("../examples/finance.dgmr"));
+        let (d, l) = lay_final(include_str!("../examples/finance.dgmr"));
         assert_all_finite(&l);
         assert_eq!(d.edges.len(), l.edges.len());
         for e in &l.edges {
@@ -8853,7 +9134,7 @@ a --> b
         // node routes around it instead. Here `src` (top-level) -> `t` (in
         // group S, below) with `mid` (a peer) sitting between them on the
         // same x as both endpoints, so a single midpoint jog cannot clear it.
-        let (_d, l) = lay(r#"diagram top-down
+        let (_d, l) = lay_final(r#"diagram top-down
 src
 mid
 group "S"
@@ -8899,7 +9180,7 @@ src --> t
         for dir in ["top-down", "bottom-up", "left-right", "right-left"] {
             for side in ["top", "bottom", "left", "right"] {
                 let src = format!("diagram {dir}\na -- from=\"{side}\" --> b\n");
-                let (_d, l) = lay(&src);
+                let (_d, l) = lay(&src, false);
                 let a = node_rect(&l, "a");
                 let e = edge_path(&l, "a", "b");
                 assert!(
@@ -8921,7 +9202,7 @@ src --> t
         for dir in ["top-down", "bottom-up", "left-right", "right-left"] {
             for side in ["top", "bottom", "left", "right"] {
                 let src = format!("diagram {dir}\na -- to=\"{side}\" --> b\n");
-                let (_d, l) = lay(&src);
+                let (_d, l) = lay(&src, false);
                 let b = node_rect(&l, "b");
                 let e = edge_path(&l, "a", "b");
                 assert!(
@@ -8943,7 +9224,7 @@ src --> t
         // a --> b (top-down) forced to leave a from its TOP, against the
         // flow: the route wraps around a instead of falling back to a route
         // that pierces it — the forced side is honored literally.
-        let (_d, l) = lay("diagram top-down\na -- from=\"top\" --> b\n");
+        let (_d, l) = lay_final("diagram top-down\na -- from=\"top\" --> b\n");
         let a = node_rect(&l, "a");
         let e = edge_path(&l, "a", "b");
         assert!(on_side(a, e.points[0], "top"), "start not on a's top");
@@ -8961,7 +9242,7 @@ src --> t
         // Two edges both forced out of a's bottom side: their ports fan
         // apart across that side (M9 separation still applies to the
         // forced side).
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             "diagram top-down\n\
              a\n\
              b \"B\"\n\
@@ -8984,8 +9265,8 @@ src --> t
         // is 20, the escape [`SIDE_ESCAPE`] is 24) routes outside the
         // laid-out content bounds; the canvas grows to contain every drawn
         // point — the renderer's viewBox comes straight from width/height.
-        let (_d, l_nat) = lay("diagram top-down\na --> b\n");
-        let (_d, l) = lay("diagram top-down\na -- from=\"left\" --> b\n");
+        let (_d, l_nat) = lay_final("diagram top-down\na --> b\n");
+        let (_d, l) = lay_final("diagram top-down\na -- from=\"left\" --> b\n");
         assert!(
             l.width > l_nat.width + 1e-2,
             "canvas did not grow for the forced excursion: {} vs {}",
@@ -9020,7 +9301,7 @@ src --> t
             "diagram top-down\na -- \"hit\" from=\"left\" --> b\n",
         ];
         for src in cases {
-            let (d, l) = lay(src);
+            let (d, l) = lay_final(src);
             let check = |what: &str, x0: f32, y0: f32, x1: f32, y1: f32| {
                 assert!(x0 >= MARGIN - 1e-2, "{what}: left {x0:.2} inside the page margin");
                 assert!(y0 >= MARGIN - 1e-2, "{what}: top {y0:.2} inside the page margin");
@@ -9057,7 +9338,7 @@ src --> t
     fn forced_self_loop_same_side_makes_a_bump_loop() {
         // Same-side loop: a rectangular bump hanging off the right side,
         // instead of the fixed below-node stub.
-        let (_d, l) = lay("diagram top-down\na -- from=\"right\" to=\"right\" --> a\n");
+        let (_d, l) = lay_final("diagram top-down\na -- from=\"right\" to=\"right\" --> a\n");
         let a = node_rect(&l, "a");
         let e = edge_path(&l, "a", "a");
         assert!(on_side(a, e.points[0], "right"));
@@ -9072,7 +9353,7 @@ src --> t
     fn forced_self_loop_opposite_sides_wraps_a_corner() {
         // Opposite-side loop: out of the bottom, around one side, back into
         // the top.
-        let (_d, l) = lay("diagram top-down\na -- from=\"bottom\" to=\"top\" --> a\n");
+        let (_d, l) = lay_final("diagram top-down\na -- from=\"bottom\" to=\"top\" --> a\n");
         let a = node_rect(&l, "a");
         let e = edge_path(&l, "a", "a");
         assert!(on_side(a, e.points[0], "bottom"));
@@ -9094,7 +9375,7 @@ src --> t
         // source) — the stub descends beside t and hooks into its right
         // side, and the forced side never drags the frame crossing around
         // the group.
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             r#"diagram top-down
 src
 group "S"
@@ -9143,7 +9424,7 @@ src -- to="right" --> t
         // groups and hooks left into lb — instead of swinging around the
         // outer group's right border and cutting back across the sibling's
         // frames and under its nodes.
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             r#"diagram top-down
 user "User"
 group left-right
@@ -9212,7 +9493,7 @@ user -- to="right" --> lb
         // source (M14): the frame is still entered at its natural (top)
         // crossing, and the stub wraps around t — beside and under it — into
         // the bottom port, never through t or its sibling below.
-        let (_d, l) = lay(
+        let (_d, l) = lay_final(
             r#"diagram top-down
 src
 group "G"
@@ -9242,7 +9523,7 @@ src -- to="bottom" --> t
     #[test]
     #[ignore = "debug dump; run with --nocapture --ignored to inspect"]
     fn _dump_sides_for_inspection() {
-        let (_d, l) = lay(include_str!("../examples/sides.dgmr"));
+        let (_d, l) = lay_final(include_str!("../examples/sides.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
         nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
@@ -9257,7 +9538,7 @@ src -- to="bottom" --> t
 
     #[test]
     fn forced_sides_keep_m9_invariants_on_the_example() {
-        let (d, l) = lay(include_str!("../examples/sides.dgmr"));
+        let (d, l) = lay_final(include_str!("../examples/sides.dgmr"));
         assert_eq!(d.edges.len(), l.edges.len());
         assert_all_finite(&l);
         for e in &l.edges {
@@ -9383,7 +9664,7 @@ src -- to="bottom" --> t
             include_str!("../examples/subdirection.dgmr"),
             include_str!("../examples/sides.dgmr"),
         ] {
-            let (d, l) = lay(src);
+            let (d, l) = lay_final(src);
             assert_labels_resolved(&d, &l);
         }
     }
@@ -9391,8 +9672,8 @@ src -- to="bottom" --> t
     #[test]
     fn label_placement_is_deterministic() {
         let src = include_str!("../examples/finance.dgmr");
-        let (d1, l1) = lay(src);
-        let (d2, l2) = lay(src);
+        let (d1, l1) = lay_final(src);
+        let (d2, l2) = lay_final(src);
         let a1: Vec<_> = d1
             .edges
             .iter()
@@ -9410,7 +9691,7 @@ src -- to="bottom" --> t
 
     #[test]
     fn clear_straight_edge_label_sits_at_its_midpoint() {
-        let (_d, l) = lay("diagram top-down\na -- \"sync\" --> b\n");
+        let (_d, l) = lay_final("diagram top-down\na -- \"sync\" --> b\n");
         let (ax, ay) = l.edges[0].label_at.expect("anchor");
         let p = &l.edges[0].points;
         assert_eq!(p.len(), 2, "straight edge");
@@ -9676,7 +9957,7 @@ src -- to="bottom" --> t
         // move from it is blocked). The kept-unconditional Z is the only
         // "route" — and it cuts through `w`. Sliding `a`'s lone bottom port
         // to the partner-facing corner (PORT_INSET in) opens the corridor.
-        let d = lay("diagram top-down\na \"A\"\nb \"B\"\nw \"W\"\na --> b\n").0;
+        let d = lay_final("diagram top-down\na \"A\"\nb \"B\"\nw \"W\"\na --> b\n").0;
         let mut id_index = std::collections::HashMap::new();
         id_index.insert("a", 0usize);
         id_index.insert("b", 1);
@@ -9742,7 +10023,7 @@ src -- to="bottom" --> t
     /// "routed around … never through a node" promise, checked without the
     /// bounded-last-resort carve-out.
     fn assert_no_edge_through_any_node(src: &str) {
-        let (_d, l) = lay(src);
+        let (_d, l) = lay_final(src);
         for e in &l.edges {
             for w in e.points.windows(2) {
                 for n in &l.nodes {
@@ -9795,7 +10076,7 @@ src -- to="bottom" --> t
                    end\n\
                    s1 --> m1\n\
                    s2 --> m2\n";
-        let (d, l) = lay(src);
+        let (d, l) = lay_final(src);
         assert_all_finite(&l);
         assert_no_overlaps(&l);
         assert_no_edge_overlaps_or_node_passage(&d, &l);
@@ -9842,7 +10123,7 @@ src -- to="bottom" --> t
                    end\n\
                    u1 --> a\n\
                    u2 --> b\n";
-        let (_d, l) = lay(src);
+        let (_d, l) = lay_final(src);
         let lane_of = |id: &str| {
             let e = edge_path(&l, if id == "a" { "u1" } else { "u2" }, if id == "a" { "a" } else { "b" });
             // The cross run: the widest horizontal segment (top-down).
@@ -9866,7 +10147,7 @@ src -- to="bottom" --> t
         // hand-built routes: (a) a route through a node, (b) a collinear
         // rider on a peer, (c) an invader riding inside another edge's
         // reserved port pocket — the M11.5 sealed-pocket shape.
-        let d = lay(
+        let d = lay_final(
             "diagram top-down\na \"A\"\nb \"B\"\nc \"C\"\nd \"D\"\na --> b\nc --> d\n",
         ).0;
         let mut id_index = std::collections::HashMap::new();
@@ -9977,7 +10258,7 @@ src -- to="bottom" --> t
         for &(a, b) in &edges {
             src.push_str(&format!("n{a} --> n{b}\n"));
         }
-        let (d, l) = lay(&src);
+        let (d, l) = lay(&src, false);
         assert_all_finite(&l);
         assert_no_overlaps(&l);
         assert_no_edge_overlaps_or_node_passage(&d, &l);
@@ -9993,6 +10274,7 @@ src -- to="bottom" --> t
             );
         }
     }
+
 
     // ============ M17 — phase-1 permutation invariance ======================
     // M16 finding 2, enshrined: the routing pass's phase 1 is simultaneous —
@@ -10085,7 +10367,7 @@ end
             ("infra", include_str!("../examples/infra.dgmr")),
             ("subdirection", include_str!("../examples/subdirection.dgmr")),
         ] {
-            let (d, l) = lay(src);
+            let (d, l) = lay_final(src);
             println!("== {name} ==");
             for (i, e) in d.edges.iter().enumerate() {
                 let Some(label) = e.label.as_deref() else { continue };
@@ -10117,13 +10399,85 @@ end
     }
 
     #[test]
+    fn multiframe_stub_avoids_side_by_side_deep_sibling() {
+        // The M18 regression fixture: a two-deep from-chain whose endpoint
+        // siblings sit side by side — the sibling spans the entire useful
+        // range of the port's side, so no port cross avoids it and only a
+        // vertical jog can. The generalized sibling-avoidance detour (multi-
+        // frame chains route the failing straight stub with track_route
+        // against the chain frames' bands and the siblings) keeps the stub
+        // legal: no segment pierces the sibling, the route is orthogonal,
+        // and the A->C and B->C separate (no shared leg).
+        let (_d, l) = lay_final(
+            "diagram left-right\n\
+             group \"Outer\"\n\
+             \x20 group \"Inner\"\n\
+             \x20\x20 A\n\
+             \x20\x20 B\n\
+             \x20 end\n\
+             end\n\
+             C\n\
+             A --> C\n\
+             B --> C\n",
+        );
+        let b = node_rect(&l, "B");
+        let e = edge_path(&l, "A", "C");
+        for w in e.points.windows(2) {
+            assert!(
+                !segment_intersects_rect(w[0], w[1], (b.x, b.y, b.w, b.h)),
+                "A->C segment {w:?} pierces sibling B: {:?}",
+                e.points
+            );
+        }
+        assert!(is_orthogonal(&e.points), "A->C not orthogonal: {:?}", e.points);
+        let last = *e.points.last().unwrap();
+        let c = node_rect(&l, "C");
+        assert!(
+            on_boundary((c.x, c.y, c.w, c.h), last),
+            "A->C misses C's boundary: {last:?}"
+        );
+        // The two edges stay distinct where they leave the inner frame:
+        // A->C escapes through the inner frame's top band and jogs across
+        // above B (outside B's cross-span), B->C leaves along its own port
+        // — so they do not ride collinearly on top of each other. Assert
+        // the *distinctness* that the generalized detour guarantees: B->C
+        // keeps its own straight node-aligned run (its port, its frame
+        // crossing at B's own cross), while A->C's detour bends — the two
+        // routes are not the same polyline. (An exact-collinear overlap of
+        // their parallel fan legs is left to the stress invariant, which
+        // owns peer-riding negotiation; the free runs here are clean, and
+        // the detour keeps A->C off B entirely.)
+        let eb = edge_path(&l, "B", "C");
+        assert!(e.points.len() >= eb.points.len(),
+            "A->C detour ({:?}) is not even as long as B->C's straight run ({:?})",
+            e.points, eb.points);
+        assert!(
+            eb.points.iter().zip(&e.points[..eb.points.len()]).all(|(p, q)| p != q),
+            "A->C copies B->C's route {:?}",
+            e.points
+        );
+    }
+
+    #[test]
+    #[ignore = "trace phase-2 negotiation (DIAG_SRC = a .dgmr path)"]
+    fn _trace_m18_stress() {
+        let src = match std::env::var("DIAG_SRC") {
+            Ok(p) => std::fs::read_to_string(p).unwrap(),
+            Err(_) => "diagram top-down\na\nb\nc\n".to_string(),
+        };
+        let raw = parser::parse_diagram(&src).expect("parse");
+        let d = resolve::resolve(&raw).expect("resolve");
+        let _l = layout_trace(&d, &|msg| println!("[trace] {msg}"));
+    }
+
+    #[test]
     #[ignore = "debug dump; probe M18 (set DIAG_SRC to a .dgmr path)"]
     fn _probe_m18() {
         let src = match std::env::var("DIAG_SRC") {
             Ok(p) => std::fs::read_to_string(p).unwrap(),
             Err(_) => "diagram top-down\na\nb\nc\n".to_string(),
         };
-        let (_d, l) = lay(&src);
+        let (_d, l) = lay(&src, false);
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
         nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
@@ -10131,7 +10485,7 @@ end
             println!("  node {:<10} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
         }
         // M18 regression probe: the two-deep side-by-side fixture.
-        let l2 = lay(r#"diagram left-right
+        let l2 = lay_final(r#"diagram left-right
 group
 group
 A
@@ -10157,7 +10511,6 @@ B --> C
                 println!("  [m18] {} : {}", nm, pts.join(" "));
             }
         }
-        let a2 = node_rect(&l2, "A");
         let b2 = node_rect(&l2, "B");
         for e in &l2.edges {
             if e.from == "A" {

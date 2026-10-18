@@ -6,11 +6,11 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅done · ▶ next · ☐ planned
 
-**Current position:** M0–M7.5, M9–M15, M16 and M17 are complete (M12 was
-absorbed by M11.5), plus the post-M13 hardening pass below and the post-M17
-routing hardening (escape-stub spikes) recorded under M17. **M18 (multi-frame
-stub sibling avoidance) is next; M19 (stub routing unified into the
-dispatch) follows it. M8 (CLI polish) remains the last milestone.**
+**Current position:** M0–M7.5, M9–M15, M16, M17, and M18 are complete (M12
+was absorbed by M11.5), plus the post-M13 hardening pass below and the
+post-M17 routing hardening (escape-stub spikes) recorded under M17, and
+S19a (the first of M19's three sessions) is complete. **M19 continues with
+S19b, then S19c. M8 (CLI polish) remains the last milestone.**
 
 ---
 
@@ -1246,7 +1246,7 @@ only `snapshots/sides.svg` changed (the fixed `api --> cache` route plus its
 downstream negotiation with the `api --> db` forced-top edge, which moved
 its descent corridor to stay clear of the new lane).
 
-### ▶ M18 — Multi-frame within-frame stubs avoid siblings (option 1)
+### ✅ M18 — Multi-frame within-frame stubs avoid siblings (option 1)
 
 Diagnosed on `dev-digital.dgmr` (kept out of the snapshot suite and
 permanent tests per its owner): the edges
@@ -1257,11 +1257,9 @@ node_a -- dashed "event logs" from="right" --> cos_logs
 ```
 
 leave node_a's right side and run **straight through node_b** — collinearly
-on top of node_b's own `--> polaris` / `--> cos_logs` first legs. Root cause
-(established by instrumenting `route_edge` with temporary probes, since
-removed; the committed SVG reproduces the defect byte-identically):
-
-Here's a minimal diagram that demonstrates the problem:
+on top of node_b's own `--> polaris` / `--> cos_logs` first legs. Root
+cause (established by instrumenting `route_edge` with temporary probes,
+since removed; the committed SVG reproduced the defect byte-identically):
 
 ```
 diagram left-right
@@ -1278,89 +1276,186 @@ B-->C
 
 - Both edges' from-chain is **two frames deep** (`[Worker Node Pool, TKE
   Cluster]`), and their endpoint siblings sit side by side with `node_b`
-  spanning the *entire* useful range of node_a's right side — no right-side
-  port choice avoids it; only a vertical jog can.
-- [`stub_for`] gates the obstacle-aware, Dijkstra-routed sibling-avoidance
+  spanning the *entire* useful range of node_a's right side — no
+  right-side port choice avoids it; only a vertical jog can.
+- [`stub_for`] gated the obstacle-aware, Dijkstra-routed sibling-avoidance
   builder ([`force_stub_around_siblings`], which runs [`track_route`] with
   the innermost frame's siblings as solid obstacles, its border bands, soft
   peer occupancy, and escape bars) on `chain.len() == 1`. With a two-frame
-  chain it falls through to [`build_stub`] — a purely geometric
+  chain it fell through to [`build_stub`] — a purely geometric
   node-aligned line clipped at frame boundaries, with **no obstacle
   awareness** (deliberate per M9: "within-frame stubs keep the M5/M7 logic
   unchanged"; M11.5's one-regime hoist never covered the stub builders).
-- `route_edge` therefore emits exactly **one** candidate whose first stub
-  leg fails `world.clear()` against the node_b rect; per the bounded-ladder
-  convention the terminal candidate is kept unconditionally. M16 phase 2
-  re-detects the hard violation every pass, gets the same single failing
-  candidate, and **freezes** the edge. The phase-2 rerun also fails against
-  node_b→polaris's reserved port pocket, but the stub generator cannot emit
-  any alternative shape, so yielding is impossible; and the sealed-port
-  fallback cannot move the port either (the side is shared by both edges).
-- So: **not** a Dijkstra node-coverage problem — the router is never invoked
-  for the broken span. The LCA segments, lanes, and label anchors are all
-  clean; only the blind multi-frame stub leg is defective.
+- `route_edge` therefore emitted exactly **one** candidate whose first
+  stub leg fails `world.clear()` against the node_b rect; per the
+  bounded-ladder convention the terminal candidate was kept
+  unconditionally. M16 phase 2 re-detected the hard violation every pass,
+  got the same single failing candidate, and **froze** the edge (the
+  sealed-port fallback could not move the port either — the side is
+  shared by both edges).
+- So: **not** a Dijkstra node-coverage problem — the router was never
+  invoked for the broken span. The LCA segments, lanes, and label anchors
+  were all clean; only the blind multi-frame stub leg was defective.
 
-The fix (option 1 of the two considered; option 2 is M19): generalize the
-existing sibling avoidance to chains of any length.
+The milestone (option 1 of the two considered; option 2 is M19) generalized
+the existing sibling avoidance to chains of any length. Checklist:
 
-- [ ] **Generalize the `chain.len() == 1` gate** in [`stub_for`] so
+- [x] **Generalize the `chain.len() == 1` gate** in [`stub_for`] so
       [`force_stub_around_siblings`] handles multi-frame chains. The
       obstacle set grows to include **every chain frame's border bands**
       (not just the innermost), so the frame crossings the straight stub
       clipped legally stay legal *designated crossings* for the detour —
       the shared world only ever contained the LCA-level frames' bands, so
       without this the detour could graze a nested outline unchecked.
-- [ ] **Fix the Dijkstra start point.** `force_stub_around_siblings` seeds
-      [`track_route`] from `escape_point(port, side, SIDE_ESCAPE)` — 24 px
-      out along the side's normal, which for a side-by-side sibling lands
-      *inside* the sibling (node_b starts 67 px right of node_a). Clamp
-      the escape (or seed from the port itself) so the start point is not
-      born inside the obstacle it must avoid; the tracks seeded from the
-      sibling's own edges (± [`TRACK_OFF`]) then provide the vertical jog
-      above/below the sibling.
-- [ ] **Keep the escape bars and soft occupancy** (the M17 escape-stub
+- [x] **Fix the Dijkstra start point.** `force_stub_around_siblings`
+      seeds [`track_route`] via a clamped escape instead of the raw
+      [`escape_point`] walk (24 px out along the side's normal, which for
+      a side-by-side sibling lands *inside* the sibling's clearance band).
+- [x] **Keep the escape bars and soft occupancy** (the M17 escape-stub
       spike hardening) active on the generalized path.
-- [ ] **Regression guards.** The existing single-frame tests
+- [x] **Regression guards.** The existing single-frame tests
       (`cross_boundary_stub_does_not_cross_sibling`,
-      `sibling_fan_edges_never_cross_or_ride`, the forced-side chain tests)
-      pin the machinery being extended and must stay green and
-      byte-identical where they assert shapes. Add one focused test for the
-      two-deep side-by-side case (a small synthetic fixture — the
-      `dev-digital.dgmr` diagram itself stays out of the permanent suite
-      and snapshots).
-- [ ] **Snapshot triage:** all committed examples must render
-      byte-identically unless a route they pin was *itself* defective in
-      exactly this way; regenerate and hand-review any changed `.svg`
-      before committing.
+      `sibling_fan_edges_never_cross_or_ride`, the forced-side chain
+      tests) stayed green and shape-identical. New focused test
+      `multiframe_stub_avoids_side_by_side_deep_sibling` — the synthetic
+      two-deep side-by-side fixture above (the `dev-digital.dgmr` diagram
+      itself stays out of the permanent suite and snapshots): A→C must not
+      pierce sibling B, must run orthogonal to C's boundary, and must not
+      ride B→C.
+- [x] **Snapshot triage:** all committed examples render byte-identically
+      except three regenerated goldens (see below); `dev-digital.dgmr`
+      byte-identical throughout.
 
-Trigger stays narrow: chain ≥ 2 **and** the straight stub is blocked;
-everything else keeps the prior geometry. This removes the defect at its
-source, so phase 1 accepts the clean primary candidate outright, the freeze
-mechanism goes back to meaning "genuinely unfixable," and the rip-up/pocket
-machinery negotiates routes that are capable of clearing.
+Implemented in `src/layout.rs`:
+
+- **Gate.** `stub_for` now hands *any* chain length to
+  [`force_stub_around_siblings`]; title detours still short-circuit ahead
+  of it, and the trigger stays narrow — a multi-frame stub detours only
+  when the straight stub fails the clearance check across the whole
+  chain-frame world, so prior geometry is kept whenever the straight stub
+  is legal.
+- **Chain-frame bands + crossings.** The detour's obstacle world carries
+  every chain frame's border bands (not only the innermost frame's), and
+  `record_chain_crossings` re-records the routed legs' frame transversals
+  as explicit waypoints — the same designated-crossing convention the
+  straight stub's `line_rect_exit` clipping satisfied.
+- **Clamped escape (rewritten).** `clamped_escape` walks the escape ray
+  from the port and cuts just short of the first *orientation-matched*
+  barrier: a node the [`ROUTE_PAD`]-inflated clearance check would
+  pierce, a reserved port pocket or hard peer band the ray would ride
+  parallel inside, or a border band it would cross. Two defects this
+  repair surfaced in the earlier prototype are fixed here: the
+  "nearest barrier" comparison compared a candidate's own distance
+  against itself (the first obstacle along the ray always won instead of
+  the nearest — the seed was born two rows deep inside a far sibling and
+  the uncancellable straight port→seed leg then pierced everything in
+  between), and reserved pockets/border bands were absent from the
+  barrier set (the old escape walked straight into a sibling's approach
+  pocket). With both fixed, the seed is born in free space, and the
+  sibling tracks (± [`TRACK_OFF`]) supply the jog around it.
+- **Bounded negotiation retry.** Stub-detour and ladder track routes get
+  one retry (`track_route_negotiated`): when the routed polyline rides a
+  parked peer band *exactly* (same centerline, overlapping span), the
+  ride is pinned as a border band and the Dijkstra re-runs — a clear route
+  that is strictly less soft-conflicting moves; otherwise the ridden
+  route stands (the bounded-ladder convention). Phase 1 has no peers, so
+  the retry only ever fires in the phase-2 repair loop; the phase-1
+  permutation invariance test is untouched.
+- `dev-digital.dgmr`'s two offending edges now route with an obstacle-
+  aware detour on their multi-frame stubs; the committed `dev-digital.svg`
+  is byte-identical to the pre-M18 drawing (the defect had been fixed in
+  the working tree before this doc pass; the invariant is pinned by the
+  new test).
+
+Snapshots: `cluster`, `finance`, and `sides` were stale — their pinned
+geometry shifted with the earlier source-rank centering revision and had
+not been regenerated; they are regenerated and hand-reviewed here (only
+benign 1–3 px fan/row respreads and label anchors riding rows that had
+already moved; no defect-class routes). All other snapshots are
+byte-identical.
+
+**Known residue (handed to M19).** The dense-stress invariant sweep
+(`global_pass_stress_dense_compound_graph`) still fails on one pair: two
+cross-boundary edges whose target stubs must traverse a single-row
+corridor above the Inner group (one track row sits between the frame's
+top band and the inner members' clearance padding) park their spines on
+that row and ride collinearly for ~13 px. Each edge alone routes clean
+(phase 1 accepts both); the defect is only visible pairwise, so no single
+edge's reroute can see and clear it, and the negotiated retry finds no
+alternative because the corridor physically offers one seeded row under
+the current track seeding. The trunk-over-trunk ride the sweep reported
+earlier (n18→n19 across n16→n22's escape) **is** fixed by the
+clamped-escape repair; the sweep's remaining failure is exactly this
+residual. Closing it needs row-fan coordination across simultaneously
+routed detours sharing a corridor — plus corridor seeding that offers
+interior rows beyond obstacle-edge ± [`TRACK_OFF`] when only one exists
+— both of which belong to the M19 unified dispatch.
 
 **Blocked by:** nothing (M17's escape bars are a constraint the fix must
 respect, not a blocker). **Blocks:** M19.
 
-### ☐ M19 — Stub routing unified into the one-regime dispatch (option 2)
+### ▶ M19 — Stub routing unified into the one-regime dispatch (option 2)
 
 The end-state refactor M18 deliberately defers: complete the M11.5 unifying
 move — "one obstacle world, one routing regime" — over the *stub* spans,
-dissolving the sibling special case instead of extending it.
+dissolving the sibling special case instead of extending it. M19 also owns
+the M18 residue: row-fan coordination across simultaneously routed detours
+that share a corridor row (see M18's "Known residue"), plus corridor
+seeding that offers interior rows between a frame band and member padding
+when obstacle-edge ± [`TRACK_OFF`] seeds supply only one — enough vocabulary
+to clear the dense-stress sweep completely.
 
-- [ ] **Route any failing stub span at the dispatch.** When a candidate's
+**This milestone is planned as three sessions** (S19a–S19c below). The
+refactor-with-invariance-contract work (sessions a and b) is kept separate
+from the new-geometry residue work (session c): the former expects
+byte-identical output, the latter expects output to change — so each
+session's snapshot triage stays unambiguous. Sessions must run in order: b
+absorbs a's machinery, and c's coordination mechanism must operate on the
+final dispatch shape so it does not have to be re-proven after the
+refactor.
+
+#### ✅ S19a — Dispatch unify, minimal surface (refactor; expect byte-identical)
+
+- [x] **Route any failing stub span at the dispatch.** When a candidate's
       straight [`build_stub`] output fails `world.clear()`, reroute the
       port→rep-port span through [`track_route`] against the shared world —
       the same treatment the LCA segment already gets — rather than
       emitting the defective straight stub as the unconditional terminal.
       The straight stub remains the kept-unconditional fallback (the
-      bounded-ladder convention) when no clear route exists.
-- [ ] **Chain bands in the world for that span.** The shared world carries
+      bounded-ladder convention) when no clear route exists. *(Landed as
+      `reroute_stub_span`, called from `stub_for` right after the
+      mismatched early return — M18's geometry generalized to any failing
+      straight span: chain bands hard, peer occupancy soft, clamped
+      escape seed, `record_chain_crossings` for the detour's own
+      transversals; the sibling set under the innermost frame is in the
+      world as nodes.)*
+- [x] **Chain bands in the world for that span.** The shared world carries
       only the LCA-level frames' bands (see [`edge_world`]); the routing
-      must add the chain frames' bands for exactly the stub span, or a
-      reroute could ride a nested outline unchecked (the designated
-      crossings the straight stub clipped are legal; a rerouted leg that
-      grazes the band is not).
+      adds the chain frames' bands for exactly the stub span
+      (`reroute_stub_span`'s stub-local `Obstacles`), so a rerouted leg
+      never rides a nested outline unchecked (the designated crossings the
+      straight stub clipped are legal; a grazing rerouted leg is not).
+- [x] **Session-local constraint:** M18's [`force_stub_around_siblings`]
+      and its gate stay untouched; the dispatch reroute runs as a checked
+      gate ahead of it. *(The S19a reroute is gated to multi-frame chains
+      — `chain.len() > 1` — for determinism: a single-frame chain's
+      accepted M18 fallback geometry is pinned by unit expectations, and
+      its detour's escape lands inside the S19a would-be obstacle world
+      (a sibling 24 px out on the escape normal), so routing against that
+      world here could flip which accepted fallback it lands on — a byte
+      change this session must not introduce. S19b absorbs the special
+      case and retires the gate.)*
+- **Deliverable:** suite green; snapshots byte-identical vs post-M18 *(all
+  twelve golden files verified by checksum against the post-M18 state)*;
+  dense-stress sweep status re-measured against the new failure surface
+  *(same single defect pair remains — `n6→n14` vs `n1→n14`, the corridor
+  row-fan in S19c's scope; phase-1 probing shows the two full chain-ride
+  spans there are already derailed onto distinct corridors, and the
+  failure boundary is unchanged at the same segment pair — no new defect
+  class surfaced by the reroute gate)*.
+
+#### ☐ S19b — Absorb & retire, cover the last blind span (mostly refactor)
+
 - [ ] **Absorb M18's machinery, then retire the special case.** The
       generalized [`force_stub_around_siblings`] and its chain-length gate
       become redundant: move the chain-local obstacle construction to the
@@ -1370,21 +1465,38 @@ dissolving the sibling special case instead of extending it.
 - [ ] **Cover the other blind span too:** `mismatched_stub` for multi-frame
       chains is purely geometric today (M14); the unified regime should
       give it the same clearance-checked reroute.
-- [ ] **Invariants re-verified end to end:** phase-1 permutation
-      invariance, escape-stub bars, pocket right-of-way, and the snapshot
-      suite (expect byte-identical output vs post-M18 — this is a refactor
-      in principle; any byte change must be a defect fix of exactly the
-      blind-stub class, hand-reviewed).
+- **Deliverable:** suite green. Unlike S19a, byte changes are permitted
+  here but only as defect fixes of exactly the blind-stub class (the
+  previously blind `mismatched_stub` span may begin avoiding defects it
+  never saw); every byte change is hand-reviewed and triaged as such.
+- **Invariants re-verified end to end (a+b together):** phase-1
+  permutation invariance, escape-stub bars, pocket right-of-way, and the
+  snapshot suite.
 
-Rationale for the sequencing (M18 before M19): M19 needs M18's geometry
-proven (chain bands, the clamped track start, designated crossings) against
-`route_edge`'s candidate-priority and terminal-fallback semantics — the
-most invariant-laden dispatch in `layout.rs`; doing it in one step means
-inventing and proving all of it there at once. M18 ships the fix with a
-narrow trigger and maximal reuse of pinned tests; M19 then *absorbs* it
-(none of M18's logic is discarded, though the `chain.len() == 1` code shape
-is retired) and closes the class for every stub kind, including the ones M18
-does not touch.
+#### ☐ S19c — M18 residue: corridor coordination (new geometry; output expected to change)
+
+- [ ] **Row-fan coordination** across simultaneously routed detours that
+      share a corridor row: M18 established that no single-edge reroute
+      can see the pairwise defect (two target stubs parking collinear
+      spines on the one-row corridor above the Inner group), so the
+      coordination must be a simultaneous-routing mechanism.
+- [ ] **Corridor seeding that offers interior rows** between a frame band
+      and member padding when obstacle-edge ± [`TRACK_OFF`] seeds supply
+      only one — enough vocabulary for the coordination to spread onto.
+- **Deliverable:** the dense-stress invariant sweep
+  (`global_pass_stress_dense_compound_graph`) fully green; the affected
+  snapshot regions hand-reviewed; phase-1 permutation invariance stays
+  pinned.
+
+Rationale for the sequencing (M18 before this milestone): M19 needs M18's
+geometry proven (chain bands, the clamped track start, designated
+crossings) against [`route_edge`]'s candidate-priority and
+terminal-fallback semantics — the most invariant-laden dispatch in
+`layout.rs`; doing it in one step means inventing and proving all of it
+there at once. M18 shipped the fix with a narrow trigger and maximal reuse
+of pinned tests; M19 then *absorbs* it (none of M18's logic is discarded,
+though the `chain.len() == 1` code shape is retired) and closes the class
+for every stub kind, including the ones M18 does not touch.
 
 **Blocked by:** M18 (proves the geometry it generalizes). **Blocks:**
 nothing; M8 remains the last open milestone.

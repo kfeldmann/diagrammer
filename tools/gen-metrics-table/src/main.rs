@@ -32,7 +32,13 @@ fn main() {
     // char -> glyph id. Authoritative `glyph_index` lookup per codepoint, so
     // subtable overlap/precedence is resolved exactly like the runtime did.
     let mut chars: BTreeMap<u32, u16> = BTreeMap::new();
-    for sub in face.tables().cmap.iter().flat_map(|c| c.subtables).filter(|s| s.is_unicode()) {
+    for sub in face
+        .tables()
+        .cmap
+        .iter()
+        .flat_map(|c| c.subtables)
+        .filter(|s| s.is_unicode())
+    {
         sub.codepoints(|cp| {
             let Some(c) = char::from_u32(cp) else { return };
             if let Some(gid) = face.glyph_index(c) {
@@ -77,7 +83,9 @@ fn main() {
                         kern.entry(pair.pair).or_insert(pair.value);
                     }
                 }
-                other => panic!("unsupported kern subtable format: {other:?} (extend the generator)"),
+                other => {
+                    panic!("unsupported kern subtable format: {other:?} (extend the generator)")
+                }
             }
         }
     }
@@ -86,13 +94,37 @@ fn main() {
     let kern: Vec<(u32, i16)> = kern.into_iter().collect();
 
     let mut out = String::new();
-    writeln!(out, "//! Baked DejaVu Sans Regular metrics — GENERATED FILE, DO NOT EDIT.").unwrap();
+    writeln!(
+        out,
+        "//! Baked DejaVu Sans Regular metrics — GENERATED FILE, DO NOT EDIT."
+    )
+    .unwrap();
     writeln!(out, "//!").unwrap();
-    writeln!(out, "//! Regenerate with `cargo run -p gen-metrics-table` (see the").unwrap();
-    writeln!(out, "//! tool's header comment for the exact semantics baked here). Values").unwrap();
-    writeln!(out, "//! are in font units (em = `ASCENT - DESCENT`); `text::measure` scales").unwrap();
-    writeln!(out, "//! them to pixels. The `font_verification` tests prove this table").unwrap();
-    writeln!(out, "//! matches live `ttf-parser` lookups against the bundled font byte for").unwrap();
+    writeln!(
+        out,
+        "//! Regenerate with `cargo run -p gen-metrics-table` (see the"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "//! tool's header comment for the exact semantics baked here). Values"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "//! are in font units (em = `ASCENT - DESCENT`); `text::measure` scales"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "//! them to pixels. The `font_verification` tests prove this table"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "//! matches live `ttf-parser` lookups against the bundled font byte for"
+    )
+    .unwrap();
     writeln!(out, "//! byte.").unwrap();
     writeln!(out).unwrap();
     writeln!(out, "/// `hhea` ascender, in font units.").unwrap();

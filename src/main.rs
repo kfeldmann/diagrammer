@@ -29,7 +29,11 @@ fn main() -> ExitCode {
     let prog = args.first().map(String::as_str).unwrap_or("diagrammer");
 
     if args.len() == 1 || args.iter().any(|a| a == "-h" || a == "--help") {
-        let code = if args.len() == 1 { ExitCode::from(2) } else { ExitCode::SUCCESS };
+        let code = if args.len() == 1 {
+            ExitCode::from(2)
+        } else {
+            ExitCode::SUCCESS
+        };
         print!("{}", usage(prog));
         return code;
     }
@@ -61,8 +65,13 @@ fn main() -> ExitCode {
             eprintln!("wrote {}", path.display());
             ExitCode::SUCCESS
         }
-        Err(error::Error::Parse { offset, message } | error::Error::Resolve { offset, message }) => {
-            eprintln!("error at line {}: {message}", error::line_of(&source, offset));
+        Err(
+            error::Error::Parse { offset, message } | error::Error::Resolve { offset, message },
+        ) => {
+            eprintln!(
+                "error at line {}: {message}",
+                error::line_of(&source, offset)
+            );
             ExitCode::from(1)
         }
         Err(error::Error::Io(e)) => {

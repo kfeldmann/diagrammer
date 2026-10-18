@@ -108,7 +108,10 @@ pub fn measure(text: &str, font_size: f32) -> Metrics {
         width
     };
     let lines: Vec<&str> = text.split('\n').collect();
-    let width = lines.iter().map(|l| measure_line(l)).fold(0.0_f32, f32::max);
+    let width = lines
+        .iter()
+        .map(|l| measure_line(l))
+        .fold(0.0_f32, f32::max);
     let height = font_size + (lines.len() - 1) as f32 * line_height(font_size);
     Metrics { width, height }
 }
@@ -121,7 +124,12 @@ mod tests {
     fn longer_text_is_wider() {
         let a = measure("API", 14.0);
         let b = measure("API Server 1", 14.0);
-        assert!(b.width > a.width, "{} should be wider than {}", b.width, a.width);
+        assert!(
+            b.width > a.width,
+            "{} should be wider than {}",
+            b.width,
+            a.width
+        );
         assert!(a.width > 0.0);
     }
 
@@ -151,7 +159,10 @@ mod tests {
         let narrow = measure("web", 14.0).width;
         let wide = measure("Postgres", 14.0).width;
         let m = measure("web\nPostgres\nweb", 14.0);
-        assert!((m.width - wide).abs() < 1e-4, "width should be the widest line");
+        assert!(
+            (m.width - wide).abs() < 1e-4,
+            "width should be the widest line"
+        );
         assert!(m.width > narrow);
     }
 
@@ -193,7 +204,9 @@ mod font_verification {
     fn every_codepoint_maps_to_the_same_glyph() {
         let f = face();
         for cp in 0..=0x10FFFFu32 {
-            let Some(c) = char::from_u32(cp) else { continue };
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
             let live = f.glyph_index(c).map(|g| g.0).unwrap_or(0);
             assert_eq!(glyph_id(c), live, "glyph mismatch for U+{cp:04X}");
         }
@@ -204,7 +217,11 @@ mod font_verification {
         let f = face();
         for i in 0..f.number_of_glyphs() {
             let live = f.glyph_hor_advance(GlyphId(i)).unwrap_or(0);
-            assert_eq!(mt::ADVANCES[i as usize], live, "advance mismatch for glyph {i}");
+            assert_eq!(
+                mt::ADVANCES[i as usize],
+                live,
+                "advance mismatch for glyph {i}"
+            );
         }
     }
 
@@ -216,7 +233,9 @@ mod font_verification {
         let mut live: std::collections::HashMap<u32, i16> = std::collections::HashMap::new();
         if let Some(table) = f.tables().kern {
             for st in table.subtables.into_iter().filter(|st| st.horizontal) {
-                let Format::Format0(f0) = st.format else { panic!("generator handles only Format0") };
+                let Format::Format0(f0) = st.format else {
+                    panic!("generator handles only Format0")
+                };
                 for pair in f0.pairs {
                     live.entry(pair.pair).or_insert(pair.value);
                 }
@@ -234,8 +253,7 @@ mod font_verification {
     /// Reference implementation measuring straight from the font, with the
     /// exact historical `ab_glyph` scaling.
     fn measure_live(f: &Face<'_>, text: &str, font_size: f32) -> Metrics {
-        let h_scale =
-            font_size / (f.ascender() as f32 - f.descender() as f32);
+        let h_scale = font_size / (f.ascender() as f32 - f.descender() as f32);
         let measure_line = |line: &str| -> f32 {
             let mut width = 0.0_f32;
             let mut prev: Option<GlyphId> = None;
@@ -260,7 +278,10 @@ mod font_verification {
             width
         };
         let lines: Vec<&str> = text.split('\n').collect();
-        let width = lines.iter().map(|l| measure_line(l)).fold(0.0_f32, f32::max);
+        let width = lines
+            .iter()
+            .map(|l| measure_line(l))
+            .fold(0.0_f32, f32::max);
         let height = font_size + (lines.len() - 1) as f32 * line_height(font_size);
         Metrics { width, height }
     }
@@ -285,8 +306,16 @@ mod font_verification {
             for size in [1.0, 12.0, 13.5, 14.0, 17.3, 100.0] {
                 let a = measure(s, size);
                 let b = measure_live(&f, s, size);
-                assert_eq!(a.width.to_bits(), b.width.to_bits(), "width drift for {s:?} @ {size}");
-                assert_eq!(a.height.to_bits(), b.height.to_bits(), "height drift for {s:?} @ {size}");
+                assert_eq!(
+                    a.width.to_bits(),
+                    b.width.to_bits(),
+                    "width drift for {s:?} @ {size}"
+                );
+                assert_eq!(
+                    a.height.to_bits(),
+                    b.height.to_bits(),
+                    "height drift for {s:?} @ {size}"
+                );
             }
         }
     }
@@ -299,14 +328,20 @@ mod font_verification {
         let f = face();
         let size = 13.7;
         for cp in 0..=0x10FFFFu32 {
-            let Some(c) = char::from_u32(cp) else { continue };
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
             if f.glyph_index(c).is_none() {
                 continue;
             }
             let s = c.to_string();
             let a = measure(&s, size);
             let b = measure_live(&f, &s, size);
-            assert_eq!(a.width.to_bits(), b.width.to_bits(), "width drift for U+{cp:04X}");
+            assert_eq!(
+                a.width.to_bits(),
+                b.width.to_bits(),
+                "width drift for U+{cp:04X}"
+            );
         }
     }
 }

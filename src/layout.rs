@@ -4530,127 +4530,6 @@ fn segment_rect(
     )
 }
 
-/// A within-frame stub avoidance for a forced side (M11): the straight
-/// stub — both ports on the node's cross-coordinate of the forced side —
-/// may pierce a sibling sitting between the node and the frame border; a
-/// track route from the escaped node port around the siblings to the rep
-/// frame port fixes the common single-frame case. Returns the straight
-/// stub unchanged when it is already clear or no around-route exists (the
-/// bounded-ladder convention: the forced port is kept either way).
-#[allow(clippy::too_many_arguments)]
-fn force_stub_around_siblings(
-    node_port: (f32, f32),
-    rep_port: (f32, f32),
-    side: Side,
-    siblings: &[(f32, f32, f32, f32)],
-    frame: (f32, f32, f32, f32),
-    world: &Obstacles,
-    inward: bool,
-    // M18: the chain's intermediate frame crossings — the straight stub's
-    // designated frame crossings, in the stub's order (rep crossing first,
-    // the inner frames' crossings after). A detour that stays clear of the
-    // sibling may cross a chain frame elsewhere; the crossings are recorded
-    // per leg, so the generalized detour keeps the frame-crossing
-    // convention the straight stub already satisfied.
-    chain_frames: &[(f32, f32, f32, f32)],
-    axis: FlowAxis,
-) -> Vec<(f32, f32)> {
-    let (s0, s1) = if inward { (rep_port, node_port) } else { (node_port, rep_port) };
-    if !siblings
-        .iter()
-        .any(|&s| segment_intersects_rect(s0, s1, s))
-    {
-        return vec![s0, s1];
-    }
-    // M18: the trigger stays narrow — a straight stub that clears the
-    // whole obstacle world keeps the prior geometry. For a single-frame
-    // chain the routing world carries only the rep frame's bands, and the
-    // only candidate blockers in the sibling band are the siblings
-    // themselves (the pierce above is the whole story). For a multi-frame
-    // chain the intermediate crossings make the straight stub
-    // clearance-checked across the chain, so a stub blocked by anything —
-    // a node the descent pierces, a frame outline it grazes — is rerouted
-    // here, and the record of the chain crossings keeps the detour's own
-    // frame transversals designated.
-    if chain_frames.len() > 1 && world.clear(&[s0, s1]) {
-        return vec![s0, s1];
-    }
-    // The siblings are the obstacle world for this stub's detour (node
-    // rects and nested frames alike, solid — a stub must not cross a
-    // sibling of any kind). The chain frames' border bands (M18: every
-    // frame's, not just the innermost frame's) are obstacles too: the
-    // detour stays inside the frames and never rides an outline (absorbed
-    // M12) — it may leave a crossing only perpendicular. Peer occupancy
-    // carries over from the routing world (M16): parked peer segments are
-    // soft cost, so two edges' detours around the same sibling negotiate
-    // into distinct corridors instead of piling up.
-    let mut obs = Obstacles::empty();
-    for &s in siblings {
-        obs.push_node(s);
-    }
-    obs.borders = border_bands(frame);
-    for &f in chain_frames.iter().skip(1) {
-        obs.borders.extend(border_bands(f));
-    }
-    obs.soft = world.soft.clone();
-    obs.segments = world.segments.clone();
-    obs.corridors = world.corridors.clone();
-    // M18: the escape may land inside the obstacle world when the sibling
-    // band is tight (a side-by-side sibling 24 px out on the escape side's
-    // normal) — a start point born inside an obstacle can only be
-    // clearance-failed everywhere, so no route would ever come out of the
-    // Dijkstra. Clamp the escape to the closest point the obstacle-clear
-    // neighborhood of the escape line reaches: walk the escape line from
-    // the port outward and stop just short of the first obstacle the
-    // escape segment would pierce. The tracks seeded from the siblings'
-    // own edges (± [`TRACK_OFF`]) then provide the jog rows above/below
-    // (or beside) the blocking sibling.
-    let a = clamped_escape(node_port, side, SIDE_ESCAPE, &obs, world);
-    // The stub's fixed legs hang off the node port's escape on one side of
-    // the routed span (the rep crossing on the other end is a plain corner
-    // into the next piece): bar the leg that would double back over the
-    // escape — toward the node port when routing outward, outward into the
-    // escape point when routing inward.
-    let esc = if inward {
-        Escapes {
-            start: None,
-            end: Some(Dir::of_side(side)),
-        }
-    } else {
-        Escapes {
-            start: Some(Dir::of_side(side)),
-            end: None,
-        }
-    };
-    let routed = if inward {
-        track_route_negotiated(rep_port, a, &obs, esc)
-    } else {
-        track_route_negotiated(a, rep_port, &obs, esc)
-    };
-    if !routed.is_empty() && obs.clear(&routed) {
-        // Attach the ends and record the chain frames' crossings the routed
-        // legs land on (M18): every group crossing on the page stays an
-        // explicit waypoint, like the straight stub's `line_rect_exit`
-        // clipping — a leg that touches a band's centerline mid-segment
-        // would otherwise be barred by the clearance check as a
-        // non-designated transversal.
-        let mut stub = if inward {
-            let mut s = routed;
-            s.push(node_port);
-            s
-        } else {
-            let mut s = vec![node_port];
-            s.extend(routed);
-            s
-        };
-        stub = record_chain_crossings(stub, chain_frames, axis);
-        if obs.clear(&stub) {
-            return stub;
-        }
-    }
-    vec![s0, s1]
-}
-
 /// The escape point for a stub detour's Dijkstra seed (M18): the plain
 /// [`escape_point`] walk, clamped so the seed is not born inside (or just
 /// ahead of) an obstacle. The escape line (port → the escape point and, if
@@ -4810,57 +4689,70 @@ fn record_chain_crossings(
     record_border_crossings(&pts, &bands)
 }
 
-/// The S19a dispatch reroute for a failing straight stub span: route the
-/// node-port → rep-port span through [`track_route`] against a stub-local
-/// world — the shared routing world plus the chain frames' border bands —
-/// and return the route with its ends attached when it clears that world.
-/// M18's machinery's geometry, generalized to any failing straight stub
-/// (not only the sibling-pierce trigger): the chain bands are hard (the
-/// detour stays inside the frames and only crosses an outline
-/// perpendicular, at a recorded waypoint), peer occupancy carries over
-/// from the shared world as soft cost, and the escape seed is clamped so
-/// the Dijkstra starts in free space. `None` — no clear route — leaves
-/// the caller on the kept-unconditional straight stub (the bounded-ladder
-/// convention). The detour's own transversals of the chain frames are
-/// recorded as explicit waypoints ([`record_chain_crossings`]).
+/// Build the chain-local obstacle world a [track-routed](`track_route`)
+/// stub detour negotiates against (M18's construction, hoisted to one
+/// helper so every stub kind shares it): the siblings of the endpoint under
+/// its innermost frame are solid nodes — a stub must not cross a sibling of
+/// any kind (nodes and nested frames alike) — the innermost frame's and
+/// every intermediate chain frame's border bands are hard (the detour
+/// stays inside the frames and never rides an outline — it may leave a
+/// crossing only perpendicular), and peer occupancy carries over from the
+/// shared routing world (M16): parked peer segments are soft cost, so two
+/// edges' detours around the same sibling negotiate into distinct
+/// corridors instead of piling up.
 #[allow(clippy::too_many_arguments)]
-fn reroute_stub_span(
-    node_port: (f32, f32),
-    rep_port: (f32, f32),
-    side: Side,
-    node: (f32, f32, f32, f32),
-    inner_frame: (f32, f32, f32, f32),
+fn stub_world(
+    end: &StubEnd,
     chain_frames: &[(f32, f32, f32, f32)],
+    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
     frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
-    chain_ids: &[usize],
     world: &Obstacles,
-    axis: FlowAxis,
-    inward: bool,
-) -> Option<Vec<(f32, f32)>> {
-    // Siblings of the endpoint under its innermost frame: a detour must not
-    // cross a sibling of any kind (nodes and nested frames alike, solid).
-    let siblings: Vec<(f32, f32, f32, f32)> = chain_ids
-        .first()
-        .map(|&s| frame_children(s))
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|r| !rects_near(*r, node))
-        .collect();
+) -> Obstacles {
     let mut obs = Obstacles::empty();
+    let siblings: Vec<(f32, f32, f32, f32)> = frame_children(end.chain[0])
+        .into_iter()
+        .filter(|r| !rects_near(*r, end.node))
+        .collect();
     for &s in &siblings {
         obs.push_node(s);
     }
-    obs.borders = border_bands(inner_frame);
+    obs.borders = border_bands(frame_rect(end.chain[0]));
     for &f in chain_frames.iter().skip(1) {
         obs.borders.extend(border_bands(f));
     }
     obs.soft = world.soft.clone();
     obs.segments = world.segments.clone();
     obs.corridors = world.corridors.clone();
+    obs
+}
+
+/// The dispatch reroute for a failing straight stub span (M18's geometry,
+/// generalized at the dispatch — S19b absorbs [`stub_for`]'s former
+/// sibling-avoidance special case into this one path): route the
+/// node-port → rep-port span through [`track_route`] against a stub-local
+/// world and return the route with its ends attached when it clears that
+/// world. The chain bands are hard (the detour stays inside the frames and
+/// only crosses an outline perpendicular, at a recorded waypoint), peer
+/// occupancy carries over from the shared world as soft cost, and the
+/// escape seed is clamped so the Dijkstra starts in free space. `None` —
+/// no clear route — leaves the caller on the kept-unconditional straight
+/// stub (the bounded-ladder convention). The detour's own transversals of
+/// the chain frames are recorded as explicit waypoints
+/// ([`record_chain_crossings`]).
+fn reroute_stub_span(
+    end: &StubEnd,
+    rep_port: (f32, f32),
+    obs: &Obstacles,
+    chain_frames: &[(f32, f32, f32, f32)],
+    world: &Obstacles,
+    axis: FlowAxis,
+    inward: bool,
+) -> Option<Vec<(f32, f32)>> {
     // The seed lives just short of the first barrier on the port's escape
     // line, so the Dijkstra starts in free space even in a tight sibling
     // band (M18's clamped escape — the geometry carries over).
-    let a = clamped_escape(node_port, side, SIDE_ESCAPE, &obs, world);
+    let side = end.node_side;
+    let a = clamped_escape(end.port, side, SIDE_ESCAPE, obs, world);
     // The stub's fixed legs hang off the node port's escape on one side of
     // the routed span: bar the leg that would double back over the escape —
     // toward the node port when routing outward, outward into the escape
@@ -4877,19 +4769,19 @@ fn reroute_stub_span(
         }
     };
     let routed = if inward {
-        track_route_negotiated(rep_port, a, &obs, esc)
+        track_route_negotiated(rep_port, a, obs, esc)
     } else {
-        track_route_negotiated(a, rep_port, &obs, esc)
+        track_route_negotiated(a, rep_port, obs, esc)
     };
     if routed.is_empty() || !obs.clear(&routed) {
         return None;
     }
     let mut stub = if inward {
         let mut s = routed;
-        s.push(node_port);
+        s.push(end.port);
         s
     } else {
-        let mut s = vec![node_port];
+        let mut s = vec![end.port];
         s.extend(routed);
         s
     };
@@ -4931,15 +4823,65 @@ struct StubEnd<'a> {
     mismatched: bool,
 }
 
+/// The blockage kinds beyond the title a straight (or title-detoured)
+/// span suffers (S19b): a sibling node pierced (solid — the M11/M18 gate),
+/// a reserved port-corridor band the span rides parallel inside (hard —
+/// pocket right-of-way), or a chain-frame outline band grazed without
+/// touching its centerline at the bar (the designated-crossing
+/// convention). Deliberately narrower than [`Obstacles::clear`] for
+/// title-detoured ends — whose title-side band transversal is its own
+/// answer — so the detour is not displaced by the very blockage it was
+/// built to answer.
+fn blocked_beyond_title(
+    end: &StubEnd,
+    rep_port: (f32, f32),
+    world: &Obstacles,
+) -> bool {
+    // Node pierced (solid — the M11/M18 pierce gate, unforced ends
+    // included).
+    for &r in &world.nodes {
+        if segment_intersects_rect(end.port, rep_port, r) {
+            return true;
+        }
+    }
+    // Port-corridor band ridden parallel inside.
+    for &c in &world.corridors {
+        if !seg_clear_padded(end.port, rep_port, c) {
+            return true;
+        }
+    }
+    // A band grazed (parallel ride or mid-segment transversal without an
+    // end-on-centerline waypoint — the whole chain's bands, as the chain
+    // frames may carry intermediate crossed the S19a world carried).
+    for &b in &world.borders {
+        if !seg_clear_border(end.port, rep_port, b) {
+            return true;
+        }
+    }
+    // Node-blockage shared with routed segments: hard peer segments parked
+    // on the span (the refresh_rep_crosses fan keeps LANES distinct, but
+    // a heavy multi-fan's parallel runs can still collide).
+    for &s in &world.segments {
+        if !seg_clear_padded(end.port, rep_port, s) {
+            return true;
+        }
+    }
+    false
+}
+
 /// The within-frame stub for one endpoint: empty for a direct child of the
-/// LCA, [`mismatched_stub`] for a mismatched forced side (M14), the S19a
-/// dispatch reroute ([`reroute_stub_span`]) when the straight node-to-rep
-/// span fails the shared obstacle world (multi-frame chains; the chain
-/// frames' bands join the world for exactly that span), the
-/// sibling-avoidance stub ([`force_stub_around_siblings`], which the S19a
-/// reroute now fires ahead of for blocked multi-frame chains) when the
-/// straight stub would pierce a sibling, else the node-aligned
-/// [`build_stub`].
+/// LCA, [`mismatched_stub`] for a mismatched forced side (M14), else the
+/// node-aligned straight stub ([`build_stub`]) — clearance-checked at this
+/// one dispatch point (S19b: the former M18 sibling-avoidance special case
+/// (`force_stub_around_siblings`) is absorbed into the dispatch reroute
+/// [`reroute_stub_span`; retired): when the straight node-to-rep span
+/// fails the shared obstacle world it is rerouted through the track router
+/// against a stub-local world that carries the chain frames' bands — the
+/// shared world only has the LCA-level frames' ([`edge_world`]), so
+/// without the chain bands a rerouted leg could graze a nested frame
+/// outline unchecked — and the straight span remains the
+/// kept-unconditional fallback when no clear route exists (the
+/// bounded-ladder convention).
 #[allow(clippy::too_many_arguments)]
 fn stub_for(
     end: &StubEnd,
@@ -4957,92 +4899,65 @@ fn stub_for(
     if end.mismatched {
         return mismatched_stub(end, rep_port, axis, frame_rect, inward);
     }
-    // S19a: a straight stub span whose node-to-rep-port leg fails the
-    // shared obstacle world is rerouted at the dispatch through the track
-    // router against a stub-local world that carries the chain frames'
-    // bands — the shared world only has the LCA-level frames' ([`edge_world`]),
-    // so without the chain bands a rerouted leg could graze a nested frame
-    // outline unchecked (the straight stub's designated crossings are
-    // legal; a detoured leg's transversals are recorded, M18's convention).
-    // The straight stub remains the kept-unconditional fallback when no
-    // clear route exists (the bounded-ladder convention). The gate keeps
-    // single-frame chains out: their straight resets go through M18's
-    // `force_stub_around_siblings` below unchanged this session — a
-    // detour's escape lands inside this would-be obstacle world there
-    // (a sibling 24 px out on the escape normal), so routing against it
-    // here could flip that accepted fallback to a *different* accepted
-    // fallback and shift pinned single-frame geometry (the
-    // unit expectations) — output must stay byte-identical until S19b,
-    // which absorbs the special case and retires the gate with it.
+    // S19b: the absorption. The straight node-to-rep span's trigger fires
+    // when the span is blocked anything-wise — the sibling pierce (M11's
+    // narrow gate, unforced ends included: port separation may clamp a
+    // port cross to the side-span edge with a sibling straight beyond it)
+    // or, for the S19a multi-frame case, the whole-world clearance (the
+    // chain crossings make intermediate outlines real obstacles). A fired
+    // span is rerouted through the track router against the chain-local
+    // world ([`stub_world`] — M18's geometry, one construction for every
+    // stub kind); no clear route leaves the straight span standing as the
+    // kept-unconditional terminal (the bounded-ladder convention).
     let straight = [end.port, rep_port];
-    if !world.clear(&straight) && end.chain.len() > 1 {
-        let chain_frames: Vec<(f32, f32, f32, f32)> =
-            end.chain.iter().map(|&s| frame_rect(s)).collect();
-        let rerouted = reroute_stub_span(
+    let sibs: Vec<(f32, f32, f32, f32)> = frame_children(end.chain[0])
+        .into_iter()
+        .filter(|r| !rects_near(*r, end.node))
+        .collect();
+    let pierces = sibs
+        .iter()
+        .any(|&s| segment_intersects_rect(end.port, rep_port, s));
+    // A detoured end's jog already answers a title-blocked descent: the
+    // detour must not trip the whole-world check (its crossing band
+    // deliberately lacks a recorded end-on-centerline). Blockage for a
+    // detoured end is what the detour cannot answer: a sibling pierced, a
+    // port corridor ridden along, or an intermediate chain outline
+    // grazing (bars that are not the title's).
+    let blocked = pierces || blocked_beyond_title(end, rep_port, world);
+    let fired = pierces || !world.clear(&straight);
+    let _ = blocked;
+    if !fired {
+        return build_stub(
             end.port,
             rep_port,
-            end.node_side,
-            end.node,
-            frame_rect(end.chain[0]),
-            &chain_frames,
-            frame_children,
+            end.cross,
             end.chain,
-            world,
+            detours,
             axis,
+            frame_rect,
             inward,
         );
-        if let Some(r) = rerouted {
-            return r;
-        }
     }
-    if detours.is_empty() {
-        // M11: a forced side is honored literally; if the straight stub
-        // would pierce a sibling between the node and the frame border,
-        // route around it. Unforced ends get the same avoidance: port
-        // separation may clamp a port cross to the side-span edge with a
-        // sibling sitting straight beyond it (a node aligned below the span
-        // edge), and the straight descent would pierce that sibling — the
-        // track detour bends the stub inside the frame instead, keeping the
-        // node-aligned rep crossing.
-        //
-        // M18: the avoidance generalizes to multi-frame chains. The
-        // obstacle set grows to *every* chain frame's border bands (not
-        // just the innermost frame's), so a detour crossing a chain frame
-        // elsewhere stays a checked, designated crossing rather than
-        // grazing a nested outline unchecked; and the trigger stays narrow
-        // — the straight stub must actually be blocked (a single-frame
-        // stub can only pierce the innermost frame's siblings, so the gate
-        // there stays the sibling pierce itself; a multi-frame stub is
-        // additionally gated on clearing the whole world, keeping the
-        // prior geometry whenever the straight stub is legal).
-        let sibs: Vec<(f32, f32, f32, f32)> = frame_children(end.chain[0])
-            .into_iter()
-            .filter(|r| !rects_near(*r, end.node))
-            .collect();
-        let chain_frames: Vec<(f32, f32, f32, f32)> =
-            end.chain.iter().map(|&s| frame_rect(s)).collect();
-        return force_stub_around_siblings(
+    let chain_frames: Vec<(f32, f32, f32, f32)> =
+        end.chain.iter().map(|&s| frame_rect(s)).collect();
+    let stub_obs = stub_world(end, &chain_frames, frame_rect, frame_children, world);
+    match reroute_stub_span(end, rep_port, &stub_obs, &chain_frames, world, axis, inward) {
+        Some(r) => r,
+        // No clear detour: the bounded-ladder fallback is the straight
+        // stub *as its kind builds it* — title-detoured ends keep the
+        // detour geometry (the detour is the M5-followup answer to a
+        // blocked descent); untitled ends are the bare node-aligned span.
+        None => build_stub(
             end.port,
             rep_port,
-            end.node_side,
-            &sibs,
-            frame_rect(end.chain[0]),
-            world,
-            inward,
-            &chain_frames,
+            end.cross,
+            end.chain,
+            detours,
             axis,
-        );
+            frame_rect,
+            inward,
+        ),
     }
-    build_stub(
-        end.port,
-        rep_port,
-        end.cross,
-        end.chain,
-        detours,
-        axis,
-        frame_rect,
-        inward,
-    )
 }
 
 /// The bend geometry of a mismatched stub (M14): the cross-axis direction

@@ -75,9 +75,10 @@ fn blank_lines(i: &mut &str) -> ModalResult<()> {
 fn keyword(i: &mut &str, mut kw: &'static str) -> ModalResult<()> {
     kw.parse_next(i)?;
     if let Some(c) = i.chars().next()
-        && (c.is_alphanumeric() || c == '_' || c == '-') {
-            return Err(ErrMode::Backtrack(ContextError::new()));
-        }
+        && (c.is_alphanumeric() || c == '_' || c == '-')
+    {
+        return Err(ErrMode::Backtrack(ContextError::new()));
+    }
     Ok(())
 }
 

@@ -128,7 +128,11 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
 }
 
 impl Ctx {
-    fn process_statement(&mut self, stmt: &RawStatement, group: Option<usize>) -> Result<(), Error> {
+    fn process_statement(
+        &mut self,
+        stmt: &RawStatement,
+        group: Option<usize>,
+    ) -> Result<(), Error> {
         match stmt {
             RawStatement::NodeList(nl) => self.process_nodelist(nl, group),
             RawStatement::Group(sg) => self.process_group(sg, group),
@@ -254,9 +258,15 @@ impl Ctx {
             }
             for attr in &occ.attrs {
                 match attr.name.as_str() {
-                    "color" => merge_attr(&mut info.color, &attr.value, attr.offset, &occ.id, "color")?,
-                    "fill" => merge_attr(&mut info.fill, &attr.value, attr.offset, &occ.id, "fill")?,
-                    "text" => merge_attr(&mut info.text, &attr.value, attr.offset, &occ.id, "text")?,
+                    "color" => {
+                        merge_attr(&mut info.color, &attr.value, attr.offset, &occ.id, "color")?
+                    }
+                    "fill" => {
+                        merge_attr(&mut info.fill, &attr.value, attr.offset, &occ.id, "fill")?
+                    }
+                    "text" => {
+                        merge_attr(&mut info.text, &attr.value, attr.offset, &occ.id, "text")?
+                    }
                     _ => unreachable!("validate_attrs ensures only known node attributes"),
                 }
             }
@@ -281,10 +291,7 @@ impl Ctx {
                     if info.placed_groups.len() >= 2 {
                         return Err(Error::Resolve {
                             offset: occ.offset,
-                            message: format!(
-                                "node `{}` appears in more than one group",
-                                occ.id
-                            ),
+                            message: format!("node `{}` appears in more than one group", occ.id),
                         });
                     }
                     info.membership = Some(g);
@@ -339,7 +346,10 @@ fn merge_attr(
         Some(ex) if ex == value => Ok(()),
         Some(_) => Err(Error::Resolve {
             offset,
-            message: format!("node `{}` redeclared with a conflicting value for `{name}`", id),
+            message: format!(
+                "node `{}` redeclared with a conflicting value for `{name}`",
+                id
+            ),
         }),
     }
 }
@@ -352,9 +362,7 @@ fn merge_attr(
 fn parse_line_style(value: &str, offset: usize) -> Result<Style, Error> {
     Style::from_ident(value).ok_or_else(|| Error::Resolve {
         offset,
-        message: format!(
-            "group `line` must be one of solid, dotted, dashed, thick; got `{value}`"
-        ),
+        message: format!("group `line` must be one of solid, dotted, dashed, thick; got `{value}`"),
     })
 }
 
@@ -366,9 +374,7 @@ fn parse_line_style(value: &str, offset: usize) -> Result<Style, Error> {
 fn parse_edge_side(name: &str, value: &str, offset: usize) -> Result<EdgeSide, Error> {
     EdgeSide::from_ident(value).ok_or_else(|| Error::Resolve {
         offset,
-        message: format!(
-            "edge `{name}` must be one of top, bottom, left, right; got `{value}`"
-        ),
+        message: format!("edge `{name}` must be one of top, bottom, left, right; got `{value}`"),
     })
 }
 
@@ -431,7 +437,10 @@ mod tests {
 
     fn node<'a>(d: &'a Diagram, id: &str) -> &'a Node {
         d.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| {
-            panic!("no node `{id}`; have {:?}", d.nodes.iter().map(|n| &n.id).collect::<Vec<_>>())
+            panic!(
+                "no node `{id}`; have {:?}",
+                d.nodes.iter().map(|n| &n.id).collect::<Vec<_>>()
+            )
         })
     }
 
@@ -474,12 +483,10 @@ mod tests {
 
     #[test]
     fn edge_styles_labels_and_colors() {
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              a -- dotted \"sync\" color=\"#888\" --> b\n\
              c -- thick --> d\n\
-             e -- \"only a label\" --> f\n",
-        );
+             e -- \"only a label\" --> f\n");
         assert_eq!(d.edges[0].style, Style::Dotted);
         assert_eq!(d.edges[0].label.as_deref(), Some("sync"));
         assert_eq!(d.edges[0].color.as_deref(), Some("#888"));
@@ -499,26 +506,22 @@ mod tests {
 
     #[test]
     fn move_top_level_node_into_group() {
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              a \"A\"\n\
              group \"S\"\n\
              a\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(node(&d, "a").group, Some(0));
         assert_eq!(d.groups[0].members, ["a"]);
     }
 
     #[test]
     fn cross_boundary_edge_does_not_relocate_node() {
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              group \"S\"\n\
              a\n\
              end\n\
-             b --> a\n",
-        );
+             b --> a\n");
         assert_eq!(node(&d, "a").group, Some(0));
         assert_eq!(node(&d, "b").group, None);
         assert_eq!(d.edges.len(), 1);
@@ -531,14 +534,12 @@ mod tests {
         // The `sides.dgmr` shape: labels declared at top level, structure
         // given by an edge chain inside the group body. The chain's
         // endpoints become members of the group they're declared in.
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              bus \"Event Bus\"\n\
              queue \"Queue\"\n\
              group left-right \"Messaging\"\n\
              bus -- from=\"right\" to=\"left\" --> queue\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(node(&d, "bus").group, Some(0));
         assert_eq!(node(&d, "queue").group, Some(0));
         assert_eq!(d.groups[0].members, ["bus", "queue"]);
@@ -548,12 +549,10 @@ mod tests {
 
     #[test]
     fn edge_chain_nodes_first_seen_in_a_group_are_members() {
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              group left-right \"S\"\n\
              a --> b\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(d.groups[0].members, ["a", "b"]);
     }
 
@@ -562,14 +561,12 @@ mod tests {
         // Membership is decided by group bodies alone: a later top-level
         // declaration only merges label/shape/attributes, so "structure
         // first, labels later" works as well as the reverse ordering.
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              group \"Messaging\"\n\
              bus --> queue\n\
              end\n\
              bus \"Event Bus\"\n\
-             queue \"Queue\"\n",
-        );
+             queue \"Queue\"\n");
         assert_eq!(node(&d, "bus").group, Some(0));
         assert_eq!(node(&d, "queue").group, Some(0));
         assert_eq!(d.groups[0].members, ["bus", "queue"]);
@@ -583,15 +580,13 @@ mod tests {
         // which already belongs to A. The edge is cross-boundary; `a` keeps
         // its group (an edge endpoint never relocates an already-placed
         // node) and only `b` becomes a member of B.
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              group \"A\"\n\
              a\n\
              end\n\
              group \"B\"\n\
              b --> a\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(node(&d, "a").group, Some(0));
         assert_eq!(node(&d, "b").group, Some(1));
         assert_eq!(d.groups[0].members, ["a"]);
@@ -604,16 +599,14 @@ mod tests {
         // The within-frame cross-boundary shape: `x --> a` written in Outer's
         // body targets `a` inside the nested Inner group; `a` must stay in
         // Inner and only `x` joins Outer.
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              group \"Outer\"\n\
              x\n\
              group \"Inner\"\n\
              a\n\
              end\n\
              x --> a\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(node(&d, "x").group, Some(0));
         assert_eq!(node(&d, "a").group, Some(1));
         assert_eq!(d.groups[0].members, ["x"]);
@@ -622,14 +615,12 @@ mod tests {
 
     #[test]
     fn nested_groups_record_containment() {
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              group \"Outer\"\n\
              group \"Inner\"\n\
              a\n\
              end\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(d.groups.len(), 2);
         assert_eq!(node(&d, "a").group, Some(1)); // innermost
         // Containment tree: Outer contains Inner; both are top-level siblings'
@@ -646,24 +637,26 @@ mod tests {
 
     #[test]
     fn node_in_two_groups_is_an_error() {
-        let (e, line) = err(
-            "diagram top-down\n\
+        let (e, line) = err("diagram top-down\n\
              group \"A\"\n\
              a\n\
              end\n\
              group \"B\"\n\
              a\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(line, 6);
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("appears in more than one group")));
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. } if message.contains("appears in more than one group"))
+        );
     }
 
     #[test]
     fn conflicting_label_is_an_error() {
         let (e, line) = err("diagram top-down\na \"X\"\na \"Y\"\n");
         assert_eq!(line, 3);
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("conflicting label")));
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. } if message.contains("conflicting label"))
+        );
     }
 
     #[test]
@@ -676,39 +669,41 @@ mod tests {
     fn unknown_node_attribute_is_an_error() {
         let (e, line) = err("diagram top-down\na bogus=\"x\"\n");
         assert_eq!(line, 2);
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("unknown node attribute `bogus`")));
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. } if message.contains("unknown node attribute `bogus`"))
+        );
     }
 
     #[test]
     fn unknown_edge_attribute_is_an_error() {
         let (e, _line) = err("diagram top-down\na -- bogus=\"x\" --> b\n");
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("unknown edge attribute `bogus`")));
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. } if message.contains("unknown edge attribute `bogus`"))
+        );
     }
 
     #[test]
     fn duplicate_attribute_is_an_error() {
         let (e, _line) = err("diagram top-down\na color=\"x\" color=\"y\"\n");
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("duplicate attribute `color`")));
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. } if message.contains("duplicate attribute `color`"))
+        );
     }
 
     #[test]
     fn group_direction_is_accepted() {
         // M4: per-group direction is now honored, not rejected.
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              group left-right \"S\"\n\
              a\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(d.groups.len(), 1);
         assert_eq!(d.groups[0].direction, Some(Direction::LeftRight));
         // A group with no direction inherits at layout time (stored as None).
-        let d2 = ok(
-            "diagram top-down\n\
+        let d2 = ok("diagram top-down\n\
              group \"T\"\n\
              b\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(d2.groups[0].direction, None);
     }
 
@@ -716,39 +711,45 @@ mod tests {
     fn missing_diagram_header_is_a_parse_error() {
         let (e, line) = err("flowchart top-down\n");
         assert_eq!(line, 1);
-        assert!(matches!(e, Error::Parse { ref message, .. } if message.contains("diagram header")));
+        assert!(
+            matches!(e, Error::Parse { ref message, .. } if message.contains("diagram header"))
+        );
     }
 
     #[test]
     fn bad_direction_is_a_parse_error() {
         let (e, line) = err("diagram sideways\n");
         assert_eq!(line, 1);
-        assert!(matches!(e, Error::Parse { ref message, .. } if message.contains("expected direction")));
+        assert!(
+            matches!(e, Error::Parse { ref message, .. } if message.contains("expected direction"))
+        );
     }
 
     #[test]
     fn unterminated_string_is_a_parse_error() {
         let (e, _line) = err("diagram top-down\na \"oops\n");
-        assert!(matches!(e, Error::Parse { ref message, .. } if message.contains("unterminated string literal")));
+        assert!(
+            matches!(e, Error::Parse { ref message, .. } if message.contains("unterminated string literal"))
+        );
     }
 
     #[test]
     fn unexpected_end_is_a_parse_error() {
         let (e, line) = err("diagram top-down\nend\n");
         assert_eq!(line, 2);
-        assert!(matches!(e, Error::Parse { ref message, .. } if message.contains("unexpected `end`")));
+        assert!(
+            matches!(e, Error::Parse { ref message, .. } if message.contains("unexpected `end`"))
+        );
     }
 
     // ---- M7.5: group color/fill/line/text and text-color attributes ----
 
     #[test]
     fn group_style_attributes_are_parsed() {
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              group \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
              a\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(d.groups.len(), 1);
         let sg = &d.groups[0];
         assert_eq!(sg.color.as_deref(), Some("#888"));
@@ -773,40 +774,36 @@ mod tests {
 
     #[test]
     fn group_invalid_line_style_is_an_error() {
-        let (e, line) = err(
-            "diagram top-down\n\
+        let (e, line) = err("diagram top-down\n\
              group \"S\" line=\"wavy\"\n\
              a\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(line, 2);
-        assert!(
-            matches!(e, Error::Resolve { ref message, .. }
-                if message.contains("group `line` must be one of") && message.contains("wavy"))
-        );
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("group `line` must be one of") && message.contains("wavy")));
     }
 
     #[test]
     fn group_unknown_attribute_is_an_error() {
-        let (e, line) = err(
-            "diagram top-down\n\
+        let (e, line) = err("diagram top-down\n\
              group \"S\" bogus=\"x\"\n\
              a\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(line, 2);
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("unknown group attribute `bogus`")));
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. } if message.contains("unknown group attribute `bogus`"))
+        );
     }
 
     #[test]
     fn group_duplicate_attribute_is_an_error() {
-        let (e, _line) = err(
-            "diagram top-down\n\
+        let (e, _line) = err("diagram top-down\n\
              group \"S\" color=\"x\" color=\"y\"\n\
              a\n\
-             end\n",
+             end\n");
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. } if message.contains("duplicate attribute `color`"))
         );
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("duplicate attribute `color`")));
     }
 
     #[test]
@@ -826,7 +823,9 @@ mod tests {
     fn node_text_conflict_on_redeclaration_is_an_error() {
         let (e, line) = err("diagram top-down\na text=\"#005\"\na text=\"#006\"\n");
         assert_eq!(line, 3);
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("conflicting value for `text`")));
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. } if message.contains("conflicting value for `text`"))
+        );
     }
 
     #[test]
@@ -839,13 +838,11 @@ mod tests {
     fn group_style_attrs_do_not_perturb_structure() {
         // Style attributes are render-only; they must not change the resolved
         // structural fields (direction, members, containment).
-        let d = ok(
-            "diagram top-down\n\
+        let d = ok("diagram top-down\n\
              group left-right \"S\" color=\"#888\" fill=\"#eef\" line=\"dashed\" text=\"#005\"\n\
              a\n\
              b\n\
-             end\n",
-        );
+             end\n");
         assert_eq!(d.groups[0].direction, Some(Direction::LeftRight));
         assert_eq!(d.groups[0].members, ["a", "b"]);
     }
@@ -884,30 +881,26 @@ mod tests {
     fn edge_side_invalid_value_is_an_error() {
         let (e, line) = err("diagram top-down\na -- from=\"rught\" --> b\n");
         assert_eq!(line, 2);
-        assert!(
-            matches!(e, Error::Resolve { ref message, .. }
-                if message.contains("edge `from` must be one of") && message.contains("rught"))
-        );
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("edge `from` must be one of") && message.contains("rught")));
         let (e, line) = err("diagram top-down\na -- to=\"sideways\" --> b\n");
         assert_eq!(line, 2);
-        assert!(
-            matches!(e, Error::Resolve { ref message, .. }
-                if message.contains("edge `to` must be one of") && message.contains("sideways"))
-        );
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("edge `to` must be one of") && message.contains("sideways")));
     }
 
     #[test]
     fn edge_side_duplicate_attribute_is_an_error() {
         let (e, _line) = err("diagram top-down\na -- from=\"left\" from=\"right\" --> b\n");
-        assert!(matches!(e, Error::Resolve { ref message, .. } if message.contains("duplicate attribute `from`")));
+        assert!(
+            matches!(e, Error::Resolve { ref message, .. } if message.contains("duplicate attribute `from`"))
+        );
     }
 
     #[test]
     fn edge_side_attributes_combine_with_other_edge_attrs() {
-        let d = ok(
-            "diagram top-down\n\
-             a -- thick \"sync\" color=\"#888\" from=\"left\" to=\"bottom\" --> b\n",
-        );
+        let d = ok("diagram top-down\n\
+             a -- thick \"sync\" color=\"#888\" from=\"left\" to=\"bottom\" --> b\n");
         let e = &d.edges[0];
         assert_eq!(e.style, Style::Thick);
         assert_eq!(e.label.as_deref(), Some("sync"));

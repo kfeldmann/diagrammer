@@ -4,7 +4,7 @@ Tracking doc for diagrammer. The grammar is specified in
 [`grammar.md`](grammar.md); this file records what's done, what's next, and
 how the remaining work depends on itself.
 
-**Status legend:** ✅ done · ▶ next · ⬜ planned
+**Status legend:** ✅done · ▶ next · ☐ planned
 
 **Current position:** M0–M7.5, M9–M15, M16 and M17 are complete (M12 was
 absorbed by M11.5), plus the post-M13 hardening pass below and the post-M17
@@ -1261,8 +1261,23 @@ on top of node_b's own `--> polaris` / `--> cos_logs` first legs. Root cause
 (established by instrumenting `route_edge` with temporary probes, since
 removed; the committed SVG reproduces the defect byte-identically):
 
+Here's a minimal diagram that demonstrates the problem:
+
+```
+diagram left-right
+group
+group
+A
+B
+end
+end
+C
+A-->C
+B-->C
+```
+
 - Both edges' from-chain is **two frames deep** (`[Worker Node Pool, TKE
-  Cluster]`), and their endpoint siblings sit side by side with node_b
+  Cluster]`), and their endpoint siblings sit side by side with `node_b`
   spanning the *entire* useful range of node_a's right side — no right-side
   port choice avoids it; only a vertical jog can.
 - [`stub_for`] gates the obstacle-aware, Dijkstra-routed sibling-avoidance
@@ -1327,7 +1342,7 @@ machinery negotiates routes that are capable of clearing.
 **Blocked by:** nothing (M17's escape bars are a constraint the fix must
 respect, not a blocker). **Blocks:** M19.
 
-### ⬜ M19 — Stub routing unified into the one-regime dispatch (option 2)
+### ☐ M19 — Stub routing unified into the one-regime dispatch (option 2)
 
 The end-state refactor M18 deliberately defers: complete the M11.5 unifying
 move — "one obstacle world, one routing regime" — over the *stub* spans,
@@ -1374,11 +1389,3 @@ does not touch.
 **Blocked by:** M18 (proves the geometry it generalizes). **Blocks:**
 nothing; M8 remains the last open milestone.
 
-### Dependency graph
-
-```
-M0 ── M1 ── M2 ── M3 ── M4 ── M5 ── M9 ── M10 ── M11 ── M11.5 ── M13 ── M14 ── M15 ── M16 ── M17 ── M18 ── M19 ── M8
-              │   │      └── M6 (interleaves)        │
-              │   └──────── M8 (deferred) ───────────┘
-              └── M5.5 ── M7 ─┘
-```

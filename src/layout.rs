@@ -947,6 +947,7 @@ fn assemble(
         if ctx.is_direct {
             continue;
         }
+
         if !ctx.from_mismatched
             && let Some(&sf) = ctx.from_chain.last()
         {
@@ -1455,7 +1456,11 @@ fn route_edge(
 /// blocked (a peer node in the corridor, a frame outline, an already-routed
 /// edge), rerouted through the track graph; the plain Z remains the last
 /// resort. The flat waypoints (dummy centers, fanned ports) are preserved.
-fn direct_chain_route(raw: &[(f32, f32)], axis: FlowAxis, obs: &Obstacles) -> Vec<(f32, f32)> {
+fn direct_chain_route(
+    raw: &[(f32, f32)],
+    axis: FlowAxis,
+    obs: &Obstacles,
+) -> Vec<(f32, f32)> {
     if raw.len() < 2 {
         return raw.to_vec();
     }
@@ -1601,6 +1606,18 @@ fn refresh_rep_crosses(
     geom: &Geometry,
     rep_fan: Option<&std::collections::HashMap<(usize, bool), f32>>,
 ) {
+    // M18: an around-target edge whose target port slid (the sealed-port
+    // fallback) re-decides its gate on the moved port — the pierce test's
+    // geometry is the port-to-crossing straight line, which moved with the
+    // port; when the slid port is on a *different* side than the frame
+    // crossing's side the straight stub is not the shape it would draw at
+    // all (the stub builder reads `port` and `rep_cross` directly), so the
+    // around-route (which reads the node geometry, not the port) is
+    // pointless. Demote it: the fallback path draws the mismatched bend
+    // instead. (The initial gate stays decided in [`edge_context`].)
+    if v.around_target && v.to_side != v.to_frame_side {
+        v.around_target = false;
+    }
     #[allow(clippy::too_many_arguments)]
     fn resolve_end(
         geom: &Geometry,
@@ -2838,6 +2855,7 @@ const MAX_RIPUP_PASSES: usize = 8;
 /// costs [`SOFT_RIDE_COST`] but routes through it. Reserved port corridors
 /// behave like hard bands: parallel riding inside one is barred (a port
 /// must stay reachable), perpendicular crossing is legal.
+#[derive(Clone)]
 struct Obstacles {
     /// Node interiors (absolute rects). A route keeps [`ROUTE_PAD`] clear
     /// of them — except that it may touch one at a designated port: a
@@ -3544,6 +3562,8 @@ fn separate_ports(ends: &[PortEnd]) -> std::collections::HashMap<(usize, bool), 
     }
     let mut out: HashMap<(usize, bool), f32> = HashMap::new();
     for ((_node_idx, side), idxs) in &groups {
+        // M18: only ends that would actually ride matter — a fan entry for
+        // ends that don't collide pins them apart for nothing.
         if idxs.len() < 2 {
             continue;
         }
@@ -3563,11 +3583,11 @@ fn separate_ports(ends: &[PortEnd]) -> std::collections::HashMap<(usize, bool), 
                 .other_cross
                 .total_cmp(&ends[b].other_cross)
                 .then_with(|| {
-                    (ends[a].from_id.as_str(), ends[a].to_id.as_str(), ends[a].is_from)
+                    (ends[a].from_id.as_str(), ends[a].to_id.as_str(), ends[a].is_from as u8)
                         .cmp(&(
                             ends[b].from_id.as_str(),
                             ends[b].to_id.as_str(),
-                            ends[b].is_from,
+                            ends[b].is_from as u8,
                         ))
                 })
         });
@@ -3699,7 +3719,7 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
     // the intersection of its members' spans, shrunk away from the union
     // of the band obstacles below.
     // Sweep the edges per side by gap-span and merge overlapping spans into
-    // one group (deterministic: sorted by (side, lo, hi), then index).
+    // one group (deterministic: sorted by (side, lo, hi), then endpoint ids).
     // M17 — union by interval merge: a group's membership test runs against
     // the running union (min lo, max hi) of its members' spans, not the head
     // edge's span, so chained overlaps (A[0,10], B[5,15], C[12,20]) land in
@@ -3890,8 +3910,15 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
                 out.insert(edges[i].edge, assigned[k]);
             }
         } else {
+            // Single-member group (or a band pinched shut by obstacles): the
+            // lone edge takes its own gap's midpoint — the pre-M17 default
+            // for a single-edge group, restored here so a multi-group sweep
+            // leaves every member inside its own gap band (a group-band
+            // midpoint can sit outside a *narrow* member's own gap when the
+            // union merge grouped it with wide neighbors).
             for &i in &order {
-                out.insert(edges[i].edge, gap_lo + span / 2.0);
+                let (lo, hi) = gap_span(edges, i);
+                out.insert(edges[i].edge, lo + (hi - lo).max(0.0) / 2.0);
             }
         }
     }
@@ -3922,7 +3949,20 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
 /// reversed (non-crossing) order keeps the runs a full fan width apart.
 fn lane_order(edges: &[LaneEdge], idxs: &[usize]) -> Vec<usize> {
     let mut base: Vec<usize> = idxs.to_vec();
-    base.sort_by(|&a, &b| edges[a].from_cross.total_cmp(&edges[b].from_cross));
+    base.sort_by(|&a, &b| {
+        edges[a]
+            .from_cross
+            .total_cmp(&edges[b].from_cross)
+            // M18: break exact source-cross ties on the endpoint ids (the
+            // M17 content key) — a fan's two edges can sit at the same
+            // separated source cross, and a declaration-order tie would
+            // permute the lane sweep (and the lanes with it) under the
+            // permutation-invariance phase-1 test.
+            .then_with(|| {
+                (edges[a].from_id.as_str(), edges[a].to_id.as_str())
+                    .cmp(&(edges[b].from_id.as_str(), edges[b].to_id.as_str()))
+            })
+    });
     let n = base.len();
     // May `base[a]`'s lane sit before `base[b]`'s without a crossing?
     let legal = |a: usize, b: usize| -> bool {
@@ -4433,6 +4473,7 @@ fn segment_rect(
 /// frame port fixes the common single-frame case. Returns the straight
 /// stub unchanged when it is already clear or no around-route exists (the
 /// bounded-ladder convention: the forced port is kept either way).
+#[allow(clippy::too_many_arguments)]
 fn force_stub_around_siblings(
     node_port: (f32, f32),
     rep_port: (f32, f32),
@@ -4441,6 +4482,14 @@ fn force_stub_around_siblings(
     frame: (f32, f32, f32, f32),
     world: &Obstacles,
     inward: bool,
+    // M18: the chain's intermediate frame crossings — the straight stub's
+    // designated frame crossings, in the stub's order (rep crossing first,
+    // the inner frames' crossings after). A detour that stays clear of the
+    // sibling may cross a chain frame elsewhere; the crossings are recorded
+    // per leg, so the generalized detour keeps the frame-crossing
+    // convention the straight stub already satisfied.
+    chain_frames: &[(f32, f32, f32, f32)],
+    axis: FlowAxis,
 ) -> Vec<(f32, f32)> {
     let (s0, s1) = if inward { (rep_port, node_port) } else { (node_port, rep_port) };
     if !siblings
@@ -4449,23 +4498,50 @@ fn force_stub_around_siblings(
     {
         return vec![s0, s1];
     }
+    // M18: the trigger stays narrow — a straight stub that clears the
+    // whole obstacle world keeps the prior geometry. For a single-frame
+    // chain the routing world carries only the rep frame's bands, and the
+    // only candidate blockers in the sibling band are the siblings
+    // themselves (the pierce above is the whole story). For a multi-frame
+    // chain the intermediate crossings make the straight stub
+    // clearance-checked across the chain, so a stub blocked by anything —
+    // a node the descent pierces, a frame outline it grazes — is rerouted
+    // here, and the record of the chain crossings keeps the detour's own
+    // frame transversals designated.
+    if chain_frames.len() > 1 && world.clear(&[s0, s1]) {
+        return vec![s0, s1];
+    }
     // The siblings are the obstacle world for this stub's detour (node
     // rects and nested frames alike, solid — a stub must not cross a
-    // sibling of any kind). The chain frame's border bands are obstacles
-    // too: the detour stays inside the frame and never rides its outline
-    // (absorbed M12) — it may leave the crossing only perpendicular. Peer
-    // occupancy carries over from the routing world (M16): parked peer
-    // segments are soft cost, so two edges' detours around the same
-    // sibling negotiate into distinct corridors instead of piling up.
+    // sibling of any kind). The chain frames' border bands (M18: every
+    // frame's, not just the innermost frame's) are obstacles too: the
+    // detour stays inside the frames and never rides an outline (absorbed
+    // M12) — it may leave a crossing only perpendicular. Peer occupancy
+    // carries over from the routing world (M16): parked peer segments are
+    // soft cost, so two edges' detours around the same sibling negotiate
+    // into distinct corridors instead of piling up.
     let mut obs = Obstacles::empty();
     for &s in siblings {
         obs.push_node(s);
     }
     obs.borders = border_bands(frame);
+    for &f in chain_frames.iter().skip(1) {
+        obs.borders.extend(border_bands(f));
+    }
     obs.soft = world.soft.clone();
     obs.segments = world.segments.clone();
     obs.corridors = world.corridors.clone();
-    let a = escape_point(node_port, side, SIDE_ESCAPE);
+    // M18: the escape may land inside the obstacle world when the sibling
+    // band is tight (a side-by-side sibling 24 px out on the escape side's
+    // normal) — a start point born inside an obstacle can only be
+    // clearance-failed everywhere, so no route would ever come out of the
+    // Dijkstra. Clamp the escape to the closest point the obstacle-clear
+    // neighborhood of the escape line reaches: walk the escape line from
+    // the port outward and stop just short of the first obstacle the
+    // escape segment would pierce. The tracks seeded from the siblings'
+    // own edges (± [`TRACK_OFF`]) then provide the jog rows above/below
+    // (or beside) the blocking sibling.
+    let a = clamped_escape(node_port, side, SIDE_ESCAPE, &obs, world);
     // The stub's fixed legs hang off the node port's escape on one side of
     // the routed span (the rep crossing on the other end is a plain corner
     // into the next piece): bar the leg that would double back over the
@@ -4482,22 +4558,123 @@ fn force_stub_around_siblings(
             end: None,
         }
     };
-    let tr = if inward {
+    let routed = if inward {
         track_route(rep_port, a, &obs, esc)
     } else {
         track_route(a, rep_port, &obs, esc)
     };
-    if !tr.is_empty() && obs.clear(&tr) {
-        if inward {
-            let mut stub = tr;
-            stub.push(node_port);
+    if !routed.is_empty() && obs.clear(&routed) {
+        // Attach the ends and record the chain frames' crossings the routed
+        // legs land on (M18): every group crossing on the page stays an
+        // explicit waypoint, like the straight stub's `line_rect_exit`
+        // clipping — a leg that touches a band's centerline mid-segment
+        // would otherwise be barred by the clearance check as a
+        // non-designated transversal.
+        let mut stub = if inward {
+            let mut s = routed;
+            s.push(node_port);
+            s
+        } else {
+            let mut s = vec![node_port];
+            s.extend(routed);
+            s
+        };
+        stub = record_chain_crossings(stub, chain_frames, axis);
+        if obs.clear(&stub) {
             return stub;
         }
-        let mut stub = vec![node_port];
-        stub.extend(tr);
-        return stub;
     }
     vec![s0, s1]
+}
+
+/// The escape point for a stub detour's Dijkstra seed (M18): the plain
+/// [`escape_point`] walk, clamped so the seed is not born inside an
+/// obstacle. The escape line (port → `escape_point(port, side, d)`) is
+/// cut at the last clear position before it first pierces an obstacle
+/// (inflated by [`ROUTE_PAD`]), and the seed sits there — so the track
+/// graph's start is in free space and the tracks seeded from the blocking
+/// obstacle's own edges provide the jog around it. When even the port
+/// itself is enclosed (the escape pierces an obstacle immediately), the
+/// seed falls back to the plain escape point: the Dijkstra will fail, and
+/// the caller keeps the straight stub (the bounded-ladder convention).
+fn clamped_escape(
+    port: (f32, f32),
+    side: Side,
+    d: f32,
+    obs: &Obstacles,
+    world: &Obstacles,
+) -> (f32, f32) {
+    let target = escape_point(port, side, d);
+    // Candidate cut positions: each obstacle's inflated boundary crossed by
+    // the escape line (a small linear walk in the escape direction).
+    let (dx, dy) = match side {
+        Side::Top => (0.0, -1.0),
+        Side::Bottom => (0.0, 1.0),
+        Side::Left => (-1.0, 0.0),
+        Side::Right => (1.0, 0.0),
+    };
+    let mut best: Option<(f32, f32)> = None;
+    let rects = obs
+        .nodes
+        .iter()
+        .chain(world.nodes.iter())
+        .copied()
+        .collect::<Vec<_>>();
+    for r in rects {
+        let (rx, ry, rw, rh) = inflate(r, ROUTE_PAD);
+        // Where does the ray port → port + t·(dx, dy) enter this rect?
+        // Axis-aligned ray: entry is on one of the rect's faces.
+        let t_enter = match side {
+            Side::Top => if port.1 >= ry + rh { (port.1 - (ry + rh)) / -dy } else { f32::INFINITY },
+            Side::Bottom => if port.1 <= ry { (ry - port.1) / dy } else { f32::INFINITY },
+            Side::Left => if port.0 >= rx + rw { (port.0 - (rx + rw)) / -dx } else { f32::INFINITY },
+            Side::Right => if port.0 <= rx { (rx - port.0) / dx } else { f32::INFINITY },
+        };
+        if t_enter.is_finite() && t_enter > 1e-3 {
+            let px = port.0 + dx * t_enter;
+            let py = port.1 + dy * t_enter;
+            // The entry point must lie on the rect (within its other span).
+            let on = match side {
+                Side::Top | Side::Bottom => px >= rx - 1e-2 && px <= rx + rw + 1e-2,
+                Side::Left | Side::Right => py >= ry - 1e-2 && py <= ry + rh + 1e-2,
+            };
+            if on && best.map(|(bx, _)| t_enter < (bx - port.0).abs().max((py - port.1).abs())).unwrap_or(true) {
+                best = Some((px, py));
+            }
+        }
+    }
+    // Just short of the first entry (with a hair of clearance), or the
+    // plain escape when nothing is pierced.
+    match best {
+        Some((bx, by)) => (bx - dx * 1.0, by - dy * 1.0),
+        None => target,
+    }
+}
+
+/// Record the chain frames' border crossings along a stub polyline (M18):
+/// one waypoint wherever a leg crosses a chain frame's outline (the bands'
+/// centerlines) transversally mid-segment. The straight stub builder
+/// records its crossings via `line_rect_exit` clipping; the generalized
+/// (track-routed) sibling-avoidance detour crosses its chain frames
+/// elsewhere, and those crossings must be explicit waypoints for the
+/// same clearance convention. The crossing band of each frame is resolved
+/// per leg (the same `band_crossing` test the routing ladder's
+/// re-recording applies), so a leg that merely touches a band's boundary
+/// without transversing it stays unmarked.
+fn record_chain_crossings(
+    pts: Vec<(f32, f32)>,
+    chain_frames: &[(f32, f32, f32, f32)],
+    axis: FlowAxis,
+) -> Vec<(f32, f32)> {
+    let _ = axis;
+    let mut bands: Vec<(f32, f32, f32, f32)> = Vec::new();
+    for &f in chain_frames {
+        bands.extend(border_bands(f));
+    }
+    if bands.is_empty() || pts.len() < 2 {
+        return pts;
+    }
+    record_border_crossings(&pts, &bands)
 }
 
 /// One endpoint's stub geometry for [`cross_boundary_path`] (M14).
@@ -4528,9 +4705,10 @@ struct StubEnd<'a> {
 
 /// The within-frame stub for one endpoint: empty for a direct child of the
 /// LCA, [`mismatched_stub`] for a mismatched forced side (M14), the
-/// sibling-avoidance stub ([`force_stub_around_siblings`]) for a
-/// single-frame end whose straight stub would pierce a sibling, else the
-/// node-aligned [`build_stub`].
+/// sibling-avoidance stub ([`force_stub_around_siblings`]) when the straight
+/// stub would pierce a sibling (single-frame chains always; multi-frame
+/// chains — M18 — when the straight stub is blocked against the chain
+/// frames), else the node-aligned [`build_stub`].
 #[allow(clippy::too_many_arguments)]
 fn stub_for(
     end: &StubEnd,
@@ -4548,19 +4726,32 @@ fn stub_for(
     if end.mismatched {
         return mismatched_stub(end, rep_port, axis, frame_rect, inward);
     }
-    if end.chain.len() == 1 && detours.is_empty() {
+    if detours.is_empty() {
         // M11: a forced side is honored literally; if the straight stub
         // would pierce a sibling between the node and the frame border,
-        // route around it (single-frame chains only). Unforced ends get the
-        // same avoidance: port separation may clamp a port cross to the
-        // side-span edge with a sibling sitting straight beyond it (a node
-        // aligned below the span edge), and the straight descent would
-        // pierce that sibling — the track detour bends the stub inside the
-        // frame instead, keeping the node-aligned rep crossing.
+        // route around it. Unforced ends get the same avoidance: port
+        // separation may clamp a port cross to the side-span edge with a
+        // sibling sitting straight beyond it (a node aligned below the span
+        // edge), and the straight descent would pierce that sibling — the
+        // track detour bends the stub inside the frame instead, keeping the
+        // node-aligned rep crossing.
+        //
+        // M18: the avoidance generalizes to multi-frame chains. The
+        // obstacle set grows to *every* chain frame's border bands (not
+        // just the innermost frame's), so a detour crossing a chain frame
+        // elsewhere stays a checked, designated crossing rather than
+        // grazing a nested outline unchecked; and the trigger stays narrow
+        // — the straight stub must actually be blocked (a single-frame
+        // stub can only pierce the innermost frame's siblings, so the gate
+        // there stays the sibling pierce itself; a multi-frame stub is
+        // additionally gated on clearing the whole world, keeping the
+        // prior geometry whenever the straight stub is legal).
         let sibs: Vec<(f32, f32, f32, f32)> = frame_children(end.chain[0])
             .into_iter()
             .filter(|r| !rects_near(*r, end.node))
             .collect();
+        let chain_frames: Vec<(f32, f32, f32, f32)> =
+            end.chain.iter().map(|&s| frame_rect(s)).collect();
         return force_stub_around_siblings(
             end.port,
             rep_port,
@@ -4569,6 +4760,8 @@ fn stub_for(
             frame_rect(end.chain[0]),
             world,
             inward,
+            &chain_frames,
+            axis,
         );
     }
     build_stub(
@@ -5805,7 +5998,13 @@ fn assign_x(layers: &[Vec<usize>], upper_neighbors: &[Vec<usize>], w: &[f32]) ->
     let mut x = vec![0.0_f32; n];
     // Initialize: left-pack each layer by current order. This fixes the
     // within-rank spread (relative positions + gaps); the centering pass
-    // below only translates each rank as a whole.
+    // below only translates each rank as a whole. Zero-size dummies carry
+    // no width and *share a position* with their left neighbor (M18: a
+    // left-pack step keeps them at the previous item's center, so the two
+    // chains sharing a dummy rank stay distinct — previously the step was
+    // `w + NODE_SEP`, which advanced by the *empty* step and let two
+    // dummies land on the same packed slot when the item widths above were
+    // zero too).
     for layer in layers.iter() {
         let mut cx = 0.0;
         for &v in layer.iter() {
@@ -6635,8 +6834,8 @@ mod tests {
         assert_all_finite(&l);
         assert_no_overlaps(&l);
         // One column ⇒ same left x (all singletons have equal width → same center → same left).
-        let x0 = l.nodes[0].x;
-        assert!(l.nodes.iter().all(|n| (n.x - x0).abs() < 1e-3));
+        let x0 = cx(&l.nodes[0]);
+        assert!(l.nodes.iter().all(|n| (cx(n) - x0).abs() < 1e-3));
         let ys: Vec<f32> = l.nodes.iter().map(|n| n.y).collect();
         assert!(ys[0] < ys[1] && ys[1] < ys[2], "expected top-to-bottom order {ys:?}");
     }
@@ -9914,6 +10113,67 @@ end
                     ax, ay, r.0, r.1, r.2, r.3, covered
                 );
             }
+        }
+    }
+
+    #[test]
+    #[ignore = "debug dump; probe M18 (set DIAG_SRC to a .dgmr path)"]
+    fn _probe_m18() {
+        let src = match std::env::var("DIAG_SRC") {
+            Ok(p) => std::fs::read_to_string(p).unwrap(),
+            Err(_) => "diagram top-down\na\nb\nc\n".to_string(),
+        };
+        let (_d, l) = lay(&src);
+        println!("canvas: {:.1} x {:.1}", l.width, l.height);
+        let mut nodes = l.nodes.clone();
+        nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
+        for n in &nodes {
+            println!("  node {:<10} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
+        }
+        // M18 regression probe: the two-deep side-by-side fixture.
+        let l2 = lay(r#"diagram left-right
+group
+group
+A
+B
+end
+end
+C
+A --> C
+B --> C
+"#).1;
+        for e in &l2.edges {
+            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+            println!("  [m18] {} -> {} : {}", e.from, e.to, pts.join(" "));
+        }
+        // M18 regression probe 2: the dense-stress overlap (n18->n19 riding
+        // n16->n22's source descent at the same x).
+        if let (Some(e1), Some(e2)) = (
+            l.edges.iter().find(|e| e.from == "n18" && e.to == "n19"),
+            l.edges.iter().find(|e| e.from == "n16" && e.to == "n22"),
+        ) {
+            for (nm, e) in [("n18->n19", e1), ("n16->n22", e2)] {
+                let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+                println!("  [m18] {} : {}", nm, pts.join(" "));
+            }
+        }
+        let a2 = node_rect(&l2, "A");
+        let b2 = node_rect(&l2, "B");
+        for e in &l2.edges {
+            if e.from == "A" {
+                for w in e.points.windows(2) {
+                    if segment_intersects_rect(w[0], w[1], (b2.x, b2.y, b2.w, b2.h)) {
+                        println!("  [m18] A->C SEGMENT PIERCES B: {:?}->{:?}", w[0], w[1]);
+                    }
+                }
+            }
+        }
+        for s in &l.groups {
+            println!("  group #{} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, s.x, s.y, s.w, s.h);
+        }
+        for e in &l.edges {
+            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+            println!("  {:<10} -> {:<10} : {}", e.from, e.to, pts.join(" "));
         }
     }
 

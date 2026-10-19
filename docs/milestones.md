@@ -9,8 +9,8 @@ how the remaining work depends on itself.
 **Current position:** M0–M7.5, M9–M15, M16, M17, and M18 are complete (M12
 was absorbed by M11.5), plus the post-M13 hardening pass below and the
 post-M17 routing hardening (escape-stub spikes) recorded under M17, and
-S19a (the first of M19's three sessions) is complete. **M19 continues with
-S19b, then S19c. M8 (CLI polish) remains the last milestone.**
+S19a + S19b (the first two of M19's three sessions) are complete.
+**M19 continues with S19c. M8 (CLI polish) remains the last milestone.**
 
 ---
 
@@ -1454,21 +1454,44 @@ refactor.
   failure boundary is unchanged at the same segment pair — no new defect
   class surfaced by the reroute gate)*.
 
-#### ☐ S19b — Absorb & retire, cover the last blind span (mostly refactor)
+#### ✅ S19b — Absorb & retire, cover the last blind span (mostly refactor)
 
-- [ ] **Absorb M18's machinery, then retire the special case.** The
+- [x] **Absorb M18's machinery, then retire the special case.** The
       generalized [`force_stub_around_siblings`] and its chain-length gate
       become redundant: move the chain-local obstacle construction to the
       dispatch point (or a helper it calls), keep the geometry, delete the
       gate. `cross_pieces_candidate`'s candidate list simplifies rather
       than grows another fallback layer.
-- [ ] **Cover the other blind span too:** `mismatched_stub` for multi-frame
+- [x] **Cover the other blind span too:** `mismatched_stub` for multi-frame
       chains is purely geometric today (M14); the unified regime should
-      give it the same clearance-checked reroute.
+      give it the same clearance-checked reroute. *(Landed in `stub_for`'s
+      mismatched branch: the built mismatched stub is checked against the
+      shared world and, when blocked, rerouted through
+      `reroute_stub_span`/`stub_world` — the same chain-bands-hard,
+      peer-occupancy-soft regime — with the mismatched geometry as the
+      kept-unconditional fallback. A single-frame chain keeps its
+      M14-pinned geometry unconditionally: its world is exactly the
+      sibling/title facts `mismatched_rep_cross` already cleared. Two
+      supporting fixes surfaced while proving the branch with a unit
+      fixture: (1) `clamped_escape` clamped its seed against raw border
+      bands but `seg_clear_border` bars the `BORDER_PAD`-inflated extent,
+      so a seed could be born inside the barred zone and a genuinely clear
+      detour was falsely declined — the clamp now uses the inflated band;
+      (2) `stub_world` now carries the chain frames' title texts as solid
+      nodes (measured glyphs + the detour's own `title_clear_gap` margins),
+      so a reroute can never trade a title detour for a route that crosses
+      the title the detour was built to avoid.)*
 - **Deliverable:** suite green. Unlike S19a, byte changes are permitted
   here but only as defect fixes of exactly the blind-stub class (the
   previously blind `mismatched_stub` span may begin avoiding defects it
   never saw); every byte change is hand-reviewed and triaged as such.
+  *(All twelve golden snapshots verified byte-identical — no current
+  sample exercises the new branch, so there was nothing to triage; the
+  branch is pinned by the unit fixture
+  `mismatched_multiframe_stub_gets_the_dispatch_reroute`, which reproduces
+  the blind defect (a mismatched descent riding another edge's reserved
+  port corridor) and asserts the reroute clears it while a single-frame
+  chain keeps its geometry.)*
 - **Invariants re-verified end to end (a+b together):** phase-1
   permutation invariance, escape-stub bars, pocket right-of-way, and the
   snapshot suite.

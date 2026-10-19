@@ -493,10 +493,15 @@ fn layout_impl(diagram: &Diagram, phase1_only: bool, trace: Option<&dyn Fn(&str)
         .map(|e| {
             let fi = id_index[e.from.as_str()];
             let ti = id_index[e.to.as_str()];
-            let lca = lca_level(diagram.nodes[fi].group, diagram.nodes[ti].group, &diagram.groups);
+            let lca = lca_level(
+                diagram.nodes[fi].group,
+                diagram.nodes[ti].group,
+                &diagram.groups,
+            );
             let rep_from = rep_of(fi, lca, diagram);
             let rep_to = rep_of(ti, lca, diagram);
-            let is_direct = matches!(rep_from, ItemRef::Node(_)) && matches!(rep_to, ItemRef::Node(_));
+            let is_direct =
+                matches!(rep_from, ItemRef::Node(_)) && matches!(rep_to, ItemRef::Node(_));
             EdgeInfo {
                 lca,
                 rep_from,
@@ -514,7 +519,14 @@ fn layout_impl(diagram: &Diagram, phase1_only: bool, trace: Option<&dyn Fn(&str)
     // which frames qualify.
     let (cross_subs, cross_nodes) = cross_boundary_reach(diagram, &edge_infos, &id_index);
 
-    let top = layout_level(diagram, None, diagram.direction, &edge_infos, &cross_subs, &cross_nodes);
+    let top = layout_level(
+        diagram,
+        None,
+        diagram.direction,
+        &edge_infos,
+        &cross_subs,
+        &cross_nodes,
+    );
     assemble(diagram, top, &edge_infos, phase1_only, trace)
 }
 
@@ -539,11 +551,17 @@ struct Geometry<'a> {
 
 impl<'a> Geometry<'a> {
     fn node(&self, gi: usize) -> (f32, f32, f32, f32) {
-        self.node_rect.get(&gi).copied().unwrap_or((0.0, 0.0, 0.0, 0.0))
+        self.node_rect
+            .get(&gi)
+            .copied()
+            .unwrap_or((0.0, 0.0, 0.0, 0.0))
     }
 
     fn frame(&self, s: usize) -> (f32, f32, f32, f32) {
-        self.frame_rect.get(&s).copied().unwrap_or((0.0, 0.0, 0.0, 0.0))
+        self.frame_rect
+            .get(&s)
+            .copied()
+            .unwrap_or((0.0, 0.0, 0.0, 0.0))
     }
 
     /// A frame's immediate children (node rects + nested frame rects) — the
@@ -559,6 +577,17 @@ impl<'a> Geometry<'a> {
             .get(s)
             .and_then(|sg| sg.title.as_ref())
             .map(|t| text::measure(t, FRAME_TITLE_FONT_SIZE).width)
+    }
+
+    /// The drawn title-text rect of a group's frame (`None` when untitled)
+    /// — the glyph box the title detour routes around and the stub reroute
+    /// treats as solid (S19b).
+    fn title_text_rect(&self, s: usize) -> Option<(f32, f32, f32, f32)> {
+        self.diagram
+            .groups
+            .get(s)
+            .and_then(|sg| sg.title.as_ref())
+            .map(|t| title_text_rect(self.frame(s), t))
     }
 }
 
@@ -698,11 +727,8 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
     // corridor exists.
     let from_mismatched = !is_direct && forced_from.is_some() && forced_from != Some(implicit_from);
     let to_mismatched = !is_direct && forced_to.is_some() && forced_to != Some(implicit_to);
-    let around_target = forced_to.is_none()
-        && !is_direct
-        && to_chain.len() == 1
-        && from_chain.len() <= 1
-        && {
+    let around_target =
+        forced_to.is_none() && !is_direct && to_chain.len() == 1 && from_chain.len() <= 1 && {
             let sibs: Vec<(f32, f32, f32, f32)> = geom
                 .children(to_chain[0])
                 .into_iter()
@@ -711,7 +737,8 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
             let cc = cross_of(center(to), to_side);
             let crp = port_at_cross(rep_to_rect, to_side, cc);
             let ctp = port(to, to_side);
-            sibs.iter().any(|sib| segment_intersects_rect(crp, ctp, *sib))
+            sibs.iter()
+                .any(|sib| segment_intersects_rect(crp, ctp, *sib))
         };
     EdgeCtx {
         ei,
@@ -816,11 +843,17 @@ fn assemble(
     let mut level_items: HashMap<Option<usize>, Vec<LevelItem>> = HashMap::new();
     for (gi, nd) in diagram.nodes.iter().enumerate() {
         let r = node_rect.get(&gi).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
-        level_items.entry(nd.group).or_default().push((ItemRef::Node(gi), r));
+        level_items
+            .entry(nd.group)
+            .or_default()
+            .push((ItemRef::Node(gi), r));
     }
     for (si, sg) in diagram.groups.iter().enumerate() {
         let r = frame_rect.get(&si).copied().unwrap_or((0.0, 0.0, 0.0, 0.0));
-        level_items.entry(sg.parent).or_default().push((ItemRef::Sub(si), r));
+        level_items
+            .entry(sg.parent)
+            .or_default()
+            .push((ItemRef::Sub(si), r));
     }
 
     let geom = Geometry {
@@ -1065,7 +1098,12 @@ fn assemble(
                         ctx.from_rep_cross,
                         ctx.flow,
                     ),
-                    port_flow(ctx.rep_to_rect, ctx.to_frame_side, ctx.to_rep_cross, ctx.flow),
+                    port_flow(
+                        ctx.rep_to_rect,
+                        ctx.to_frame_side,
+                        ctx.to_rep_cross,
+                        ctx.flow,
+                    ),
                 )
             });
         }
@@ -1092,23 +1130,23 @@ fn assemble(
         if let Some(t) = trace {
             t(&format!(
                 "attempt {}->{} clear={}",
-                ctx.from_id, ctx.to_id, world.clear(&pts)
+                ctx.from_id,
+                ctx.to_id,
+                world.clear(&pts)
             ));
         }
         // Sealed-port fallback: no candidate route cleared the world, so
         // retry with the free ports slid along their sides before keeping
         // the defective route.
         if !world.clear(&pts)
-            && let Some(alt) =
-                port_fallback_route(ctx, world, &geom, (top.w, top.h), &shared_sides)
+            && let Some(alt) = port_fallback_route(ctx, world, &geom, (top.w, top.h), &shared_sides)
         {
             pts = alt;
         }
         pts
     };
 
-    let mut paths: Vec<Option<Vec<(f32, f32)>>> =
-        (0..diagram.edges.len()).map(|_| None).collect();
+    let mut paths: Vec<Option<Vec<(f32, f32)>>> = (0..diagram.edges.len()).map(|_| None).collect();
     for ei in 0..diagram.edges.len() {
         paths[ei] = Some(attempt(&ctxs[ei], &edge_world(&geom, &ctxs[ei])));
     }
@@ -1140,7 +1178,10 @@ fn assemble(
         }
         for &ei in &rip {
             if let Some(t) = trace {
-                t(&format!("pass {}: rip {}->{}", _pass, ctxs[ei].from_id, ctxs[ei].to_id));
+                t(&format!(
+                    "pass {}: rip {}->{}",
+                    _pass, ctxs[ei].from_id, ctxs[ei].to_id
+                ));
             }
             let mut world = edge_world(&geom, &ctxs[ei]);
             for (j, ps) in pockets.iter().enumerate() {
@@ -1173,13 +1214,11 @@ fn assemble(
     let mut edges_out: Vec<EdgePath> = paths
         .into_iter()
         .zip(ctxs.iter())
-        .map(|(path, ctx)| {
-            EdgePath {
-                from: ctx.from_id.clone(),
-                to: ctx.to_id.clone(),
-                points: path.expect("every edge routed"),
-                label_at: None,
-            }
+        .map(|(path, ctx)| EdgePath {
+            from: ctx.from_id.clone(),
+            to: ctx.to_id.clone(),
+            points: path.expect("every edge routed"),
+            label_at: None,
         })
         .collect();
 
@@ -1283,8 +1322,16 @@ fn assemble(
     // Right/bottom deficits are handled by the canvas growth below, which
     // runs on the shifted extents. Nothing drawn (an empty diagram): the
     // extents are infinite and both shifts stay 0.
-    let sx = if min_x < MARGIN - 1e-2 { MARGIN - min_x } else { 0.0 };
-    let sy = if min_y < MARGIN - 1e-2 { MARGIN - min_y } else { 0.0 };
+    let sx = if min_x < MARGIN - 1e-2 {
+        MARGIN - min_x
+    } else {
+        0.0
+    };
+    let sy = if min_y < MARGIN - 1e-2 {
+        MARGIN - min_y
+    } else {
+        0.0
+    };
     if sx > 0.0 || sy > 0.0 {
         for n in nodes_out.iter_mut() {
             n.x += sx;
@@ -1339,12 +1386,7 @@ fn edge_world(geom: &Geometry, ctx: &EdgeCtx) -> Obstacles {
     for (gi, _) in geom.diagram.nodes.iter().enumerate() {
         obs.push_node(geom.node(gi));
     }
-    for &(idx, r) in geom
-        .level_items
-        .get(&ctx.lca)
-        .into_iter()
-        .flatten()
-    {
+    for &(idx, r) in geom.level_items.get(&ctx.lca).into_iter().flatten() {
         if matches!(idx, ItemRef::Sub(_)) {
             obs.push_frame(r);
         }
@@ -1460,11 +1502,10 @@ fn route_edge(
             best = Some((idx, c));
         }
     }
-    let keep = match best {
+    match best {
         Some((idx, _)) => candidates[idx].clone(),
         None => candidates.last().expect("at least one candidate").clone(),
-    };
-    keep
+    }
 }
 
 /// Route a direct internal edge through the same ladder every edge uses
@@ -1474,11 +1515,7 @@ fn route_edge(
 /// blocked (a peer node in the corridor, a frame outline, an already-routed
 /// edge), rerouted through the track graph; the plain Z remains the last
 /// resort. The flat waypoints (dummy centers, fanned ports) are preserved.
-fn direct_chain_route(
-    raw: &[(f32, f32)],
-    axis: FlowAxis,
-    obs: &Obstacles,
-) -> Vec<(f32, f32)> {
+fn direct_chain_route(raw: &[(f32, f32)], axis: FlowAxis, obs: &Obstacles) -> Vec<(f32, f32)> {
     if raw.len() < 2 {
         return raw.to_vec();
     }
@@ -1580,12 +1617,7 @@ fn port_alternates(
 /// the raw waypoints, and the raw port's side may even carry the other
 /// cross axis. The M14 rep crossings follow the moved ports
 /// ([`refresh_rep_crosses`]).
-fn ctx_with_crosses(
-    ctx: &EdgeCtx,
-    geom: &Geometry,
-    from: Option<f32>,
-    to: Option<f32>,
-) -> EdgeCtx {
+fn ctx_with_crosses(ctx: &EdgeCtx, geom: &Geometry, from: Option<f32>, to: Option<f32>) -> EdgeCtx {
     let mut v = ctx.clone();
     if let Some(c) = from {
         v.from_port = port_at_cross(v.from_rect, v.from_side, c);
@@ -1839,7 +1871,14 @@ fn cross_pieces_candidate(
 ) -> Vec<(f32, f32)> {
     let (from_frame_side, to_frame_side, from_rep_cross, to_rep_cross, from_mis, to_mis) =
         if coupled_forced_sides {
-            (ctx.from_side, ctx.to_side, ctx.from_cross, ctx.to_cross, false, false)
+            (
+                ctx.from_side,
+                ctx.to_side,
+                ctx.from_cross,
+                ctx.to_cross,
+                false,
+                false,
+            )
         } else {
             (
                 ctx.from_frame_side,
@@ -1877,9 +1916,14 @@ fn cross_pieces_candidate(
         &|s| geom.frame(s),
         &|s| geom.title_width(s),
         &|s| geom.children(s),
+        &|s| geom.title_text_rect(s),
         world,
     );
-    let CrossPieces { src_stub, lca, tgt_stub } = cp;
+    let CrossPieces {
+        src_stub,
+        lca,
+        tgt_stub,
+    } = cp;
     let mut pts = Vec::new();
     pts.extend(ortho_chain(&src_stub, ctx.flow));
     pts.extend(lca_segment(
@@ -1924,8 +1968,16 @@ fn lca_segment(
 ) -> Vec<(f32, f32)> {
     let a_perp = side_perpendicular(a_side, axis);
     let b_perp = side_perpendicular(b_side, axis);
-    let a_out = if a_perp { escape_point(a, a_side, SIDE_ESCAPE) } else { a };
-    let b_out = if b_perp { escape_point(b, b_side, SIDE_ESCAPE) } else { b };
+    let a_out = if a_perp {
+        escape_point(a, a_side, SIDE_ESCAPE)
+    } else {
+        a
+    };
+    let b_out = if b_perp {
+        escape_point(b, b_side, SIDE_ESCAPE)
+    } else {
+        b
+    };
     let mut pts = route_lca(
         a_out,
         b_out,
@@ -1982,11 +2034,17 @@ fn layout_level(
             cross_subs,
             cross_nodes,
         );
-        let (top_inset, _bot_pad) =
-            frame_insets(&diagram.groups[cs], cross_subs.contains(&cs));
+        let (top_inset, _bot_pad) = frame_insets(&diagram.groups[cs], cross_subs.contains(&cs));
         let inner_ox = FRAME_PAD_X;
         let inner_oy = top_inset;
-        child_outs.insert(cs, ChildOut { out, inner_ox, inner_oy });
+        child_outs.insert(
+            cs,
+            ChildOut {
+                out,
+                inner_ox,
+                inner_oy,
+            },
+        );
     }
 
     // Build this level's flat items: direct-child real nodes, then child
@@ -2006,8 +2064,7 @@ fn layout_level(
     }
     for &cs in &child_subs {
         let child = child_outs.get(&cs).expect("child out just inserted");
-        let (top_inset, bot_pad) =
-            frame_insets(&diagram.groups[cs], cross_subs.contains(&cs));
+        let (top_inset, bot_pad) = frame_insets(&diagram.groups[cs], cross_subs.contains(&cs));
         // The frame is at least wide enough for its contents plus side
         // padding, but no narrower than its title: the title starts at
         // [`FRAME_TITLE_X`] (the renderer anchors it there, so its left
@@ -2046,9 +2103,7 @@ fn layout_level(
                 // Node center x in frame-local coordinates: the child's
                 // contents are offset into the frame by `inner_ox`.
                 let ncx = FRAME_PAD_X + nx + nw / 2.0;
-                cross_nodes.contains(&gi)
-                    && ncx >= title_mid
-                    && ncx <= title_x1 + right_gap
+                cross_nodes.contains(&gi) && ncx >= title_mid && ncx <= title_x1 + right_gap
             });
             if under_right_half && frame_w < need {
                 frame_w = need;
@@ -2104,7 +2159,9 @@ fn layout_level(
             ItemRef::Node(gi) => out.nodes.push((gi, rx, ry, rw, rh)),
             ItemRef::Sub(cs) => {
                 out.frames.push((cs, rx, ry, rw, rh));
-                let child = child_outs.remove(&cs).expect("child out present for its item");
+                let child = child_outs
+                    .remove(&cs)
+                    .expect("child out present for its item");
                 let ox = rx + child.inner_ox;
                 let oy = ry + child.inner_oy;
                 for (gi, x, y, w, h) in child.out.nodes {
@@ -2152,11 +2209,7 @@ fn ancestors(group: Option<usize>, groups: &[crate::ast::Group]) -> Vec<Option<u
 }
 
 /// Lowest common ancestor level of two nodes. `None` means the top level.
-fn lca_level(
-    a: Option<usize>,
-    b: Option<usize>,
-    groups: &[crate::ast::Group],
-) -> Option<usize> {
+fn lca_level(a: Option<usize>, b: Option<usize>, groups: &[crate::ast::Group]) -> Option<usize> {
     let ca = ancestors(a, groups);
     let cb = ancestors(b, groups);
     for x in &ca {
@@ -2190,11 +2243,7 @@ fn rep_of(node_idx: usize, level: Option<usize>, diagram: &Diagram) -> ItemRef {
 /// excluding) `lca` — i.e. the frames a cross-boundary edge crosses on this
 /// side. An empty result means `node_group == lca`, so the node is a direct
 /// child of the LCA and is its own representative.
-fn chain_to_lca(
-    node_group: Option<usize>,
-    lca: Option<usize>,
-    groups: &[Group],
-) -> Vec<usize> {
+fn chain_to_lca(node_group: Option<usize>, lca: Option<usize>, groups: &[Group]) -> Vec<usize> {
     let mut chain = Vec::new();
     let mut cur = node_group;
     while cur != lca {
@@ -2255,25 +2304,27 @@ fn cross_boundary_reach(
     let mut subs = std::collections::HashSet::new();
     let mut nodes = std::collections::HashSet::new();
     for (ei, e) in diagram.edges.iter().enumerate() {
-        let Some(info) = edge_infos.get(ei) else { continue; };
+        let Some(info) = edge_infos.get(ei) else {
+            continue;
+        };
         for nid in [e.from.as_str(), e.to.as_str()].map(|id| id_index[id]) {
             if let Some(group) = diagram.nodes[nid].group
-                && info.lca != Some(group) {
-                    subs.insert(group);
-                    nodes.insert(nid);
-                    // Titled frames further out in the chain grow too when
-                    // the stub runs vertically (top-down LCA): the stub may
-                    // detour around their titles and each jog lives in the
-                    // grown band below its title.
-                    if matches!(effective_direction(info.lca, diagram), Direction::TopDown) {
-                        for &g in &chain_to_lca(diagram.nodes[nid].group, info.lca, &diagram.groups)
-                        {
-                            if diagram.groups[g].title.is_some() {
-                                subs.insert(g);
-                            }
+                && info.lca != Some(group)
+            {
+                subs.insert(group);
+                nodes.insert(nid);
+                // Titled frames further out in the chain grow too when
+                // the stub runs vertically (top-down LCA): the stub may
+                // detour around their titles and each jog lives in the
+                // grown band below its title.
+                if matches!(effective_direction(info.lca, diagram), Direction::TopDown) {
+                    for &g in &chain_to_lca(diagram.nodes[nid].group, info.lca, &diagram.groups) {
+                        if diagram.groups[g].title.is_some() {
+                            subs.insert(g);
                         }
                     }
                 }
+            }
         }
     }
     (subs, nodes)
@@ -2382,7 +2433,11 @@ fn port_at_cross(rect: (f32, f32, f32, f32), side: Side, cross: f32) -> (f32, f3
 /// gets here, so `None` is a last-resort fallback (the stub then crosses the
 /// title, no worse than the previous frame-center design which crossed it at
 /// the center).
-fn title_detour_clear_x(rep: (f32, f32, f32, f32), node_cross: f32, title_width: f32) -> Option<f32> {
+fn title_detour_clear_x(
+    rep: (f32, f32, f32, f32),
+    node_cross: f32,
+    title_width: f32,
+) -> Option<f32> {
     let (rx, _ry, rw, _rh) = rep;
     let title_x0 = rx + FRAME_TITLE_X;
     let title_x1 = rx + FRAME_TITLE_X + title_width;
@@ -2509,11 +2564,7 @@ fn dedup_consecutive(pts: &mut Vec<(f32, f32)>) {
 /// within-frame stub would pierce a sibling, to reject an around-frame
 /// route whose perpendicular entry would cut across a sibling, and by the
 /// obstacle-world clearance checks.
-fn segment_intersects_rect(
-    p0: (f32, f32),
-    p1: (f32, f32),
-    r: (f32, f32, f32, f32),
-) -> bool {
+fn segment_intersects_rect(p0: (f32, f32), p1: (f32, f32), r: (f32, f32, f32, f32)) -> bool {
     segment_rect_interval(p0, p1, r).is_some_and(|(t0, t1)| t0 < t1 - 1e-6)
 }
 
@@ -2941,7 +2992,8 @@ impl Obstacles {
     }
 
     fn push_segment(&mut self, s0: (f32, f32), s1: (f32, f32)) {
-        self.segments.push(segment_rect(s0, s1, SEGMENT_OBSTACLE_PAD));
+        self.segments
+            .push(segment_rect(s0, s1, SEGMENT_OBSTACLE_PAD));
     }
 
     fn push_soft_segment(&mut self, s0: (f32, f32), s1: (f32, f32)) {
@@ -2972,9 +3024,7 @@ impl Obstacles {
     /// Perpendicular crossings are free (edges cross by design); only
     /// laying on top of a peer is the negotiated conflict.
     fn soft_cost(&self, pts: &[(f32, f32)]) -> f32 {
-        pts.windows(2)
-            .map(|w| self.soft_cost_seg(w[0], w[1]))
-            .sum()
+        pts.windows(2).map(|w| self.soft_cost_seg(w[0], w[1])).sum()
     }
 
     /// The soft cost of one segment: [`SOFT_RIDE_COST`] per soft band it
@@ -3048,7 +3098,10 @@ fn pocket_rects(pts: &[(f32, f32)]) -> Vec<(f32, f32, f32, f32)> {
         let q = (port.0 + dx / len * d, port.1 + dy / len * d);
         segment_rect(port, q, PORT_CORRIDOR_PAD)
     };
-    vec![sweep(pts[0], pts[1]), sweep(*pts.last().unwrap(), pts[pts.len() - 2])]
+    vec![
+        sweep(pts[0], pts[1]),
+        sweep(*pts.last().unwrap(), pts[pts.len() - 2]),
+    ]
 }
 
 /// The hard violations of a routed set (M16's repair scan): the edge indices
@@ -3084,7 +3137,11 @@ fn scan_violations(
             let mut verdict: Option<Vec<usize>> = None;
             'outer: for wa in pi.windows(2) {
                 for wb in pj.windows(2) {
-                    if !seg_clear_padded(wa[0], wa[1], segment_rect(wb[0], wb[1], SEGMENT_OBSTACLE_PAD)) {
+                    if !seg_clear_padded(
+                        wa[0],
+                        wa[1],
+                        segment_rect(wb[0], wb[1], SEGMENT_OBSTACLE_PAD),
+                    ) {
                         // j's leg rides on i's. The pockets say who yields.
                         let j_in_i = pockets[i]
                             .iter()
@@ -3257,10 +3314,7 @@ fn on_band_centerline(p: (f32, f32), b: (f32, f32, f32, f32)) -> bool {
 /// this via `line_rect_exit` clipping; the around-target route is the one
 /// generator that still needs it). Crossings already marked by an endpoint
 /// on the centerline are left alone.
-fn record_border_crossings(
-    pts: &[(f32, f32)],
-    bands: &[(f32, f32, f32, f32)],
-) -> Vec<(f32, f32)> {
+fn record_border_crossings(pts: &[(f32, f32)], bands: &[(f32, f32, f32, f32)]) -> Vec<(f32, f32)> {
     let mut out: Vec<(f32, f32)> = Vec::with_capacity(pts.len() + bands.len());
     for w in pts.windows(2) {
         let (p0, p1) = (w[0], w[1]);
@@ -3474,10 +3528,10 @@ impl Escapes {
                 Dir::NegY.code()
             }
         };
-        if let Some(d) = self.start {
-            if code(pts[0], pts[1]) == d.opposite().code() {
-                return true;
-            }
+        if let Some(d) = self.start
+            && code(pts[0], pts[1]) == d.opposite().code()
+        {
+            return true;
         }
         if let Some(d) = self.end {
             let n = pts.len();
@@ -3496,12 +3550,7 @@ impl Escapes {
 /// (e.g. `from="right"` on a vertical-flow edge: the flow coordinate is
 /// the port's y, not the frame's x). For an aligned side it equals
 /// [`side_flow_coord`].
-fn port_flow(
-    rect: (f32, f32, f32, f32),
-    side: Side,
-    cross: f32,
-    axis: FlowAxis,
-) -> f32 {
+fn port_flow(rect: (f32, f32, f32, f32), side: Side, cross: f32, axis: FlowAxis) -> f32 {
     cross_flow(port_at_cross(rect, side, cross), axis).1
 }
 
@@ -3601,7 +3650,11 @@ fn separate_ports(ends: &[PortEnd]) -> std::collections::HashMap<(usize, bool), 
                 .other_cross
                 .total_cmp(&ends[b].other_cross)
                 .then_with(|| {
-                    (ends[a].from_id.as_str(), ends[a].to_id.as_str(), ends[a].is_from as u8)
+                    (
+                        ends[a].from_id.as_str(),
+                        ends[a].to_id.as_str(),
+                        ends[a].is_from as u8,
+                    )
                         .cmp(&(
                             ends[b].from_id.as_str(),
                             ends[b].to_id.as_str(),
@@ -3746,32 +3799,24 @@ fn assign_lanes(edges: &[LaneEdge]) -> std::collections::HashMap<usize, f32> {
     // overlap the head but not each other, an empty intersection.)
     let mut sweep: Vec<usize> = (0..edges.len()).collect();
     sweep.sort_by(|&a, &b| {
-        edges[a]
-            .from_side
-            .cmp(&edges[b].from_side)
-            .then_with(|| {
-                let (la, ha) = gap_span(edges, a);
-                let (lb, hb) = gap_span(edges, b);
-                la.total_cmp(&lb)
-                    .then_with(|| ha.total_cmp(&hb))
-                    .then_with(|| {
-                        (edges[a].from_id.as_str(), edges[a].to_id.as_str())
-                            .cmp(&(edges[b].from_id.as_str(), edges[b].to_id.as_str()))
-                    })
-            })
+        edges[a].from_side.cmp(&edges[b].from_side).then_with(|| {
+            let (la, ha) = gap_span(edges, a);
+            let (lb, hb) = gap_span(edges, b);
+            la.total_cmp(&lb)
+                .then_with(|| ha.total_cmp(&hb))
+                .then_with(|| {
+                    (edges[a].from_id.as_str(), edges[a].to_id.as_str())
+                        .cmp(&(edges[b].from_id.as_str(), edges[b].to_id.as_str()))
+                })
+        })
     });
     let mut groups: Vec<Vec<usize>> = Vec::new();
     let mut unions: Vec<(f32, f32)> = Vec::new();
     for &k in &sweep {
         let (lo, hi) = gap_span(edges, k);
-        let hit = groups
-            .iter()
-            .zip(unions.iter())
-            .position(|(g, &(m0, m1))| {
-                edges[g[0]].from_side == edges[k].from_side
-                    && m0 < hi - 1e-6
-                    && lo < m1 - 1e-6
-            });
+        let hit = groups.iter().zip(unions.iter()).position(|(g, &(m0, m1))| {
+            edges[g[0]].from_side == edges[k].from_side && m0 < hi - 1e-6 && lo < m1 - 1e-6
+        });
         match hit {
             Some(gi) => {
                 groups[gi].push(k);
@@ -4029,12 +4074,7 @@ fn simple_z(a: (f32, f32), b: (f32, f32), axis: FlowAxis, lane: f32) -> Vec<(f32
     if (ca - cb).abs() < 1e-3 {
         return vec![a, b];
     }
-    vec![
-        a,
-        with_flow(ca, lane, axis),
-        with_flow(cb, lane, axis),
-        b,
-    ]
+    vec![a, with_flow(ca, lane, axis), with_flow(cb, lane, axis), b]
 }
 
 /// A rectilinear shortest path (fewest bends among shortest) from `a` to `b`
@@ -4115,9 +4155,7 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> V
     // (M16) does not block a track — it is charged in the cost below, so a
     // Dijkstra route prefers corridors clear of parked peers but may cross
     // negotiated space when nothing else is available.
-    let clear = |x0: f32, y0: f32, x1: f32, y1: f32| -> bool {
-        obs.seg_clear((x0, y0), (x1, y1))
-    };
+    let clear = |x0: f32, y0: f32, x1: f32, y1: f32| -> bool { obs.seg_clear((x0, y0), (x1, y1)) };
     // Neighbours of node (i,j): the adjacent track intersections reachable by
     // a clear orthogonal segment, with the direction of travel (for bend cost)
     // and the segment's soft-occupancy cost (M16).
@@ -4187,7 +4225,11 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> V
             let v = ni * nh + nj;
             let cost = len
                 + soft
-                + if d_in != 4 && d_in != d_out { BEND_PENALTY } else { 0.0 };
+                + if d_in != 4 && d_in != d_out {
+                    BEND_PENALTY
+                } else {
+                    0.0
+                };
             let vs = st(v, d_out);
             let nd = dist[u] + cost;
             if nd < dist[vs] - 1e-6 {
@@ -4253,7 +4295,12 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> V
 /// bounded-ladder convention). Phase-1 routing has no peers (empty soft),
 /// so the retry only ever fires in the phase-2 repair loop — the routing
 /// result stays simultaneous-assignment-clean.
-fn track_route_negotiated(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> Vec<(f32, f32)> {
+fn track_route_negotiated(
+    a: (f32, f32),
+    b: (f32, f32),
+    obs: &Obstacles,
+    esc: Escapes,
+) -> Vec<(f32, f32)> {
     let first = track_route(a, b, obs, esc);
     if first.is_empty() || obs.soft_cost(&first) <= 1e-6 {
         return first;
@@ -4282,7 +4329,10 @@ fn track_route_negotiated(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Es
         return first;
     }
     let second = track_route(a, b, &around, esc);
-    if !second.is_empty() && obs.clear(&second) && obs.soft_cost(&second) < obs.soft_cost(&first) - 1e-6 {
+    if !second.is_empty()
+        && obs.clear(&second)
+        && obs.soft_cost(&second) < obs.soft_cost(&first) - 1e-6
+    {
         second
     } else {
         first
@@ -4336,11 +4386,7 @@ fn route_lca(
     // this an otherwise-cheap rung could ride the stub's line back toward
     // the port and reverse over it.
     let mut best: Option<(Vec<(f32, f32)>, f32)> = None;
-    fn consider(
-        obs: &Obstacles,
-        best: &mut Option<(Vec<(f32, f32)>, f32)>,
-        pts: Vec<(f32, f32)>,
-    ) {
+    fn consider(obs: &Obstacles, best: &mut Option<(Vec<(f32, f32)>, f32)>, pts: Vec<(f32, f32)>) {
         if obs.clear(&pts) {
             let c = obs.soft_cost(&pts);
             if best.as_ref().is_none_or(|(_, bc)| c < bc - 1e-6) {
@@ -4470,7 +4516,12 @@ fn self_loop_path(
     let (lt, xt) = line(to_side, out);
     if from_side == to_side {
         // A rectangular loop hanging off one side.
-        return vec![p1, escape_point(p1, from_side, out), escape_point(p2, to_side, out), p2];
+        return vec![
+            p1,
+            escape_point(p1, from_side, out),
+            escape_point(p2, to_side, out),
+            p2,
+        ];
     }
     if xf != xt {
         // Adjacent sides: the two offset lines meet at the shared corner.
@@ -4490,13 +4541,27 @@ fn self_loop_path(
         // top or under the bottom).
         let top_room = y;
         let bot_room = canvas_h - (y + h);
-        (if bot_room > top_room { y + h + out } else { y - out }, false)
+        (
+            if bot_room > top_room {
+                y + h + out
+            } else {
+                y - out
+            },
+            false,
+        )
     } else {
         // Top/Bottom pair: the corner line is vertical (wrap around the
         // left or the right side).
         let left_room = x;
         let right_room = canvas_w - (x + w);
-        (if right_room > left_room { x + w + out } else { x - out }, true)
+        (
+            if right_room > left_room {
+                x + w + out
+            } else {
+                x - out
+            },
+            true,
+        )
     };
     // The two corners where the perpendicular wrap line meets the from- and
     // to-side offset lines.
@@ -4517,11 +4582,7 @@ fn self_loop_path(
 /// later forced-side routes (M11), so two forced excursions in one gap
 /// cannot lay collinearly on top of each other (the M9 invariant holds
 /// without a global router).
-fn segment_rect(
-    s0: (f32, f32),
-    s1: (f32, f32),
-    t: f32,
-) -> (f32, f32, f32, f32) {
+fn segment_rect(s0: (f32, f32), s1: (f32, f32), t: f32) -> (f32, f32, f32, f32) {
     (
         s0.0.min(s1.0) - t,
         s0.1.min(s1.1) - t,
@@ -4619,11 +4680,19 @@ fn clamped_escape(
     for &b in obs.borders.iter() {
         // A border band is run into when the line rides it parallel; a
         // perpendicular transversal is legal *with a waypoint*, which the
-        // seed's closing leg would not carry either — both bar.
-        consider(into_param(port, dx, dy, b));
+        // seed's closing leg would not carry either — both bar. The cut
+        // uses the band's [`BORDER_PAD`]-inflated rect (the extent
+        // [`seg_clear_border`] actually bars): clamping against the raw
+        // band could park the seed inside the barred zone, and the
+        // appended approach leg would then be falsely rejected — the
+        // reroute would decline a detour that is in fact clear.
+        consider(into_param(port, dx, dy, inflate(b, BORDER_PAD)));
     }
     match best {
-        Some(t) => (port.0 + dx * (t - 1.0).max(0.0), port.1 + dy * (t - 1.0).max(0.0)),
+        Some(t) => (
+            port.0 + dx * (t - 1.0).max(0.0),
+            port.1 + dy * (t - 1.0).max(0.0),
+        ),
         None => target,
     }
 }
@@ -4631,12 +4700,7 @@ fn clamped_escape(
 /// The parameter at which the ray `port + t·(dx, dy)` first enters the
 /// rect `r`, or `None` when it never does (or starts inside it, which
 /// cannot be dodged along the ray).
-fn into_param(
-    port: (f32, f32),
-    dx: f32,
-    dy: f32,
-    r: (f32, f32, f32, f32),
-) -> Option<f32> {
+fn into_param(port: (f32, f32), dx: f32, dy: f32, r: (f32, f32, f32, f32)) -> Option<f32> {
     let (rx, ry, rw, rh) = r;
     if (rx..rx + rw).contains(&port.0) && (ry..ry + rh).contains(&port.1) {
         return None;
@@ -4649,18 +4713,18 @@ fn into_param(
         let t = if d > 0.0 { (lo - p) / d } else { (hi - p) / d };
         (t > 1e-3).then_some(t)
     };
-    [t_axis(port.0, rx, rx + rw, dx), t_axis(port.1, ry, ry + rh, dy)]
-        .into_iter()
-        .filter_map(|t| t)
-        .find(|&t| {
-            // The other coordinate must put the entry point on the rect.
-            let px = port.0 + dx * t;
-            let py = port.1 + dy * t;
-            px >= rx - 1e-2
-                && px <= rx + rw + 1e-2
-                && py >= ry - 1e-2
-                && py <= ry + rh + 1e-2
-        })
+    [
+        t_axis(port.0, rx, rx + rw, dx),
+        t_axis(port.1, ry, ry + rh, dy),
+    ]
+    .into_iter()
+    .flatten()
+    .find(|&t| {
+        // The other coordinate must put the entry point on the rect.
+        let px = port.0 + dx * t;
+        let py = port.1 + dy * t;
+        px >= rx - 1e-2 && px <= rx + rw + 1e-2 && py >= ry - 1e-2 && py <= ry + rh + 1e-2
+    })
 }
 
 /// Record the chain frames' border crossings along a stub polyline (M18):
@@ -4699,13 +4763,17 @@ fn record_chain_crossings(
 /// crossing only perpendicular), and peer occupancy carries over from the
 /// shared routing world (M16): parked peer segments are soft cost, so two
 /// edges' detours around the same sibling negotiate into distinct
-/// corridors instead of piling up.
+/// corridors instead of piling up. Every chain frame's title text is solid
+/// too (S19b): the straight stub's title detour is the M5-followup answer
+/// to a blocked descent, so the reroute must not trade it for a route
+/// that crosses a title instead.
 #[allow(clippy::too_many_arguments)]
 fn stub_world(
     end: &StubEnd,
     chain_frames: &[(f32, f32, f32, f32)],
     frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
     frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
+    frame_title: &dyn Fn(usize) -> Option<(f32, f32, f32, f32)>,
     world: &Obstacles,
 ) -> Obstacles {
     let mut obs = Obstacles::empty();
@@ -4715,6 +4783,25 @@ fn stub_world(
         .collect();
     for &s in &siblings {
         obs.push_node(s);
+    }
+    // The chain frames' title texts are solid (S19b): a rerouted leg must
+    // cross a title the straight span's detour would have avoided. The
+    // checked rect is the drawn glyphs plus the same fallback margins the
+    // detour's entry keeps ([`title_clear_gap`] past the right edge,
+    // [`TITLE_CLEAR_GAP`] before the left) — the detour clears a viewer's
+    // wider fallback font, and the reroute must not regress it. Measured
+    // title height ([`text::line_count`] lines): the drawn glyphs, no
+    // band growth (the jog band already clears the drawn text; only the
+    // glyphs themselves are the defect the reroute must not cross).
+    for &s in end.chain {
+        if let Some((tx, ty, tw, th)) = frame_title(s) {
+            obs.push_node((
+                tx - TITLE_CLEAR_GAP,
+                ty,
+                tw + title_clear_gap(tw) + TITLE_CLEAR_GAP,
+                th,
+            ));
+        }
     }
     obs.borders = border_bands(frame_rect(end.chain[0]));
     for &f in chain_frames.iter().skip(1) {
@@ -4790,11 +4877,7 @@ fn reroute_stub_span(
     // waypoint would be barred by the clearance rule, so the recording
     // must happen before the check clears it (M18's convention).
     stub = record_chain_crossings(stub, chain_frames, axis);
-    if obs.clear(&stub) {
-        Some(stub)
-    } else {
-        None
-    }
+    if obs.clear(&stub) { Some(stub) } else { None }
 }
 
 /// One endpoint's stub geometry for [`cross_boundary_path`] (M14).
@@ -4832,11 +4915,7 @@ struct StubEnd<'a> {
 /// title-detoured ends — whose title-side band transversal is its own
 /// answer — so the detour is not displaced by the very blockage it was
 /// built to answer.
-fn blocked_beyond_title(
-    end: &StubEnd,
-    rep_port: (f32, f32),
-    world: &Obstacles,
-) -> bool {
+fn blocked_beyond_title(end: &StubEnd, rep_port: (f32, f32), world: &Obstacles) -> bool {
     // Node pierced (solid — the M11/M18 pierce gate, unforced ends
     // included).
     for &r in &world.nodes {
@@ -4890,6 +4969,7 @@ fn stub_for(
     axis: FlowAxis,
     frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
     frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
+    frame_title: &dyn Fn(usize) -> Option<(f32, f32, f32, f32)>,
     world: &Obstacles,
     inward: bool,
 ) -> Vec<(f32, f32)> {
@@ -4897,7 +4977,42 @@ fn stub_for(
         return Vec::new();
     }
     if end.mismatched {
-        return mismatched_stub(end, rep_port, axis, frame_rect, inward);
+        // S19b: cover the last blind span. The mismatched stub is purely
+        // geometric (M14): its corridor ([`mismatched_rep_cross`]) is
+        // clamped clear of the node's siblings at every chain level and
+        // the chain frames' titles — but that construction knows nothing
+        // about the rest of the shared world (a peer's parked segment, a
+        // foreign node the descent pierces, a sibling frame's outline
+        // band), so for a multi-frame chain its span was blind. The same
+        // regime the straight span got (S19a): a blocked stub is rerouted
+        // through the track router against the chain-local world
+        // ([`stub_world`]); no clear route leaves the mismatched geometry
+        // standing as the kept-unconditional fallback (the bounded-ladder
+        // convention — the forced port is honored either way). A
+        // single-frame chain keeps the prior geometry unconditionally:
+        // its world is exactly the sibling/corridor facts the mismatched
+        // corridor already cleared, so checking it against the shared
+        // world adds nothing and flipping accepted geometry here would
+        // leave the M14-pinned unit expectations unreviewable.
+        let stub = mismatched_stub(end, rep_port, axis, frame_rect, inward);
+        if end.chain.len() == 1 || world.clear(&stub) {
+            return stub;
+        }
+        let chain_frames: Vec<(f32, f32, f32, f32)> =
+            end.chain.iter().map(|&s| frame_rect(s)).collect();
+        let stub_obs = stub_world(
+            end,
+            &chain_frames,
+            frame_rect,
+            frame_children,
+            frame_title,
+            world,
+        );
+        return match reroute_stub_span(end, rep_port, &stub_obs, &chain_frames, world, axis, inward)
+        {
+            Some(r) => r,
+            None => stub,
+        };
     }
     // S19b: the absorption. The straight node-to-rep span's trigger fires
     // when the span is blocked anything-wise — the sibling pierce (M11's
@@ -4923,24 +5038,37 @@ fn stub_for(
     // detoured end is what the detour cannot answer: a sibling pierced, a
     // port corridor ridden along, or an intermediate chain outline
     // grazing (bars that are not the title's).
-    let blocked = pierces || blocked_beyond_title(end, rep_port, world);
-    let fired = pierces || !world.clear(&straight);
-    let _ = blocked;
+    let fired = if detours.is_empty() {
+        // Untitled end: the S19a whole-world trigger — the straight span
+        // must clear everything the shared routing world knows about.
+        pierces || !world.clear(&straight)
+    } else {
+        // Title-detoured end: the detour's jog already answers the
+        // title-blocked descent, and its top-crossing waypoint sits on the
+        // frame's outline without an end-on-centerline leg (the crossing
+        // is confined to the middle of the descent), so the whole-world
+        // check trips on the very blockage the detour was built to
+        // answer. The trigger is what the detour cannot answer
+        // ([`blocked_beyond_title`]): a sibling pierced, a port corridor
+        // or peer segment ridden parallel along, or an outline band
+        // grazed without its designated perpendicular crossing.
+        pierces || blocked_beyond_title(end, rep_port, world)
+    };
     if !fired {
         return build_stub(
-            end.port,
-            rep_port,
-            end.cross,
-            end.chain,
-            detours,
-            axis,
-            frame_rect,
-            inward,
+            end.port, rep_port, end.cross, end.chain, detours, axis, frame_rect, inward,
         );
     }
     let chain_frames: Vec<(f32, f32, f32, f32)> =
         end.chain.iter().map(|&s| frame_rect(s)).collect();
-    let stub_obs = stub_world(end, &chain_frames, frame_rect, frame_children, world);
+    let stub_obs = stub_world(
+        end,
+        &chain_frames,
+        frame_rect,
+        frame_children,
+        frame_title,
+        world,
+    );
     match reroute_stub_span(end, rep_port, &stub_obs, &chain_frames, world, axis, inward) {
         Some(r) => r,
         // No clear detour: the bounded-ladder fallback is the straight
@@ -4948,14 +5076,7 @@ fn stub_for(
         // detour geometry (the detour is the M5-followup answer to a
         // blocked descent); untitled ends are the bare node-aligned span.
         None => build_stub(
-            end.port,
-            rep_port,
-            end.cross,
-            end.chain,
-            detours,
-            axis,
-            frame_rect,
-            inward,
+            end.port, rep_port, end.cross, end.chain, detours, axis, frame_rect, inward,
         ),
     }
 }
@@ -5051,7 +5172,9 @@ fn inner_far(
     node_side: Side,
     frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
 ) -> Option<f32> {
-    chain.first().map(|&s| side_flow_coord(frame_rect(s), node_side))
+    chain
+        .first()
+        .map(|&s| side_flow_coord(frame_rect(s), node_side))
 }
 
 /// The rep-frame crossing coordinate for a mismatched end (M14): the
@@ -5078,7 +5201,12 @@ fn mismatched_rep_cross(
     frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
     frame_title_rect: &dyn Fn(usize) -> Option<(f32, f32, f32, f32)>,
 ) -> Option<f32> {
-    let bend = mismatched_bend(port, node_side, axis, inner_far(chain, node_side, frame_rect))?;
+    let bend = mismatched_bend(
+        port,
+        node_side,
+        axis,
+        inner_far(chain, node_side, frame_rect),
+    )?;
     let (pc, _pf) = cross_flow(port, axis);
     let turn_flow = bend.turn_flow;
     // The descent's flow span: the rep border down (or up) to the turn row.
@@ -5088,7 +5216,11 @@ fn mismatched_rep_cross(
     // chain child is crossed legitimately) and the chain frames' titles.
     let mut obs: Vec<(f32, f32, f32, f32)> = Vec::new();
     for (i, &s) in chain.iter().enumerate() {
-        let inner = if i == 0 { node } else { frame_rect(chain[i - 1]) };
+        let inner = if i == 0 {
+            node
+        } else {
+            frame_rect(chain[i - 1])
+        };
         obs.extend(
             frame_children(s)
                 .into_iter()
@@ -5129,9 +5261,7 @@ fn mismatched_rep_cross(
                 if ocl - TRACK_OFF <= pc && och + TRACK_OFF >= pc {
                     // Straddles the port: no run on this side reaches it.
                     ivs.clear();
-                } else if (dir > 0 && ocl - TRACK_OFF > pc)
-                    || (dir < 0 && och + TRACK_OFF < pc)
-                {
+                } else if (dir > 0 && ocl - TRACK_OFF > pc) || (dir < 0 && och + TRACK_OFF < pc) {
                     let e = if dir > 0 {
                         (ocl - TRACK_OFF, f32::MAX / 2.0)
                     } else {
@@ -5302,8 +5432,11 @@ fn try_around_target_route(
         // border transversals it then crosses to reach the target are
         // recorded as designated waypoints.
         let out = if around_hi { 1.0 } else { -1.0 };
-        let ac = if around_hi { fb_chi + AROUND_CLEAR } else { fb_clo - AROUND_CLEAR }
-            + out * (offset as f32) * FAN_SEP;
+        let ac = if around_hi {
+            fb_chi + AROUND_CLEAR
+        } else {
+            fb_clo - AROUND_CLEAR
+        } + out * (offset as f32) * FAN_SEP;
         let node_ac = if around_hi { to_chi } else { to_clo };
         // Is the source node already clear of the frame on this side (its
         // cross-coordinate lies outside the frame's cross-span)? If so the
@@ -5312,8 +5445,14 @@ fn try_around_target_route(
         // source sits above the frame within its cross-span: drop into the
         // gap between the source and target frames, cross to the around-
         // side, then run down it to the target's flow-coordinate.
-        let outside = if around_hi { from_cc > fb_chi } else { from_cc < fb_clo };
-        let descend_to = if outside { to_fc } else {
+        let outside = if around_hi {
+            from_cc > fb_chi
+        } else {
+            from_cc < fb_clo
+        };
+        let descend_to = if outside {
+            to_fc
+        } else {
             let src_exit_flow = if from_chain.is_empty() {
                 from_ff
             } else {
@@ -5457,10 +5596,15 @@ fn cross_boundary_path(
     frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
     frame_title_width: &dyn Fn(usize) -> Option<f32>,
     frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
+    frame_title: &dyn Fn(usize) -> Option<(f32, f32, f32, f32)>,
     world: &Obstacles,
 ) -> CrossPieces {
     let axis = FlowAxis::from_direction(lca_dir);
-    let rep_from = from.chain.last().map(|&s| frame_rect(s)).unwrap_or(from.node);
+    let rep_from = from
+        .chain
+        .last()
+        .map(|&s| frame_rect(s))
+        .unwrap_or(from.node);
     let rep_to = to.chain.last().map(|&s| frame_rect(s)).unwrap_or(to.node);
     // Rep ports at the (separated) endpoint node's cross-coordinate on its
     // rep frame's facing side (M14: `frame_side` — the implicit side, so a
@@ -5523,6 +5667,7 @@ fn cross_boundary_path(
         axis,
         frame_rect,
         frame_children,
+        frame_title,
         world,
         /* inward */ false,
     );
@@ -5535,6 +5680,7 @@ fn cross_boundary_path(
         axis,
         frame_rect,
         frame_children,
+        frame_title,
         world,
         /* inward */ true,
     );
@@ -5606,11 +5752,7 @@ fn title_detours(
         x = clear;
         below_flow = side_flow_coord(f, Side::Top);
     }
-    if any_jog {
-        out
-    } else {
-        Vec::new()
-    }
+    if any_jog { out } else { Vec::new() }
 }
 
 /// Build a within-frame stub between `node_port` and `rep_port`, clipping at
@@ -5927,8 +6069,7 @@ fn longest_path(nodes: &mut [LNode], dag_edges: &[(usize, usize)]) {
         out_adj[u].push(v);
         indeg[v] += 1;
     }
-    let mut queue: std::collections::VecDeque<usize> =
-        (0..n).filter(|&i| indeg[i] == 0).collect();
+    let mut queue: std::collections::VecDeque<usize> = (0..n).filter(|&i| indeg[i] == 0).collect();
     let mut processed = 0usize;
     while let Some(u) = queue.pop_front() {
         processed += 1;
@@ -6114,8 +6255,7 @@ fn reorder_by_bary(
 ) {
     let layer = std::mem::take(&mut layers[r]);
     // (node, barycenter, current position)
-    let mut keyed: Vec<(usize, f32, usize)> =
-        Vec::with_capacity(layer.len());
+    let mut keyed: Vec<(usize, f32, usize)> = Vec::with_capacity(layer.len());
     for (i, &v) in layer.iter().enumerate() {
         let neigh = if use_upper {
             &upper_neighbors[v]
@@ -6130,8 +6270,7 @@ fn reorder_by_bary(
         keyed.push((v, bary, i));
     }
     keyed.sort_by(|a, b| {
-        a.1
-            .partial_cmp(&b.1)
+        a.1.partial_cmp(&b.1)
             .unwrap_or(std::cmp::Ordering::Equal)
             .then(a.2.cmp(&b.2))
     });
@@ -6228,11 +6367,7 @@ fn center_blocks(layers: &[Vec<usize>], upper_neighbors: &[Vec<usize>], w: &[f32
         let anchor = if parents.is_empty() {
             0.0
         } else {
-            parents
-                .iter()
-                .map(|&u| x[u] + w[u] / 2.0)
-                .sum::<f32>()
-                / parents.len() as f32
+            parents.iter().map(|&u| x[u] + w[u] / 2.0).sum::<f32>() / parents.len() as f32
         };
 
         // Block span over real (non-dummy) nodes so zero-size dummies on long
@@ -6283,10 +6418,7 @@ fn assign_y(layers: &[Vec<usize>], h: &[f32]) -> Vec<f32> {
     let mut y = vec![0.0_f32; n];
     let mut rank_y = 0.0_f32;
     for layer in layers.iter() {
-        let band = layer
-            .iter()
-            .map(|&v| h[v])
-            .fold(0.0_f32, f32::max);
+        let band = layer.iter().map(|&v| h[v]).fold(0.0_f32, f32::max);
         for &v in layer.iter() {
             y[v] = rank_y + (band - h[v]) / 2.0;
         }
@@ -6315,12 +6447,8 @@ fn normalize(
         nx[i] = x[i] - min_x + margin;
         ny[i] = y[i] - min_y + margin;
     }
-    let max_right = (0..n)
-        .map(|i| nx[i] + w[i])
-        .fold(0.0_f32, f32::max);
-    let max_bottom = (0..n)
-        .map(|i| ny[i] + h[i])
-        .fold(0.0_f32, f32::max);
+    let max_right = (0..n).map(|i| nx[i] + w[i]).fold(0.0_f32, f32::max);
+    let max_bottom = (0..n).map(|i| ny[i] + h[i]).fold(0.0_f32, f32::max);
     let canon_w = max_right + margin;
     let canon_h = max_bottom + margin;
     (nx, ny, canon_w, canon_h)
@@ -6436,7 +6564,12 @@ fn label_box(label: &str) -> (f32, f32) {
 /// The knockout rect (top-left `(x, y, w, h)` form) of a label of knockout
 /// `size` centered at `anchor`.
 fn label_rect(anchor: (f32, f32), size: (f32, f32)) -> (f32, f32, f32, f32) {
-    (anchor.0 - size.0 / 2.0, anchor.1 - size.1 / 2.0, size.0, size.1)
+    (
+        anchor.0 - size.0 / 2.0,
+        anchor.1 - size.1 / 2.0,
+        size.0,
+        size.1,
+    )
 }
 
 /// The minimum gap between two adjacent parallel runs where one of their
@@ -6583,11 +6716,7 @@ type PlacedLabel = (usize, (f32, f32, f32, f32));
 fn rect_overlap_area(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> f32 {
     let w = (a.0 + a.2).min(b.0 + b.2) - a.0.max(b.0);
     let h = (a.1 + a.3).min(b.1 + b.3) - a.1.max(b.1);
-    if w > 0.0 && h > 0.0 {
-        w * h
-    } else {
-        0.0
-    }
+    if w > 0.0 && h > 0.0 { w * h } else { 0.0 }
 }
 
 /// The length of the segment `p0`→`p1` hidden inside rect `r` — what a
@@ -6672,8 +6801,14 @@ fn label_candidates(points: &[(f32, f32)], size: (f32, f32)) -> Vec<((f32, f32),
             let d = perp / 2.0 - LABEL_ON_LINE;
             if d > 0.5 {
                 let n = (-uy, ux);
-                push_unique(&mut out, ((p.0 + n.0 * d, p.1 + n.1 * d), tap_cost + OFFSET_W));
-                push_unique(&mut out, ((p.0 - n.0 * d, p.1 - n.1 * d), tap_cost + OFFSET_W));
+                push_unique(
+                    &mut out,
+                    ((p.0 + n.0 * d, p.1 + n.1 * d), tap_cost + OFFSET_W),
+                );
+                push_unique(
+                    &mut out,
+                    ((p.0 - n.0 * d, p.1 - n.1 * d), tap_cost + OFFSET_W),
+                );
             }
         }
     }
@@ -6685,7 +6820,7 @@ fn label_candidates(points: &[(f32, f32)], size: (f32, f32)) -> Vec<((f32, f32),
 fn push_unique(out: &mut Vec<((f32, f32), f32)>, c: ((f32, f32), f32)) {
     if out
         .iter()
-        .any(|(p, _)| (p.0 - c.0 .0).abs() < 1e-3 && (p.1 - c.0 .1).abs() < 1e-3)
+        .any(|(p, _)| (p.0 - c.0.0).abs() < 1e-3 && (p.1 - c.0.1).abs() < 1e-3)
     {
         return;
     }
@@ -6761,7 +6896,11 @@ fn best_label_anchor(
             None => true,
         };
         if better {
-            best = Some(LabelChoice { anchor, pref, total });
+            best = Some(LabelChoice {
+                anchor,
+                pref,
+                total,
+            });
         }
     }
     best
@@ -6811,13 +6950,12 @@ fn place_labels(
     for ei in 0..labels.len() {
         let Some(label) = labels[ei] else { continue };
         let size = label_box(label);
-        let choice = best_label_anchor(&paths[ei], size, ei, paths, world, &placed).unwrap_or(
-            LabelChoice {
+        let choice =
+            best_label_anchor(&paths[ei], size, ei, paths, world, &placed).unwrap_or(LabelChoice {
                 anchor: fallback_label_anchor(&paths[ei]),
                 pref: 0.0,
                 total: 0.0,
-            },
-        );
+            });
         anchors[ei] = Some(choice.anchor);
         prefs[ei] = choice.pref;
         placed.push((ei, label_rect(choice.anchor, size)));
@@ -6826,8 +6964,7 @@ fn place_labels(
         let Some(label) = labels[ei] else { continue };
         let size = label_box(label);
         let Some(cur) = anchors[ei] else { continue };
-        let others: Vec<PlacedLabel> =
-            placed.iter().filter(|(j, _)| *j != ei).cloned().collect();
+        let others: Vec<PlacedLabel> = placed.iter().filter(|(j, _)| *j != ei).cloned().collect();
         let cur_total = label_cost(label_rect(cur, size), ei, paths, world, &others) + prefs[ei];
         if let Some(ch) = best_label_anchor(&paths[ei], size, ei, paths, world, &others)
             && ch.total < cur_total - 1e-3
@@ -6895,20 +7032,14 @@ mod tests {
     fn overlaps(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
         let (ax, ay, aw, ah) = a;
         let (bx, by, bw, bh) = b;
-        ax < bx + bw - 1e-3
-            && bx < ax + aw - 1e-3
-            && ay < by + bh - 1e-3
-            && by < ay + ah - 1e-3
+        ax < bx + bw - 1e-3 && bx < ax + aw - 1e-3 && ay < by + bh - 1e-3 && by < ay + ah - 1e-3
     }
 
     /// `b` fully contains `a` (with a tiny epsilon).
     fn contains(outer: (f32, f32, f32, f32), inner: (f32, f32, f32, f32)) -> bool {
         let (ox, oy, ow, oh) = outer;
         let (ix, iy, iw, ih) = inner;
-        ix >= ox - 1e-3
-            && iy >= oy - 1e-3
-            && ix + iw <= ox + ow + 1e-3
-            && iy + ih <= oy + oh + 1e-3
+        ix >= ox - 1e-3 && iy >= oy - 1e-3 && ix + iw <= ox + ow + 1e-3 && iy + ih <= oy + oh + 1e-3
     }
 
     /// Assert no two *real* node rectangles overlap.
@@ -6918,10 +7049,7 @@ mod tests {
                 let a = &l.nodes[i];
                 let b = &l.nodes[j];
                 assert!(
-                    !overlaps(
-                        (a.x, a.y, a.w, a.h),
-                        (b.x, b.y, b.w, b.h),
-                    ),
+                    !overlaps((a.x, a.y, a.w, a.h), (b.x, b.y, b.w, b.h),),
                     "overlap between {} and {}",
                     a.id,
                     b.id
@@ -6940,7 +7068,12 @@ mod tests {
                 assert!(px.is_finite() && py.is_finite());
             }
             if let Some((ax, ay)) = e.label_at {
-                assert!(ax.is_finite() && ay.is_finite(), "{}->{} label anchor", e.from, e.to);
+                assert!(
+                    ax.is_finite() && ay.is_finite(),
+                    "{}->{} label anchor",
+                    e.from,
+                    e.to
+                );
             }
         }
         for s in &l.groups {
@@ -6966,15 +7099,29 @@ mod tests {
         let (d, l) = lay_final(include_str!("../examples/subdirection.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
-        nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
+        nodes.sort_by(|a, b| {
+            a.y.partial_cmp(&b.y)
+                .unwrap()
+                .then(a.x.partial_cmp(&b.x).unwrap())
+        });
         for n in &nodes {
-            println!("  {:<14} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
+            println!(
+                "  {:<14} x={:7.1} y={:7.1} w={:5.1} h={:5.1}",
+                n.id, n.x, n.y, n.w, n.h
+            );
         }
         for s in &l.groups {
-            println!("  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h);
+            println!(
+                "  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}",
+                s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h
+            );
         }
         for e in &l.edges {
-            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+            let pts: Vec<String> = e
+                .points
+                .iter()
+                .map(|(x, y)| format!("({:.1},{:.1})", x, y))
+                .collect();
             println!("  {:<8} -> {:<8} : {}", e.from, e.to, pts.join(" "));
         }
     }
@@ -6989,15 +7136,29 @@ mod tests {
         });
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
-        nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
+        nodes.sort_by(|a, b| {
+            a.y.partial_cmp(&b.y)
+                .unwrap()
+                .then(a.x.partial_cmp(&b.x).unwrap())
+        });
         for n in &nodes {
-            println!("  {:<14} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
+            println!(
+                "  {:<14} x={:7.1} y={:7.1} w={:5.1} h={:5.1}",
+                n.id, n.x, n.y, n.w, n.h
+            );
         }
         for s in &l.groups {
-            println!("  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h);
+            println!(
+                "  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}",
+                s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h
+            );
         }
         for e in &l.edges {
-            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+            let pts: Vec<String> = e
+                .points
+                .iter()
+                .map(|(x, y)| format!("({:.1},{:.1})", x, y))
+                .collect();
             println!("  {:<8} -> {:<8} : {}", e.from, e.to, pts.join(" "));
         }
     }
@@ -7006,7 +7167,11 @@ mod tests {
     fn every_node_has_a_rect() {
         let (d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         for n in &d.nodes {
-            assert!(l.nodes.iter().any(|r| r.id == n.id), "missing rect for {}", n.id);
+            assert!(
+                l.nodes.iter().any(|r| r.id == n.id),
+                "missing rect for {}",
+                n.id
+            );
         }
     }
 
@@ -7033,7 +7198,10 @@ mod tests {
         let x0 = cx(&l.nodes[0]);
         assert!(l.nodes.iter().all(|n| (cx(n) - x0).abs() < 1e-3));
         let ys: Vec<f32> = l.nodes.iter().map(|n| n.y).collect();
-        assert!(ys[0] < ys[1] && ys[1] < ys[2], "expected top-to-bottom order {ys:?}");
+        assert!(
+            ys[0] < ys[1] && ys[1] < ys[2],
+            "expected top-to-bottom order {ys:?}"
+        );
     }
 
     #[test]
@@ -7046,7 +7214,10 @@ mod tests {
         let y0 = l.nodes[0].y;
         assert!(l.nodes.iter().all(|n| (n.y - y0).abs() < 1e-3));
         let xs: Vec<f32> = l.nodes.iter().map(|n| n.x).collect();
-        assert!(xs[0] < xs[1] && xs[1] < xs[2], "expected left-to-right order {xs:?}");
+        assert!(
+            xs[0] < xs[1] && xs[1] < xs[2],
+            "expected left-to-right order {xs:?}"
+        );
     }
 
     #[test]
@@ -7120,10 +7291,16 @@ mod tests {
         let e = edge_path(&l, "alpha", "beta");
         let (p0, p1) = (e.points[0], *e.points.last().unwrap());
         // Start on alpha's right edge, at its vertical center.
-        assert!((p0.0 - (a.x + a.w)).abs() < 1e-2, "start not on alpha's right: {p0:?} a={a:?}");
+        assert!(
+            (p0.0 - (a.x + a.w)).abs() < 1e-2,
+            "start not on alpha's right: {p0:?} a={a:?}"
+        );
         assert!((p0.1 - (a.y + a.h / 2.0)).abs() < 1e-2);
         // End on beta's left edge, at its vertical center.
-        assert!((p1.0 - b.x).abs() < 1e-2, "end not on beta's left: {p1:?} b={b:?}");
+        assert!(
+            (p1.0 - b.x).abs() < 1e-2,
+            "end not on beta's left: {p1:?} b={b:?}"
+        );
         assert!((p1.1 - (b.y + b.h / 2.0)).abs() < 1e-2);
     }
 
@@ -7218,10 +7395,16 @@ mod tests {
         // bottom (largest y).
         let a_td = node_rect(&l_td, "a");
         let a_bu = node_rect(&l_bu, "a");
-        assert!(a_td.y < a_bu.y, "a should be higher in top-down than bottom-up");
+        assert!(
+            a_td.y < a_bu.y,
+            "a should be higher in top-down than bottom-up"
+        );
         let c_td = node_rect(&l_td, "c");
         let c_bu = node_rect(&l_bu, "c");
-        assert!(c_bu.y < c_td.y, "c should be lower in bottom-up than top-down");
+        assert!(
+            c_bu.y < c_td.y,
+            "c should be lower in bottom-up than top-down"
+        );
     }
 
     #[test]
@@ -7245,10 +7428,16 @@ mod tests {
         let e = edge_path(&l, "a", "b");
         let (p0, p1) = (e.points[0], e.points[1]);
         // First point on a's bottom edge, at its horizontal center.
-        assert!((p0.1 - (a.y + a.h)).abs() < 1e-2, "start not on a's bottom: {p0:?} a={a:?}");
+        assert!(
+            (p0.1 - (a.y + a.h)).abs() < 1e-2,
+            "start not on a's bottom: {p0:?} a={a:?}"
+        );
         assert!((p0.0 - (a.x + a.w / 2.0)).abs() < 1e-2);
         // Last point on b's top edge, at its horizontal center.
-        assert!((p1.1 - b.y).abs() < 1e-2, "end not on b's top: {p1:?} b={b:?}");
+        assert!(
+            (p1.1 - b.y).abs() < 1e-2,
+            "end not on b's top: {p1:?} b={b:?}"
+        );
         assert!((p1.0 - (b.x + b.w / 2.0)).abs() < 1e-2);
     }
 
@@ -7265,7 +7454,10 @@ mod tests {
         );
         let box_h = node_rect(&l, "box").h;
         let cyl_h = node_rect(&l, "cyl").h;
-        assert!(cyl_h > box_h, "cylinder ({cyl_h}) should be taller than box ({box_h})");
+        assert!(
+            cyl_h > box_h,
+            "cylinder ({cyl_h}) should be taller than box ({box_h})"
+        );
         // Concretely: box = 3·FONT_SIZE = 42; cylinder adds 2·CYL_PAD + 2·CYL_RY.
         assert_eq!(box_h, 42.0);
         assert_eq!(cyl_h, 42.0 + 2.0 * CYL_PAD + 2.0 * CYL_RY);
@@ -7274,7 +7466,10 @@ mod tests {
         let cy = r.y + r.h / 2.0;
         let glyph_top = cy - FONT_SIZE / 2.0;
         let lid_bottom = r.y + 2.0 * CYL_RY;
-        assert!(glyph_top >= lid_bottom + 3.0, "label would collide with lid");
+        assert!(
+            glyph_top >= lid_bottom + 3.0,
+            "label would collide with lid"
+        );
         assert_all_finite(&l);
         assert_no_overlaps(&l);
         let _ = Shape::Cylinder;
@@ -7409,7 +7604,10 @@ mod tests {
         assert_eq!(d.groups[0].title.as_deref(), Some("Outer"));
         assert_eq!(d.groups[1].title.as_deref(), Some("Inner"));
         assert!(
-            contains((outer.x, outer.y, outer.w, outer.h), (inner.x, inner.y, inner.w, inner.h)),
+            contains(
+                (outer.x, outer.y, outer.w, outer.h),
+                (inner.x, inner.y, inner.w, inner.h)
+            ),
             "inner frame not inside outer frame"
         );
         let a = node_rect(&l, "a");
@@ -7437,7 +7635,10 @@ mod tests {
         let b = node_rect(&l, "b");
         // left-right ⇒ ranks flow along x, so the two isolated members are
         // side by side ⇒ distinct x, same y-center.
-        assert!(a.x < b.x, "members should run horizontally under left-right");
+        assert!(
+            a.x < b.x,
+            "members should run horizontally under left-right"
+        );
         assert!(((a.y + a.h / 2.0) - (b.y + b.h / 2.0)).abs() < 1e-2);
     }
 
@@ -7465,13 +7666,19 @@ mod tests {
             node_rect(&l_td, "b"),
             node_rect(&l_td, "c"),
         );
-        assert!(a_td.y < b_td.y && b_td.y < c_td.y, "top-down group should stack vertically");
+        assert!(
+            a_td.y < b_td.y && b_td.y < c_td.y,
+            "top-down group should stack vertically"
+        );
         let (a_lr, b_lr, c_lr) = (
             node_rect(&l_lr, "a"),
             node_rect(&l_lr, "b"),
             node_rect(&l_lr, "c"),
         );
-        assert!(a_lr.x < b_lr.x && b_lr.x < c_lr.x, "left-right group should run horizontally");
+        assert!(
+            a_lr.x < b_lr.x && b_lr.x < c_lr.x,
+            "left-right group should run horizontally"
+        );
 
         // The frame aspect ratio flips between the two.
         assert!(
@@ -7534,12 +7741,18 @@ mod tests {
             || (p0.0 - (lb.x + lb.w)).abs() < 1e-2
             || (p0.1 - lb.y).abs() < 1e-2
             || (p0.1 - (lb.y + lb.h)).abs() < 1e-2;
-        assert!(on_lb, "cross-boundary edge start not on lb's boundary: {p0:?}");
+        assert!(
+            on_lb,
+            "cross-boundary edge start not on lb's boundary: {p0:?}"
+        );
         let on_api = (p1.0 - api.x).abs() < 1e-2
             || (p1.0 - (api.x + api.w)).abs() < 1e-2
             || (p1.1 - api.y).abs() < 1e-2
             || (p1.1 - (api.y + api.h)).abs() < 1e-2;
-        assert!(on_api, "cross-boundary edge end not on api's boundary: {p1:?}");
+        assert!(
+            on_api,
+            "cross-boundary edge end not on api's boundary: {p1:?}"
+        );
     }
 
     #[test]
@@ -7582,7 +7795,10 @@ mod tests {
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let c = node_rect(&l, "c");
-        assert!(a.x < b.x && b.x < c.x, "left-right group chain must stay horizontal");
+        assert!(
+            a.x < b.x && b.x < c.x,
+            "left-right group chain must stay horizontal"
+        );
         assert_all_finite(&l);
         assert_no_overlaps(&l);
         // Both cross-boundary edges render.
@@ -7625,7 +7841,10 @@ mod tests {
         assert_eq!(l.groups.len(), 1);
         let f = sub_rect(&l, 0);
         assert_eq!(d.groups[0].title.as_deref(), Some("Empty"));
-        assert!(f.w > 0.0 && f.h > 0.0, "empty group should still have a visible frame");
+        assert!(
+            f.w > 0.0 && f.h > 0.0,
+            "empty group should still have a visible frame"
+        );
     }
 
     // ================= M5 — cross-boundary frame routing =================
@@ -7644,11 +7863,7 @@ mod tests {
 
     /// Does segment `p0`→`p1` intersect the closed axis-aligned rect `r`?
     /// (Liang–Barsky line clipping.)
-    fn segment_intersects_rect(
-        p0: (f32, f32),
-        p1: (f32, f32),
-        r: (f32, f32, f32, f32),
-    ) -> bool {
+    fn segment_intersects_rect(p0: (f32, f32), p1: (f32, f32), r: (f32, f32, f32, f32)) -> bool {
         let (x0, y0) = p0;
         let (x1, y1) = p1;
         let (rx, ry, rw, rh) = r;
@@ -7702,13 +7917,15 @@ mod tests {
         // route through a connection point on S's frame rather than piercing
         // it. With lb above S (top-down), the connection point is on S's top
         // edge, at S's center-x (the representative's port).
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 lb
 group "S"
 api
 end
 lb --> api
-"#);
+"#,
+        );
         let e = edge_path(&l, "lb", "api");
         assert_eq!(
             e.points.len(),
@@ -7720,7 +7937,10 @@ lb --> api
         let api = node_rect(&l, "api");
         let s = sub_rect(&l, 0);
         // First point: lb's bottom-center (exit side, facing S below).
-        assert!((e.points[0].1 - (lb.y + lb.h)).abs() < 1e-2, "start not on lb's bottom");
+        assert!(
+            (e.points[0].1 - (lb.y + lb.h)).abs() < 1e-2,
+            "start not on lb's bottom"
+        );
         assert!((e.points[0].0 - (lb.x + lb.w / 2.0)).abs() < 1e-2);
         // Middle point: a connection point on S's top edge at S's center-x.
         assert!(
@@ -7729,8 +7949,14 @@ lb --> api
             e.points[1],
             s
         );
-        assert!((e.points[1].1 - s.y).abs() < 1e-2, "connection point not on S's top edge");
-        assert!((e.points[1].0 - (s.x + s.w / 2.0)).abs() < 1e-2, "connection point not at S's center-x");
+        assert!(
+            (e.points[1].1 - s.y).abs() < 1e-2,
+            "connection point not on S's top edge"
+        );
+        assert!(
+            (e.points[1].0 - (s.x + s.w / 2.0)).abs() < 1e-2,
+            "connection point not at S's center-x"
+        );
         // Last point: api's top-center (entry side).
         assert!((e.points[2].1 - api.y).abs() < 1e-2, "end not on api's top");
         assert!((e.points[2].0 - (api.x + api.w / 2.0)).abs() < 1e-2);
@@ -7741,7 +7967,8 @@ lb --> api
         // a (in A) -> b (in B): both endpoints are inside frames. The path
         // runs a port -> A port -> B port -> b port, with a connection point
         // on each frame.
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 group "A"
 a
 end
@@ -7749,7 +7976,8 @@ group "B"
 b
 end
 a --> b
-"#);
+"#,
+        );
         let e = edge_path(&l, "a", "b");
         assert_eq!(
             e.points.len(),
@@ -7760,10 +7988,16 @@ a --> b
         let a_frame = sub_rect(&l, 0);
         let b_frame = sub_rect(&l, 1);
         // A's connection point: on A's bottom edge (A is above B), at A's center-x.
-        assert!((e.points[1].1 - (a_frame.y + a_frame.h)).abs() < 1e-2, "A port not on A's bottom");
+        assert!(
+            (e.points[1].1 - (a_frame.y + a_frame.h)).abs() < 1e-2,
+            "A port not on A's bottom"
+        );
         assert!((e.points[1].0 - (a_frame.x + a_frame.w / 2.0)).abs() < 1e-2);
         // B's connection point: on B's top edge, at B's center-x.
-        assert!((e.points[2].1 - b_frame.y).abs() < 1e-2, "B port not on B's top");
+        assert!(
+            (e.points[2].1 - b_frame.y).abs() < 1e-2,
+            "B port not on B's top"
+        );
         assert!((e.points[2].0 - (b_frame.x + b_frame.w / 2.0)).abs() < 1e-2);
         assert!(on_boundary(sub_rect_of(a_frame), e.points[1]));
         assert!(on_boundary(sub_rect_of(b_frame), e.points[2]));
@@ -7774,7 +8008,8 @@ a --> b
         // The headline M5 guarantee: a group's own direction is kept even
         // when edges cross its frame, AND those edges route through frame
         // connection points rather than piercing the frame.
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 src
 sink
 group left-right "S"
@@ -7782,21 +8017,31 @@ a --> b --> c
 end
 src --> a
 c --> sink
-"#);
+"#,
+        );
         // Per-group direction preserved: the chain stays horizontal.
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let c = node_rect(&l, "c");
-        assert!(a.x < b.x && b.x < c.x, "left-right group chain must stay horizontal");
+        assert!(
+            a.x < b.x && b.x < c.x,
+            "left-right group chain must stay horizontal"
+        );
         // Both cross-boundary edges route through S frame connection points.
         let s = sub_rect(&l, 0);
         let s_rect = sub_rect_of(s);
         assert!(
-            edge_path(&l, "src", "a").points.iter().any(|&p| on_boundary(s_rect, p)),
+            edge_path(&l, "src", "a")
+                .points
+                .iter()
+                .any(|&p| on_boundary(s_rect, p)),
             "src->a should have a connection point on S's frame"
         );
         assert!(
-            edge_path(&l, "c", "sink").points.iter().any(|&p| on_boundary(s_rect, p)),
+            edge_path(&l, "c", "sink")
+                .points
+                .iter()
+                .any(|&p| on_boundary(s_rect, p)),
             "c->sink should have a connection point on S's frame"
         );
         assert_all_finite(&l);
@@ -7823,7 +8068,10 @@ c --> sink
         let api2 = node_rect(&l, "api2");
         let k8s = sub_rect(&l, 0);
         let e = edge_path(&l, "api2", "db");
-        assert!(e.points.len() >= 3, "api2->db should route through K8s's frame");
+        assert!(
+            e.points.len() >= 3,
+            "api2->db should route through K8s's frame"
+        );
         // The K8s frame connection point: on K8s's bottom edge, aligned with
         // api2 (within its x-span — the rep port lines up with the node, not
         // the frame center; M9 may fan it off the exact centre when api2 has
@@ -7930,13 +8178,15 @@ c --> sink
         // enters b from the side — the case where the source node is NOT
         // already clear of the frame on one side (it sits above the frame
         // within the frame's cross-span), so the route takes a gap jog first.
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 src
 group top-down "S"
 a --> b
 end
 src --> b
-"#);
+"#,
+        );
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let e = edge_path(&l, "src", "b");
@@ -7972,7 +8222,8 @@ src --> b
         // ext (top-level) -> inner (inside Inner inside Outer): a cross-
         // boundary edge crossing two nested frames. It must record a
         // connection point on each frame it passes through.
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 ext
 group "Outer"
 group "Inner"
@@ -7980,7 +8231,8 @@ inner
 end
 end
 ext --> inner
-"#);
+"#,
+        );
         let e = edge_path(&l, "ext", "inner");
         assert!(
             e.points.len() >= 4,
@@ -8005,12 +8257,7 @@ ext --> inner
     /// Do two axis-aligned segments conflict the way sibling routes must
     /// not: a perpendicular crossing, or a parallel run closer than
     /// [`SEGMENT_OBSTACLE_PAD`] over a shared span (collinear riding).
-    fn segments_conflict(
-        a0: (f32, f32),
-        a1: (f32, f32),
-        b0: (f32, f32),
-        b1: (f32, f32),
-    ) -> bool {
+    fn segments_conflict(a0: (f32, f32), a1: (f32, f32), b0: (f32, f32), b1: (f32, f32)) -> bool {
         let overlaps = |a0: f32, a1: f32, b0: f32, b1: f32| {
             let (alo, ahi) = (a0.min(a1), a0.max(a1));
             let (blo, bhi) = (b0.min(b1), b0.max(b1));
@@ -8035,9 +8282,9 @@ ext --> inner
             } else {
                 ((a0, a1), (b0, b1))
             };
-            let cross = v.0 .0;
-            let row = h.0 .1;
-            overlaps(h.0 .0, h.1 .0, cross, cross) && overlaps(v.0 .1, v.1 .1, row, row)
+            let cross = v.0.0;
+            let row = h.0.1;
+            overlaps(h.0.0, h.1.0, cross, cross) && overlaps(v.0.1, v.1.1, row, row)
         }
     }
 
@@ -8047,7 +8294,8 @@ ext --> inner
         // lb sitting under both titles' spans. The stub must enter each
         // frame beside its title and jog below it — no edge segment may
         // touch either title text (the cluster.dgmr user --> lb shape).
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 ext
 group "Outer"
 group "Application"
@@ -8055,7 +8303,8 @@ lb
 end
 end
 ext --> lb
-"#);
+"#,
+        );
         let e = edge_path(&l, "ext", "lb");
         let outer = sub_rect(&l, 0);
         let app = sub_rect(&l, 1);
@@ -8071,7 +8320,10 @@ ext --> lb
             }
         }
         // Both frames still record their border crossings.
-        for (name, r) in [("Outer", sub_rect_of(outer)), ("Application", sub_rect_of(app))] {
+        for (name, r) in [
+            ("Outer", sub_rect_of(outer)),
+            ("Application", sub_rect_of(app)),
+        ] {
             assert!(
                 e.points.iter().any(|&p| on_boundary(r, p)),
                 "no waypoint on {name}'s frame: {:?}",
@@ -8091,7 +8343,8 @@ ext --> lb
         // otherwise lb->n1 crosses lb->n2's source run and then lies almost
         // on top of it. No two of the three routes may cross, and no two
         // may run parallel within the riding pad.
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 user
 group left-right
 group "Application"
@@ -8111,7 +8364,8 @@ lb --> n2
 lb --> n3
 n1 -- dotted --> n2 -- dotted --> n3
 n3 -- dotted --> n2 -- dotted --> n1
-"#);
+"#,
+        );
         let es: Vec<&EdgePath> = ["n1", "n2", "n3"]
             .iter()
             .map(|t| edge_path(&l, "lb", t))
@@ -8146,18 +8400,22 @@ n3 -- dotted --> n2 -- dotted --> n1
         // the default frame geometry. Both diagrams here hold the *same*
         // single-node content inside "S", so the only difference is the extra
         // padding.
-        let with = lay_final(r#"diagram top-down
+        let with = lay_final(
+            r#"diagram top-down
 src
 group "S"
 a
 end
 src --> a
-"#);
-        let without = lay_final(r#"diagram top-down
+"#,
+        );
+        let without = lay_final(
+            r#"diagram top-down
 group "S"
 a
 end
-"#);
+"#,
+        );
         let f_with = sub_rect(&with.1, 0);
         let f_without = sub_rect(&without.1, 0);
         // The cross-boundary group is exactly 2*CROSS_FRAME_PAD taller
@@ -8198,20 +8456,24 @@ end
         // but with a two-line title: the title band itself grows by one title
         // line height *before* the cross-boundary padding, so the stub's jog
         // still lands below the whole title.
-        let one_line = lay_final(r#"diagram top-down
+        let one_line = lay_final(
+            r#"diagram top-down
 src
 group "Kubernetes Cluster"
 a
 end
 src --> a
-"#);
-        let two_lines = lay_final(r#"diagram top-down
+"#,
+        );
+        let two_lines = lay_final(
+            r#"diagram top-down
 src
 group "Kubernetes\nCluster"
 a
 end
 src --> a
-"#);
+"#,
+        );
         let f1 = sub_rect(&one_line.1, 0);
         let f2 = sub_rect(&two_lines.1, 0);
         let extra = text::line_height(FRAME_TITLE_FONT_SIZE);
@@ -8260,13 +8522,15 @@ src --> a
         // the stub detours past the title and jogs across to the node below it.
         // (A node already clear of the title would route straight, with no jog
         // to check.)
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 src
 group left-right "Services"
 a --> b
 end
 src --> a
-"#);
+"#,
+        );
         let a = node_rect(&l, "a");
         let s = sub_rect(&l, 0);
         let e = edge_path(&l, "src", "a");
@@ -8274,13 +8538,17 @@ src --> a
         // the frame top and the node top).
         let mut jog_y: Option<f32> = None;
         for w in e.points.windows(2) {
-            if (w[0].1 - w[1].1).abs() < 1e-2 && (w[0].0 - w[1].0).abs() > 1e-2
-                && w[0].1 > s.y && w[0].1 < a.y {
-                    jog_y = Some(w[0].1);
-                    break;
-                }
+            if (w[0].1 - w[1].1).abs() < 1e-2
+                && (w[0].0 - w[1].0).abs() > 1e-2
+                && w[0].1 > s.y
+                && w[0].1 < a.y
+            {
+                jog_y = Some(w[0].1);
+                break;
+            }
         }
         let jog_y = jog_y.expect("no within-frame horizontal jog on src->a");
+
         // The jog is exactly STUB_JOG_CLEARANCE above the node.
         assert!((jog_y - (a.y - STUB_JOG_CLEARANCE)).abs() < 1e-2);
         // STUB_JOG_CLEARANCE exceeds the arrowhead's back-extent (the render
@@ -8300,7 +8568,11 @@ src --> a
             "jog {jog_y:.2} inside the title-inset band (should be at or below {:.2})",
             s.y + FRAME_TITLE_H
         );
-        assert!(jog_y < a.y, "jog {jog_y:.2} not above the node top {:.2}", a.y);
+        assert!(
+            jog_y < a.y,
+            "jog {jog_y:.2} not above the node top {:.2}",
+            a.y
+        );
     }
 
     // ================= M10 — title-detour robustness =================
@@ -8313,9 +8585,14 @@ src --> a
         // fixed gap would be eaten (short titles touched, long ones
         // crossed).
         let short = title_clear_gap(text::measure("S", FRAME_TITLE_FONT_SIZE).width);
-        let long = title_clear_gap(text::measure("A Very Long Group Title Indeed", FRAME_TITLE_FONT_SIZE).width);
+        let long = title_clear_gap(
+            text::measure("A Very Long Group Title Indeed", FRAME_TITLE_FONT_SIZE).width,
+        );
         assert!(short > TITLE_CLEAR_GAP, "fixed bump missing: {short}");
-        assert!(long > short, "length-derived component missing: {long} vs {short}");
+        assert!(
+            long > short,
+            "length-derived component missing: {long} vs {short}"
+        );
         assert!(
             long - short > 0.05 * (long_width_hint()),
             "per-length component too small: {long} vs {short}"
@@ -8329,12 +8606,14 @@ src --> a
         // the fallback-safe right margin — a viewer whose font stack
         // resolves wider than the measured face must not spill the title out
         // of the frame (the "Kubernetes Node Group" shape).
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 group "Kubernetes Node Group"
 n1
 n2
 n3
-end"#);
+end"#,
+        );
         let s = sub_rect(&l, 0);
         let tw = text::measure("Kubernetes Node Group", FRAME_TITLE_FONT_SIZE).width;
         let need = FRAME_TITLE_X + tw + title_clear_gap(tw);
@@ -8358,13 +8637,15 @@ end"#);
     /// the title (the child is too narrow to widen it), and `a` sits under
     /// the title's left half — the shape of the M10 left-side detour.
     fn left_detour_setup() -> (crate::ast::Diagram, Layout) {
-        lay_final(r#"diagram top-down
+        lay_final(
+            r#"diagram top-down
 src
 group "A Very Long Group Title Indeed"
 a
 end
 src --> a
-"#)
+"#,
+        )
     }
 
     /// The `x` at which the `src -> a` edge crosses the frame's top edge.
@@ -8381,12 +8662,7 @@ src --> a
     /// [`FRAME_TITLE_X`], the measured width wide, glyph height tall).
     fn title_rect(s: &GroupRect, title: &str) -> (f32, f32, f32, f32) {
         let tw = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
-        (
-            s.x + FRAME_TITLE_X,
-            s.y + 2.0,
-            tw,
-            FRAME_TITLE_H - 6.0,
-        )
+        (s.x + FRAME_TITLE_X, s.y + 2.0, tw, FRAME_TITLE_H - 6.0)
     }
 
     #[test]
@@ -8414,7 +8690,11 @@ src --> a
         // geometry — the title width plus the fallback-safe right margin
         // (`title_clear_gap`) every titled frame gets.
         let natural = (FRAME_TITLE_X + tw + title_clear_gap(tw)).max(a.w + 2.0 * FRAME_PAD_X);
-        assert!((s.w - natural).abs() < 1e-2, "frame grew unnecessarily: {}", s.w);
+        assert!(
+            (s.w - natural).abs() < 1e-2,
+            "frame grew unnecessarily: {}",
+            s.w
+        );
         // The entry is left of the title, TITLE_CLEAR_GAP past its first
         // glyph.
         let entry_x = frame_top_entry_x(&l, s, "a");
@@ -8444,14 +8724,16 @@ src --> a
         // the title. Now the frame grows sideways so the entry past the
         // title exists; growing keeps the children anchored at the left/top
         // insets, so the group's internal arrangement is untouched.
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 src
 group left-right "A Very Long Group Title Indeed"
 a
 b
 end
 src --> b
-"#);
+"#,
+        );
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let s = sub_rect(&l, 0);
@@ -8472,7 +8754,10 @@ src --> b
             s.w,
             need
         );
-        assert!(s.w > tw + 2.0 * FRAME_TITLE_X, "frame not grown past natural");
+        assert!(
+            s.w > tw + 2.0 * FRAME_TITLE_X,
+            "frame not grown past natural"
+        );
         // The entry sits past the title's right edge by the fallback-safe
         // gap — not clamped inside the title as before.
         let entry_x = frame_top_entry_x(&l, s, "b");
@@ -8618,9 +8903,15 @@ src --> b
         let lb = node_rect(&l, "lb");
         let k8s = sub_rect(&l, 0);
         let web_c = cx(web);
-        assert!((cx(lb) - web_c).abs() < 1e-2, "Load Balancer not aligned with Web Server");
+        assert!(
+            (cx(lb) - web_c).abs() < 1e-2,
+            "Load Balancer not aligned with Web Server"
+        );
         let k8s_c = k8s.x + k8s.w / 2.0;
-        assert!((k8s_c - web_c).abs() < 1e-2, "K8s cluster frame not aligned with Web/LB");
+        assert!(
+            (k8s_c - web_c).abs() < 1e-2,
+            "K8s cluster frame not aligned with Web/LB"
+        );
     }
 
     #[test]
@@ -8649,7 +8940,10 @@ src --> b
         let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         let db = node_rect(&l, "db");
         let replica = node_rect(&l, "replica");
-        assert!((cx(replica) - cx(db)).abs() < 1e-2, "Replica not aligned under Postgres");
+        assert!(
+            (cx(replica) - cx(db)).abs() < 1e-2,
+            "Replica not aligned under Postgres"
+        );
     }
 
     // ================= M7 — orthogonal edge routing =================
@@ -8679,7 +8973,10 @@ src --> b
             ("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n", "diamond"),
             ("diagram top-down\na-->b\nb-->a\n", "cycle"),
             (include_str!("../examples/infra.dgmr"), "infra"),
-            (include_str!("../examples/subdirection.dgmr"), "subdirection"),
+            (
+                include_str!("../examples/subdirection.dgmr"),
+                "subdirection",
+            ),
             (
                 "diagram top-down\n\
                  src\n\
@@ -8716,8 +9013,16 @@ src --> b
         let (_d, l) = lay_final("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
         for (from, to) in [("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")] {
             let e = edge_path(&l, from, to);
-            assert!(e.points.len() > 2, "{from}->{to} should have bends: {:?}", e.points);
-            assert!(is_orthogonal(&e.points), "{from}->{to} not orthogonal: {:?}", e.points);
+            assert!(
+                e.points.len() > 2,
+                "{from}->{to} should have bends: {:?}",
+                e.points
+            );
+            assert!(
+                is_orthogonal(&e.points),
+                "{from}->{to} not orthogonal: {:?}",
+                e.points
+            );
         }
     }
 
@@ -8786,11 +9091,14 @@ src --> b
         // frame top and the node top.
         let mut jog_y: Option<f32> = None;
         for w in e.points.windows(2) {
-            if (w[0].1 - w[1].1).abs() < 1e-2 && (w[0].0 - w[1].0).abs() > 1e-2
-                && w[0].1 > k8s.y && w[0].1 < api1.y {
-                    jog_y = Some(w[0].1);
-                    break;
-                }
+            if (w[0].1 - w[1].1).abs() < 1e-2
+                && (w[0].0 - w[1].0).abs() > 1e-2
+                && w[0].1 > k8s.y
+                && w[0].1 < api1.y
+            {
+                jog_y = Some(w[0].1);
+                break;
+            }
         }
         let jog_y = jog_y.expect("no within-frame horizontal jog on lb->api1");
         assert!(
@@ -8799,8 +9107,15 @@ src --> b
             api1.y - STUB_JOG_CLEARANCE
         );
         let midpoint = (k8s.y + api1.y) / 2.0;
-        assert!(jog_y > midpoint, "jog {jog_y:.2} not below midpoint {midpoint:.2}");
-        assert!(jog_y < api1.y, "jog {jog_y:.2} not above api1 top {:.2}", api1.y);
+        assert!(
+            jog_y > midpoint,
+            "jog {jog_y:.2} not below midpoint {midpoint:.2}"
+        );
+        assert!(
+            jog_y < api1.y,
+            "jog {jog_y:.2} not above api1 top {:.2}",
+            api1.y
+        );
     }
 
     #[test]
@@ -8811,7 +9126,8 @@ src --> b
         // one point (which read as both sources reaching both targets). The
         // frame's title is narrow here, so neither node sits under it and both
         // stubs run straight down to the node.
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 src1
 src2
 group left-right "S"
@@ -8820,7 +9136,8 @@ b
 end
 src1 --> a
 src2 --> b
-"#);
+"#,
+        );
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let s = sub_rect(&l, 0);
@@ -8832,16 +9149,38 @@ src2 --> b
             e.points
                 .iter()
                 .find(|p| (p.1 - s_top_y).abs() < 1e-2)
-                .unwrap_or_else(|| panic!("no connection point on S's top edge for {from}->{to}: {:?}", e.points))
+                .unwrap_or_else(|| {
+                    panic!(
+                        "no connection point on S's top edge for {from}->{to}: {:?}",
+                        e.points
+                    )
+                })
                 .0
         };
         let cp1 = cp_x("src1", "a");
         let cp2 = cp_x("src2", "b");
-        assert!((cp1 - cx(a)).abs() < 1e-2, "src1->a enters S at x {cp1:.2}, not a's center {:.2}", cx(a));
-        assert!((cp2 - cx(b)).abs() < 1e-2, "src2->b enters S at x {cp2:.2}, not b's center {:.2}", cx(b));
-        assert!((cp1 - s_center).abs() > 1e-2, "src1->a merges at S's center-x");
-        assert!((cp2 - s_center).abs() > 1e-2, "src2->b merges at S's center-x");
-        assert!((cp1 - cp2).abs() > 1e-2, "the two edges share a connection point (merge)");
+        assert!(
+            (cp1 - cx(a)).abs() < 1e-2,
+            "src1->a enters S at x {cp1:.2}, not a's center {:.2}",
+            cx(a)
+        );
+        assert!(
+            (cp2 - cx(b)).abs() < 1e-2,
+            "src2->b enters S at x {cp2:.2}, not b's center {:.2}",
+            cx(b)
+        );
+        assert!(
+            (cp1 - s_center).abs() > 1e-2,
+            "src1->a merges at S's center-x"
+        );
+        assert!(
+            (cp2 - s_center).abs() > 1e-2,
+            "src2->b merges at S's center-x"
+        );
+        assert!(
+            (cp1 - cp2).abs() > 1e-2,
+            "the two edges share a connection point (merge)"
+        );
         assert!(is_orthogonal(&edge_path(&l, "src1", "a").points));
         assert!(is_orthogonal(&edge_path(&l, "src2", "b").points));
         assert_all_finite(&l);
@@ -8856,7 +9195,8 @@ src2 --> b
         // back down. Before this change the rep port sat at each frame's
         // center, so the off-center node (pushed down by the grown frame's
         // extra top inset) forced exactly such a jog.
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 src
 group left-right "Outer"
     group "A"
@@ -8868,7 +9208,8 @@ group left-right "Outer"
 end
 src --> a
 a --> b
-"#);
+"#,
+        );
         let a = node_rect(&l, "a");
         let b = node_rect(&l, "b");
         let fa = sub_rect(&l, 1); // "A"
@@ -8876,16 +9217,28 @@ a --> b
         // The two nodes share a center-y (side-by-side grown frames, same rank).
         let ay = a.y + a.h / 2.0;
         let by = b.y + b.h / 2.0;
-        assert!((ay - by).abs() < 1e-2, "a and b not aligned: {ay:.2} vs {by:.2}");
+        assert!(
+            (ay - by).abs() < 1e-2,
+            "a and b not aligned: {ay:.2} vs {by:.2}"
+        );
         // ... and that y is off each frame's center (the frames are grown), so a
         // frame-center port really would have jogged.
-        assert!((ay - (fa.y + fa.h / 2.0)).abs() > 1e-2, "a sits at A's frame center");
-        assert!((ay - (fb.y + fb.h / 2.0)).abs() > 1e-2, "b sits at B's frame center");
+        assert!(
+            (ay - (fa.y + fa.h / 2.0)).abs() > 1e-2,
+            "a sits at A's frame center"
+        );
+        assert!(
+            (ay - (fb.y + fb.h / 2.0)).abs() > 1e-2,
+            "b sits at B's frame center"
+        );
         // The edge a->b is a single straight horizontal line at that y.
         let e = edge_path(&l, "a", "b");
         assert!(e.points.len() >= 2);
         for p in &e.points {
-            assert!((p.1 - ay).abs() < 1e-2, "a->b point {p:?} not on the node center-y {ay:.2}");
+            assert!(
+                (p.1 - ay).abs() < 1e-2,
+                "a->b point {p:?} not on the node center-y {ay:.2}"
+            );
         }
         assert!(is_orthogonal(&e.points));
         assert_all_finite(&l);
@@ -8896,8 +9249,10 @@ a --> b
     /// Two axis-aligned segments share a collinear, overlapping span (i.e. the
     /// edges would lay on top of each other) — the failure mode M9 eliminates.
     fn segments_overlap(a0: (f32, f32), a1: (f32, f32), b0: (f32, f32), b1: (f32, f32)) -> bool {
-        let same_x = (a0.0 - a1.0).abs() < 1e-2 && (b0.0 - b1.0).abs() < 1e-2 && (a0.0 - b0.0).abs() < 1e-2;
-        let same_y = (a0.1 - a1.1).abs() < 1e-2 && (b0.1 - b1.1).abs() < 1e-2 && (a0.1 - b0.1).abs() < 1e-2;
+        let same_x =
+            (a0.0 - a1.0).abs() < 1e-2 && (b0.0 - b1.0).abs() < 1e-2 && (a0.0 - b0.0).abs() < 1e-2;
+        let same_y =
+            (a0.1 - a1.1).abs() < 1e-2 && (b0.1 - b1.1).abs() < 1e-2 && (a0.1 - b0.1).abs() < 1e-2;
         if same_x {
             let (l1, h1) = (a0.1.min(a1.1), a0.1.max(a1.1));
             let (l2, h2) = (b0.1.min(b1.1), b0.1.max(b1.1));
@@ -8930,9 +9285,17 @@ a --> b
                 for k in 0..ei.points.len() - 1 {
                     for m in 0..ej.points.len() - 1 {
                         assert!(
-                            !segments_overlap(ei.points[k], ei.points[k + 1], ej.points[m], ej.points[m + 1]),
+                            !segments_overlap(
+                                ei.points[k],
+                                ei.points[k + 1],
+                                ej.points[m],
+                                ej.points[m + 1]
+                            ),
                             "edges {}->{} and {}->{} overlap (seg {k} / {m})",
-                            ei.from, ei.to, ej.from, ej.to
+                            ei.from,
+                            ei.to,
+                            ej.from,
+                            ej.to
                         );
                     }
                 }
@@ -8949,9 +9312,15 @@ a --> b
             for k in 0..e.points.len().saturating_sub(1) {
                 for m in (k + 1)..e.points.len().saturating_sub(1) {
                     assert!(
-                        !segments_overlap(e.points[k], e.points[k + 1], e.points[m], e.points[m + 1]),
+                        !segments_overlap(
+                            e.points[k],
+                            e.points[k + 1],
+                            e.points[m],
+                            e.points[m + 1]
+                        ),
                         "edge {}->{} overlaps itself (seg {k} / {m})",
-                        e.from, e.to
+                        e.from,
+                        e.to
                     );
                 }
             }
@@ -8971,7 +9340,9 @@ a --> b
                     assert!(
                         !segment_intersects_rect(p0, p1, (n.x, n.y, n.w, n.h)),
                         "edge {}->{} segment {p0:?}->{p1:?} passes through node {}",
-                        e.from, e.to, n.id
+                        e.from,
+                        e.to,
+                        n.id
                     );
                 }
             }
@@ -8984,15 +9355,29 @@ a --> b
         let (d, l) = lay_final(include_str!("../examples/finance.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
-        nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
+        nodes.sort_by(|a, b| {
+            a.y.partial_cmp(&b.y)
+                .unwrap()
+                .then(a.x.partial_cmp(&b.x).unwrap())
+        });
         for n in &nodes {
-            println!("  {:<12} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
+            println!(
+                "  {:<12} x={:7.1} y={:7.1} w={:5.1} h={:5.1}",
+                n.id, n.x, n.y, n.w, n.h
+            );
         }
         for s in &l.groups {
-            println!("  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h);
+            println!(
+                "  group #{} {:?} x={:.1} y={:.1} w={:.1} h={:.1}",
+                s.index, d.groups[s.index].title, s.x, s.y, s.w, s.h
+            );
         }
         for e in &l.edges {
-            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+            let pts: Vec<String> = e
+                .points
+                .iter()
+                .map(|(x, y)| format!("({:.1},{:.1})", x, y))
+                .collect();
             println!("  {:<10} -> {:<10} : {}", e.from, e.to, pts.join(" "));
         }
     }
@@ -9002,7 +9387,12 @@ a --> b
         let (d, l) = lay_final(include_str!("../examples/infra.dgmr"));
         assert_all_finite(&l);
         for e in &l.edges {
-            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+            assert!(
+                is_orthogonal(&e.points),
+                "{}->{} not orthogonal",
+                e.from,
+                e.to
+            );
         }
         assert_no_edge_overlaps_or_node_passage(&d, &l);
     }
@@ -9012,7 +9402,12 @@ a --> b
         let (d, l) = lay_final(include_str!("../examples/subdirection.dgmr"));
         assert_all_finite(&l);
         for e in &l.edges {
-            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+            assert!(
+                is_orthogonal(&e.points),
+                "{}->{} not orthogonal",
+                e.from,
+                e.to
+            );
         }
         assert_no_edge_overlaps_or_node_passage(&d, &l);
     }
@@ -9027,7 +9422,12 @@ a --> b
         assert_all_finite(&l);
         assert_eq!(d.edges.len(), l.edges.len());
         for e in &l.edges {
-            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+            assert!(
+                is_orthogonal(&e.points),
+                "{}->{} not orthogonal",
+                e.from,
+                e.to
+            );
         }
         assert_no_edge_overlaps_or_node_passage(&d, &l);
         // The User->VPN edge must not pass through the pubclb node sitting
@@ -9049,14 +9449,16 @@ a --> b
         // node routes around it instead. Here `src` (top-level) -> `t` (in
         // group S, below) with `mid` (a peer) sitting between them on the
         // same x as both endpoints, so a single midpoint jog cannot clear it.
-        let (_d, l) = lay_final(r#"diagram top-down
+        let (_d, l) = lay_final(
+            r#"diagram top-down
 src
 mid
 group "S"
 t
 end
 src --> t
-"#);
+"#,
+        );
         let mid = node_rect(&l, "mid");
         let e = edge_path(&l, "src", "t");
         for w in e.points.windows(2) {
@@ -9171,7 +9573,10 @@ src --> t
         assert!(on_side(a, e1.points[0], "bottom"));
         assert!(on_side(a, e2.points[0], "bottom"));
         let d = (e1.points[0].0 - e2.points[0].0).abs();
-        assert!(d >= FAN_SEP - 1e-2, "forced-side fan separation {d:.2} < FAN_SEP");
+        assert!(
+            d >= FAN_SEP - 1e-2,
+            "forced-side fan separation {d:.2} < FAN_SEP"
+        );
     }
 
     #[test]
@@ -9191,8 +9596,14 @@ src --> t
         // Everything drawn sits inside the (grown) canvas.
         for e in &l.edges {
             for &(px, py) in &e.points {
-                assert!(px >= -1e-3 && px <= l.width + 1e-3, "point x {px} outside canvas");
-                assert!(py >= -1e-3 && py <= l.height + 1e-3, "point y {py} outside canvas");
+                assert!(
+                    px >= -1e-3 && px <= l.width + 1e-3,
+                    "point x {px} outside canvas"
+                );
+                assert!(
+                    py >= -1e-3 && py <= l.height + 1e-3,
+                    "point y {py} outside canvas"
+                );
             }
         }
         for n in &l.nodes {
@@ -9218,8 +9629,14 @@ src --> t
         for src in cases {
             let (d, l) = lay_final(src);
             let check = |what: &str, x0: f32, y0: f32, x1: f32, y1: f32| {
-                assert!(x0 >= MARGIN - 1e-2, "{what}: left {x0:.2} inside the page margin");
-                assert!(y0 >= MARGIN - 1e-2, "{what}: top {y0:.2} inside the page margin");
+                assert!(
+                    x0 >= MARGIN - 1e-2,
+                    "{what}: left {x0:.2} inside the page margin"
+                );
+                assert!(
+                    y0 >= MARGIN - 1e-2,
+                    "{what}: top {y0:.2} inside the page margin"
+                );
                 assert!(
                     x1 <= l.width - MARGIN + 1e-2,
                     "{what}: right {x1:.2} inside the page margin (canvas {})",
@@ -9260,7 +9677,10 @@ src --> t
         assert!(on_side(a, *e.points.last().unwrap(), "right"));
         assert!(is_orthogonal(&e.points));
         for &(px, _) in &e.points[1..e.points.len() - 1] {
-            assert!(px >= a.x + a.w - 1e-2, "loop interior point at {px} crosses a's body");
+            assert!(
+                px >= a.x + a.w - 1e-2,
+                "loop interior point at {px} crosses a's body"
+            );
         }
     }
 
@@ -9441,12 +9861,23 @@ src -- to="bottom" --> t
         let (_d, l) = lay_final(include_str!("../examples/sides.dgmr"));
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
-        nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
+        nodes.sort_by(|a, b| {
+            a.y.partial_cmp(&b.y)
+                .unwrap()
+                .then(a.x.partial_cmp(&b.x).unwrap())
+        });
         for n in &nodes {
-            println!("  {:<10} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
+            println!(
+                "  {:<10} x={:7.1} y={:7.1} w={:5.1} h={:5.1}",
+                n.id, n.x, n.y, n.w, n.h
+            );
         }
         for e in &l.edges {
-            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+            let pts: Vec<String> = e
+                .points
+                .iter()
+                .map(|(x, y)| format!("({:.1},{:.1})", x, y))
+                .collect();
             println!("  {:<8} -> {:<8} : {}", e.from, e.to, pts.join(" "));
         }
     }
@@ -9457,7 +9888,12 @@ src -- to="bottom" --> t
         assert_eq!(d.edges.len(), l.edges.len());
         assert_all_finite(&l);
         for e in &l.edges {
-            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+            assert!(
+                is_orthogonal(&e.points),
+                "{}->{} not orthogonal",
+                e.from,
+                e.to
+            );
         }
         assert_no_edge_overlaps_or_node_passage(&d, &l);
     }
@@ -9497,8 +9933,11 @@ src -- to="bottom" --> t
             // (1) The knockout touches its own line — on-line and graze
             // placements alike keep the break behind the text.
             assert!(
-                (0..p.points.len().saturating_sub(1))
-                    .any(|k| segment_intersects_rect(p.points[k], p.points[k + 1], r)),
+                (0..p.points.len().saturating_sub(1)).any(|k| segment_intersects_rect(
+                    p.points[k],
+                    p.points[k + 1],
+                    r
+                )),
                 "label {:?} is detached from its edge {}->{}",
                 d.edges[i].label,
                 p.from,
@@ -9610,8 +10049,14 @@ src -- to="bottom" --> t
         let (ax, ay) = l.edges[0].label_at.expect("anchor");
         let p = &l.edges[0].points;
         assert_eq!(p.len(), 2, "straight edge");
-        assert!((ax - (p[0].0 + p[1].0) / 2.0).abs() < 1e-3, "x off midpoint: {ax}");
-        assert!((ay - (p[0].1 + p[1].1) / 2.0).abs() < 1e-3, "y off midpoint: {ay}");
+        assert!(
+            (ax - (p[0].0 + p[1].0) / 2.0).abs() < 1e-3,
+            "x off midpoint: {ax}"
+        );
+        assert!(
+            (ay - (p[0].1 + p[1].1) / 2.0).abs() < 1e-3,
+            "y off midpoint: {ay}"
+        );
     }
 
     #[test]
@@ -9664,7 +10109,15 @@ src -- to="bottom" --> t
         // the renderer's marker geometry.
         let path = vec![(0.0, 0.0), (0.0, 100.0)];
         let a = arrowhead_rect(&path).expect("arrowhead rect");
-        assert_eq!(a, (0.0 - ARROW_HALF_W - ARROW_PAD, 100.0 - ARROW_LEN - ARROW_PAD, 2.0 * ARROW_HALF_W + 2.0 * ARROW_PAD, ARROW_LEN + 2.0 * ARROW_PAD));
+        assert_eq!(
+            a,
+            (
+                0.0 - ARROW_HALF_W - ARROW_PAD,
+                100.0 - ARROW_LEN - ARROW_PAD,
+                2.0 * ARROW_HALF_W + 2.0 * ARROW_PAD,
+                ARROW_LEN + 2.0 * ARROW_PAD
+            )
+        );
         assert!(arrowhead_rect(&[(0.0, 0.0)]).is_none());
     }
 
@@ -9719,8 +10172,14 @@ src -- to="bottom" --> t
         let a1 = anchors[0].expect("L1 anchor");
         let a2 = anchors[1].expect("L2 anchor");
         // L2 keeps its one clear spot (mid-stub)...
-        assert!((a2.0 - x2).abs() < 1e-3, "L2 should stay on its stub: {a2:?}");
-        assert!((a2.1 - 100.0).abs() < 4.0, "L2 should stay mid-stub: {a2:?}");
+        assert!(
+            (a2.0 - x2).abs() < 1e-3,
+            "L2 should stay on its stub: {a2:?}"
+        );
+        assert!(
+            (a2.1 - 100.0).abs() < 4.0,
+            "L2 should stay mid-stub: {a2:?}"
+        );
         // ...while L1, crowded there by L2's knockout, moves off the midpoint.
         assert!(a1.1 < 80.0, "L1 should move clear of L2: {a1:?}");
         assert_eq!(
@@ -9735,8 +10194,14 @@ src -- to="bottom" --> t
         // Unlabeled pairs keep the base gap.
         assert_eq!(label_pair_sep(0.0, 0.0, FAN_SEP, None), FAN_SEP);
         // A labeled pair clears the wider knockout's half-extent + LABEL_CLEAR.
-        assert_eq!(label_pair_sep(20.0, 0.0, FAN_SEP, None), 20.0 / 2.0 + LABEL_CLEAR);
-        assert_eq!(label_pair_sep(20.0, 30.0, FAN_SEP, None), 30.0 / 2.0 + LABEL_CLEAR);
+        assert_eq!(
+            label_pair_sep(20.0, 0.0, FAN_SEP, None),
+            20.0 / 2.0 + LABEL_CLEAR
+        );
+        assert_eq!(
+            label_pair_sep(20.0, 30.0, FAN_SEP, None),
+            30.0 / 2.0 + LABEL_CLEAR
+        );
         // The fan bump is capped (a fan must fit real node sides); lanes are
         // not (their gap band clamps them).
         assert_eq!(
@@ -9996,7 +10461,12 @@ src -- to="bottom" --> t
         assert_no_overlaps(&l);
         assert_no_edge_overlaps_or_node_passage(&d, &l);
         for e in &l.edges {
-            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+            assert!(
+                is_orthogonal(&e.points),
+                "{}->{} not orthogonal",
+                e.from,
+                e.to
+            );
             let target = node_rect(&l, &e.to);
             let last = *e.points.last().unwrap();
             assert!(
@@ -10040,7 +10510,11 @@ src -- to="bottom" --> t
                    u2 --> b\n";
         let (_d, l) = lay_final(src);
         let lane_of = |id: &str| {
-            let e = edge_path(&l, if id == "a" { "u1" } else { "u2" }, if id == "a" { "a" } else { "b" });
+            let e = edge_path(
+                &l,
+                if id == "a" { "u1" } else { "u2" },
+                if id == "a" { "a" } else { "b" },
+            );
             // The cross run: the widest horizontal segment (top-down).
             e.points
                 .windows(2)
@@ -10062,9 +10536,8 @@ src -- to="bottom" --> t
         // hand-built routes: (a) a route through a node, (b) a collinear
         // rider on a peer, (c) an invader riding inside another edge's
         // reserved port pocket — the M11.5 sealed-pocket shape.
-        let d = lay_final(
-            "diagram top-down\na \"A\"\nb \"B\"\nc \"C\"\nd \"D\"\na --> b\nc --> d\n",
-        ).0;
+        let d =
+            lay_final("diagram top-down\na \"A\"\nb \"B\"\nc \"C\"\nd \"D\"\na --> b\nc --> d\n").0;
         let mut id_index = std::collections::HashMap::new();
         for (i, id) in ["a", "b", "c", "d"].iter().enumerate() {
             id_index.insert(*id, i);
@@ -10091,11 +10564,8 @@ src -- to="bottom" --> t
                     v.from_side,
                     cross_of(center(v.from_rect), v.from_side),
                 );
-                v.to_port = port_at_cross(
-                    v.to_rect,
-                    v.to_side,
-                    cross_of(center(v.to_rect), v.to_side),
-                );
+                v.to_port =
+                    port_at_cross(v.to_rect, v.to_side, cross_of(center(v.to_rect), v.to_side));
                 v.from_cross = cross_of(v.from_port, v.from_side);
                 v.to_cross = cross_of(v.to_port, v.to_side);
                 v
@@ -10107,20 +10577,25 @@ src -- to="bottom" --> t
         // Edge 1's clean route: straight down c→d, clear of everything.
         let clean1 = vec![(250.0, 40.0), (250.0, 200.0)];
         let pockets = vec![pocket_rects(&clean0), pocket_rects(&clean1)];
-        let scan = |paths: &[Option<Vec<(f32, f32)>>]| {
-            scan_violations(paths, &ctxs, &geom, &pockets)
-        };
+        let scan =
+            |paths: &[Option<Vec<(f32, f32)>>]| scan_violations(paths, &ctxs, &geom, &pockets);
         let paths = [Some(clean0.clone()), Some(clean1.clone())];
         assert!(scan(&paths).is_empty(), "clean routes flagged");
 
         // (a) edge 0's route cuts through b's interior (a hard defect).
-        let paths = [Some(vec![(50.0, 40.0), (50.0, 220.0)]), Some(clean1.clone())];
+        let paths = [
+            Some(vec![(50.0, 40.0), (50.0, 220.0)]),
+            Some(clean1.clone()),
+        ];
         assert_eq!(scan(&paths).into_iter().collect::<Vec<_>>(), vec![0]);
 
         // (b) a mutual mid-trunk ride: edge 1's leg sits at edge 0's own x,
         // between the two pockets (neither endpoint's escape is involved) —
         // both negotiate.
-        let paths = [Some(clean0.clone()), Some(vec![(50.0, 120.0), (50.0, 140.0)])];
+        let paths = [
+            Some(clean0.clone()),
+            Some(vec![(50.0, 120.0), (50.0, 140.0)]),
+        ];
         assert_eq!(scan(&paths).into_iter().collect::<Vec<_>>(), vec![0, 1]);
 
         // (c) edge 1's segment rides inside edge 0's source pocket (parallel
@@ -10178,7 +10653,12 @@ src -- to="bottom" --> t
         assert_no_overlaps(&l);
         assert_no_edge_overlaps_or_node_passage(&d, &l);
         for e in &l.edges {
-            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+            assert!(
+                is_orthogonal(&e.points),
+                "{}->{} not orthogonal",
+                e.from,
+                e.to
+            );
             let t = node_rect(&l, &e.to);
             let last = *e.points.last().unwrap();
             assert!(
@@ -10189,7 +10669,6 @@ src -- to="bottom" --> t
             );
         }
     }
-
 
     // ============ M17 — phase-1 permutation invariance ======================
     // M16 finding 2, enshrined: the routing pass's phase 1 is simultaneous —
@@ -10280,12 +10759,17 @@ end
         for (name, src) in [
             ("finance", include_str!("../examples/finance.dgmr")),
             ("infra", include_str!("../examples/infra.dgmr")),
-            ("subdirection", include_str!("../examples/subdirection.dgmr")),
+            (
+                "subdirection",
+                include_str!("../examples/subdirection.dgmr"),
+            ),
         ] {
             let (d, l) = lay_final(src);
             println!("== {name} ==");
             for (i, e) in d.edges.iter().enumerate() {
-                let Some(label) = e.label.as_deref() else { continue };
+                let Some(label) = e.label.as_deref() else {
+                    continue;
+                };
                 let Some((ax, ay)) = l.edges[i].label_at else {
                     println!("  {label:?} NO ANCHOR");
                     continue;
@@ -10296,7 +10780,9 @@ end
                 let hit = inflate(r, LABEL_HIT_PAD);
                 let mut covered = 0.0;
                 for (j, p) in l.edges.iter().enumerate() {
-                    if j == i { continue; }
+                    if j == i {
+                        continue;
+                    }
                     for s in p.points.windows(2) {
                         let c = segment_covered_len(s[0], s[1], hit);
                         if c > 0.05 {
@@ -10344,7 +10830,11 @@ end
                 e.points
             );
         }
-        assert!(is_orthogonal(&e.points), "A->C not orthogonal: {:?}", e.points);
+        assert!(
+            is_orthogonal(&e.points),
+            "A->C not orthogonal: {:?}",
+            e.points
+        );
         let last = *e.points.last().unwrap();
         let c = node_rect(&l, "C");
         assert!(
@@ -10363,13 +10853,121 @@ end
         // owns peer-riding negotiation; the free runs here are clean, and
         // the detour keeps A->C off B entirely.)
         let eb = edge_path(&l, "B", "C");
-        assert!(e.points.len() >= eb.points.len(),
-            "A->C detour ({:?}) is not even as long as B->C's straight run ({:?})",
-            e.points, eb.points);
         assert!(
-            eb.points.iter().zip(&e.points[..eb.points.len()]).all(|(p, q)| p != q),
+            e.points.len() >= eb.points.len(),
+            "A->C detour ({:?}) is not even as long as B->C's straight run ({:?})",
+            e.points,
+            eb.points
+        );
+        assert!(
+            eb.points
+                .iter()
+                .zip(&e.points[..eb.points.len()])
+                .all(|(p, q)| p != q),
             "A->C copies B->C's route {:?}",
             e.points
+        );
+    }
+
+    #[test]
+    fn mismatched_multiframe_stub_gets_the_dispatch_reroute() {
+        // S19b task 2: the mismatched stub (M14) was the last blind span —
+        // its corridor ([`mismatched_rep_cross`]) is clamped clear of the
+        // chain siblings and titles, but knows nothing of the shared
+        // routing world (a reserved port corridor of another edge, parked
+        // peer occupancy). A multi-frame mismatched end whose descent rides
+        // a hard corridor band is rerouted through the same dispatch
+        // regime the straight span got (S19a): the track router against
+        // the chain-local world, chain bands hard, peer/corridor
+        // occupancy carried over. The forced-side port is honored either
+        // way (the bounded-ladder convention).
+        //
+        // Fixture: top-down; the node (100,100,60,30) sits two frames
+        // deep (inner 80,60,160,100 inside outer 40,20,240,160), forced
+        // into its RIGHT side (mismatched: the frames keep their natural
+        // top crossing). The mismatched descent runs at the rep cross
+        // x=170, from the outer frame's top border down to the port's
+        // row — straight through a reserved corridor band of another
+        // edge's port (162,40,16,60 — vertical, spanning the descent).
+        let node = (100.0, 100.0, 60.0, 30.0);
+        let inner = (80.0, 60.0, 160.0, 100.0);
+        let outer = (40.0, 20.0, 240.0, 160.0);
+        let port = (160.0, 115.0); // right side, the node's mid-row
+        let rep_port = (170.0, 20.0); // on the outer frame's top border
+        let end = StubEnd {
+            node,
+            chain: &[0, 1],
+            port,
+            cross: 115.0,
+            node_side: Side::Right,
+            frame_side: Side::Top,
+            rep_cross: 170.0,
+            mismatched: true,
+        };
+        let frame_rect = |s: usize| if s == 0 { inner } else { outer };
+        let frame_children = |s: usize| if s == 0 { vec![node] } else { vec![inner] };
+        let mut world = Obstacles::empty();
+        world.push_corridor((162.0, 40.0, 16.0, 60.0));
+
+        // Sanity: the fixture reproduces the blind defect — the purely
+        // geometric mismatched stub rides the corridor band.
+        let blind = mismatched_stub(&end, rep_port, FlowAxis::Vertical, &frame_rect, true);
+        assert!(
+            !world.clear(&blind),
+            "fixture must reproduce the blind mismatched span"
+        );
+
+        // The dispatch reroute: the returned stub clears the whole shared
+        // world, stays orthogonal, and keeps both endpoints (the rep
+        // crossing and the forced-side port).
+        let stub = stub_for(
+            &end,
+            rep_port,
+            &[],
+            FlowAxis::Vertical,
+            &frame_rect,
+            &frame_children,
+            &|_| None,
+            &world,
+            true,
+        );
+        assert!(world.clear(&stub), "rerouted stub still rides the corridor");
+        assert!(
+            is_orthogonal(&stub),
+            "rerouted stub not orthogonal: {stub:?}"
+        );
+        assert_eq!(stub.first(), Some(&rep_port));
+        assert_eq!(stub.last(), Some(&port));
+
+        // A single-frame chain keeps the prior (M14-pinned) geometry
+        // unconditionally: its world is exactly the sibling/corridor facts
+        // the mismatched corridor already cleared.
+        let single = StubEnd {
+            node,
+            chain: &[0],
+            port,
+            cross: 115.0,
+            node_side: Side::Right,
+            frame_side: Side::Top,
+            rep_cross: 170.0,
+            mismatched: true,
+        };
+        let kept = stub_for(
+            &single,
+            rep_port,
+            &[],
+            FlowAxis::Vertical,
+            &frame_rect,
+            &frame_children,
+            &|_| None,
+            &world,
+            true,
+        );
+        let blind_single =
+            mismatched_stub(&single, rep_port, FlowAxis::Vertical, &frame_rect, true);
+        assert_eq!(
+            kept, blind_single,
+            "single-frame mismatched geometry must not flip"
         );
     }
 
@@ -10395,12 +10993,20 @@ end
         let (_d, l) = lay(&src, false);
         println!("canvas: {:.1} x {:.1}", l.width, l.height);
         let mut nodes = l.nodes.clone();
-        nodes.sort_by(|a, b| a.y.partial_cmp(&b.y).unwrap().then(a.x.partial_cmp(&b.x).unwrap()));
+        nodes.sort_by(|a, b| {
+            a.y.partial_cmp(&b.y)
+                .unwrap()
+                .then(a.x.partial_cmp(&b.x).unwrap())
+        });
         for n in &nodes {
-            println!("  node {:<10} x={:7.1} y={:7.1} w={:5.1} h={:5.1}", n.id, n.x, n.y, n.w, n.h);
+            println!(
+                "  node {:<10} x={:7.1} y={:7.1} w={:5.1} h={:5.1}",
+                n.id, n.x, n.y, n.w, n.h
+            );
         }
         // M18 regression probe: the two-deep side-by-side fixture.
-        let l2 = lay_final(r#"diagram left-right
+        let l2 = lay_final(
+            r#"diagram left-right
 group
 group
 A
@@ -10410,9 +11016,15 @@ end
 C
 A --> C
 B --> C
-"#).1;
+"#,
+        )
+        .1;
         for e in &l2.edges {
-            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+            let pts: Vec<String> = e
+                .points
+                .iter()
+                .map(|(x, y)| format!("({:.1},{:.1})", x, y))
+                .collect();
             println!("  [m18] {} -> {} : {}", e.from, e.to, pts.join(" "));
         }
         // M18 regression probe 2: the dense-stress overlap (n18->n19 riding
@@ -10422,7 +11034,11 @@ B --> C
             l.edges.iter().find(|e| e.from == "n16" && e.to == "n22"),
         ) {
             for (nm, e) in [("n18->n19", e1), ("n16->n22", e2)] {
-                let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+                let pts: Vec<String> = e
+                    .points
+                    .iter()
+                    .map(|(x, y)| format!("({:.1},{:.1})", x, y))
+                    .collect();
                 println!("  [m18] {} : {}", nm, pts.join(" "));
             }
         }
@@ -10437,12 +11053,18 @@ B --> C
             }
         }
         for s in &l.groups {
-            println!("  group #{} x={:.1} y={:.1} w={:.1} h={:.1}", s.index, s.x, s.y, s.w, s.h);
+            println!(
+                "  group #{} x={:.1} y={:.1} w={:.1} h={:.1}",
+                s.index, s.x, s.y, s.w, s.h
+            );
         }
         for e in &l.edges {
-            let pts: Vec<String> = e.points.iter().map(|(x, y)| format!("({:.1},{:.1})", x, y)).collect();
+            let pts: Vec<String> = e
+                .points
+                .iter()
+                .map(|(x, y)| format!("({:.1},{:.1})", x, y))
+                .collect();
             println!("  {:<10} -> {:<10} : {}", e.from, e.to, pts.join(" "));
         }
     }
-
 }

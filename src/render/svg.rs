@@ -36,9 +36,7 @@
 //! lands on the target node's boundary.
 
 use crate::ast::{Diagram, Edge, Group, Node, Shape, Style};
-use crate::layout::{
-    EdgePath, GroupRect, Layout, NodeRect, EDGE_LABEL_SIZE, LABEL_PAD,
-};
+use crate::layout::{EDGE_LABEL_SIZE, EdgePath, GroupRect, LABEL_PAD, Layout, NodeRect};
 use crate::text;
 
 /// Default stroke color for edges (and the default arrowhead fill).
@@ -229,9 +227,8 @@ fn marker_id_for(color: &str, existing: &[(String, String)]) -> String {
             .chars()
             .filter(|c| c.is_ascii_alphanumeric())
             .collect::<String>();
-    let taken = |name: &str| -> bool {
-        name == "arrow" || existing.iter().any(|(_, id)| id == name)
-    };
+    let taken =
+        |name: &str| -> bool { name == "arrow" || existing.iter().any(|(_, id)| id == name) };
     let mut id = base.clone();
     let mut n = 2;
     while taken(&id) {
@@ -311,7 +308,9 @@ fn render_groups(groups: &[Group], rects: &[GroupRect]) -> String {
             // — matching the top inset [`frame_insets`] reserves.
             let n = text::line_count(title);
             let lh = text::line_height(FRAME_TITLE_SIZE);
-            let ys: Vec<f32> = (0..n).map(|i| r.y + FRAME_TITLE_Y + i as f32 * lh).collect();
+            let ys: Vec<f32> = (0..n)
+                .map(|i| r.y + FRAME_TITLE_Y + i as f32 * lh)
+                .collect();
             let body = text_body(title, r.x + FRAME_TITLE_X, &ys);
             if let Some(c) = &sg.text {
                 s.push_str(&format!(
@@ -435,7 +434,9 @@ fn edge_stroke(style: Style) -> (f32, Option<&'static str>) {
 fn render_edge_labels(s: &mut String, labeled: &[(&Edge, &EdgePath)]) {
     // Knockout rects first (their own group), then the text (another group),
     // so no rect can cover a sibling label's text.
-    s.push_str(&format!("  <g fill=\"{LABEL_KNOCKOUT}\" stroke=\"none\">\n"));
+    s.push_str(&format!(
+        "  <g fill=\"{LABEL_KNOCKOUT}\" stroke=\"none\">\n"
+    ));
     for (edge, path) in labeled {
         let label = edge.label.as_deref().unwrap();
         let (mx, my) = label_anchor(path);
@@ -579,7 +580,11 @@ fn render_node(s: &mut String, node: &Node, rect: &NodeRect) {
         Shape::Cylinder => cy + CYL_LABEL_SHIFT,
         Shape::Box => cy,
     };
-    let ys = centered_line_ys(label_y, text::line_count(&node.label), crate::layout::FONT_SIZE);
+    let ys = centered_line_ys(
+        label_y,
+        text::line_count(&node.label),
+        crate::layout::FONT_SIZE,
+    );
     s.push_str(&format!(
         "    <text x=\"{}\" y=\"{}\" font-family=\"{FONT_FAMILY}\" font-size=\"{}\" fill=\"{ink}\" text-anchor=\"middle\" dominant-baseline=\"central\">{}</text>\n",
         fmt(cx),
@@ -875,7 +880,10 @@ mod tests {
         assert!(svg.contains("<ellipse "), "missing cylinder lid ellipse");
         assert!(svg.contains("<path d=\"M"), "missing cylinder body path");
         // A single cylinder node (no edges, no groups) emits no <rect>.
-        assert!(!svg.contains("<rect"), "cylinder node should not emit a <rect>");
+        assert!(
+            !svg.contains("<rect"),
+            "cylinder node should not emit a <rect>"
+        );
     }
 
     #[test]
@@ -920,10 +928,8 @@ mod tests {
         // the base arc). With `dominant-baseline="central"` and DejaVu Sans
         // (ascent+descent == em height), the glyph extent equals the em box,
         // centered on the shifted `label_y`.
-        let raw = parser::parse_diagram(
-            "diagram top-down\n\u{64}b \"Postgres\" : cylinder\n",
-        )
-        .unwrap();
+        let raw =
+            parser::parse_diagram("diagram top-down\n\u{64}b \"Postgres\" : cylinder\n").unwrap();
         let d = resolve::resolve(&raw).unwrap();
         let l = layout::layout(&d);
         let svg = render_svg(&d, &l);
@@ -1004,8 +1010,14 @@ mod tests {
     fn node_color_and_fill_are_rendered() {
         let svg = render("diagram top-down\na \"A\" color=\"#888\" fill=\"#eef\"\n");
         let box_line = svg.lines().find(|l| l.contains("<rect")).unwrap();
-        assert!(box_line.contains("fill=\"#eef\""), "custom fill not on box: {box_line}");
-        assert!(box_line.contains("stroke=\"#888\""), "custom stroke not on box: {box_line}");
+        assert!(
+            box_line.contains("fill=\"#eef\""),
+            "custom fill not on box: {box_line}"
+        );
+        assert!(
+            box_line.contains("stroke=\"#888\""),
+            "custom stroke not on box: {box_line}"
+        );
     }
 
     #[test]
@@ -1016,7 +1028,10 @@ mod tests {
         // the referencing element. The default-stroke marker stays `arrow`.
         let svg = render("diagram top-down\na -- color=\"#888\" --> b\n");
         let line = svg.lines().find(|l| l.contains("<polyline")).unwrap();
-        assert!(line.contains("stroke=\"#888\""), "edge color not on stroke: {line}");
+        assert!(
+            line.contains("stroke=\"#888\""),
+            "edge color not on stroke: {line}"
+        );
         // The edge references its own colored marker, not the default `arrow`.
         assert!(
             line.contains("marker-end=\"url(#arrow-888)\""),
@@ -1033,9 +1048,15 @@ mod tests {
             "colored marker should be filled #888\n{svg}"
         );
         // And the default `arrow` marker (default stroke) is still defined.
-        assert!(svg.contains("<marker id=\"arrow\""), "default `arrow` marker missing");
+        assert!(
+            svg.contains("<marker id=\"arrow\""),
+            "default `arrow` marker missing"
+        );
         // No reliance on currentColor anywhere.
-        assert!(!svg.contains("currentColor"), "renderer must not emit currentColor");
+        assert!(
+            !svg.contains("currentColor"),
+            "renderer must not emit currentColor"
+        );
     }
 
     #[test]
@@ -1046,7 +1067,10 @@ mod tests {
         let line = svg.lines().find(|l| l.contains("<polyline")).unwrap();
         assert!(line.contains("marker-end=\"url(#arrow)\""));
         // The default marker's path is filled with the default stroke (#333).
-        assert!(svg.contains("fill=\"#333\""), "default marker fill should be #333\n{svg}");
+        assert!(
+            svg.contains("fill=\"#333\""),
+            "default marker fill should be #333\n{svg}"
+        );
         // Only the one default marker is defined.
         assert_eq!(svg.matches("<marker").count(), 1);
     }
@@ -1055,7 +1079,8 @@ mod tests {
     fn two_distinct_edge_colors_get_distinct_markers() {
         // Two different custom colors get two distinct markers, each filled
         // with its color; the default `arrow` marker is still present.
-        let svg = render("diagram top-down\na -- color=\"#888\" --> b\nb -- color=\"#0a7\" --> c\n");
+        let svg =
+            render("diagram top-down\na -- color=\"#888\" --> b\nb -- color=\"#0a7\" --> c\n");
         assert!(svg.contains("<marker id=\"arrow\""));
         assert!(svg.contains("<marker id=\"arrow-888\""));
         assert!(svg.contains("<marker id=\"arrow-0a7\""));
@@ -1067,11 +1092,16 @@ mod tests {
     #[test]
     fn same_color_edges_share_one_marker() {
         // Two edges with the same custom color share a single colored marker.
-        let svg = render("diagram top-down\na -- color=\"#888\" --> b\nc -- color=\"#888\" --> d\n");
+        let svg =
+            render("diagram top-down\na -- color=\"#888\" --> b\nc -- color=\"#888\" --> d\n");
         // default `arrow` + one `arrow-888` only.
         assert_eq!(svg.matches("<marker").count(), 2);
         let e1 = svg.lines().find(|l| l.contains("<polyline")).unwrap();
-        let e2 = svg.lines().filter(|l| l.contains("<polyline")).nth(1).unwrap();
+        let e2 = svg
+            .lines()
+            .filter(|l| l.contains("<polyline"))
+            .nth(1)
+            .unwrap();
         assert!(e1.contains("url(#arrow-888)"));
         assert!(e2.contains("url(#arrow-888)"));
     }
@@ -1095,7 +1125,10 @@ mod tests {
     fn thick_edge_has_wider_stroke() {
         let svg = render("diagram top-down\na -- thick --> b\n");
         let line = svg.lines().find(|l| l.contains("<polyline")).unwrap();
-        assert!(line.contains("stroke-width=\"3\""), "thick edge not wider: {line}");
+        assert!(
+            line.contains("stroke-width=\"3\""),
+            "thick edge not wider: {line}"
+        );
         // Thick is still solid (no dasharray).
         assert!(!line.contains("stroke-dasharray"));
     }
@@ -1113,7 +1146,13 @@ mod tests {
         let svg = render_svg(&d, &l);
         let b = l.nodes.iter().find(|n| n.id == "b").unwrap();
         let line = svg.lines().find(|ln| ln.contains("<polyline")).unwrap();
-        let pts_attr = line.split("points=\"").nth(1).unwrap().split('"').next().unwrap();
+        let pts_attr = line
+            .split("points=\"")
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap();
         let last = pts_attr.split(' ').next_back().unwrap();
         let mut it = last.split(',');
         let lx: f32 = it.next().unwrap().parse().unwrap();
@@ -1138,7 +1177,10 @@ mod tests {
             svg.contains(&format!("refX=\"{want}\"")),
             "marker refX should be {want} (10 - ARROW_BACKOFF):\n{svg}"
         );
-        assert!(!svg.contains("refX=\"10\""), "refX should not be the bare tip 10");
+        assert!(
+            !svg.contains("refX=\"10\""),
+            "refX should not be the bare tip 10"
+        );
     }
 
     #[test]
@@ -1159,7 +1201,11 @@ mod tests {
             points: vec![(0.0, 0.0), (0.0, 1.0)],
             label_at: None,
         });
-        assert!(p[1].1 > 0.0 && p[1].1 < 1.0, "clamped end out of bounds: {:?}", p[1]);
+        assert!(
+            p[1].1 > 0.0 && p[1].1 < 1.0,
+            "clamped end out of bounds: {:?}",
+            p[1]
+        );
         // Single point: unchanged.
         let p = shortened_points(&EdgePath {
             from: "a".into(),
@@ -1235,19 +1281,37 @@ mod tests {
                 .lines()
                 .find(|t| t.contains(&format!(">{label}</text>")))
                 .unwrap();
-            assert!(text.contains(&format!("x=\"{}\"", fmt(ax))), "{label} text x: {text}");
-            assert!(text.contains(&format!("y=\"{}\"", fmt(ay))), "{label} text y: {text}");
+            assert!(
+                text.contains(&format!("x=\"{}\"", fmt(ax))),
+                "{label} text x: {text}"
+            );
+            assert!(
+                text.contains(&format!("y=\"{}\"", fmt(ay))),
+                "{label} text y: {text}"
+            );
             // The knockout rect is centered on the anchor.
             let m = crate::text::measure(label, EDGE_LABEL_SIZE);
             let rw = m.width + 2.0 * LABEL_PAD;
             let rh = m.height + 2.0 * LABEL_PAD;
             let rect = svg
                 .lines()
-                .find(|t| t.starts_with("    <rect") && t.contains(&format!("x=\"{}\"", fmt(ax - rw / 2.0))))
+                .find(|t| {
+                    t.starts_with("    <rect")
+                        && t.contains(&format!("x=\"{}\"", fmt(ax - rw / 2.0)))
+                })
                 .unwrap();
-            assert!(rect.contains(&format!("y=\"{}\"", fmt(ay - rh / 2.0))), "{label} rect y: {rect}");
-            assert!(rect.contains(&format!("width=\"{}\"", fmt(rw))), "{label} rect w: {rect}");
-            assert!(rect.contains(&format!("height=\"{}\"", fmt(rh))), "{label} rect h: {rect}");
+            assert!(
+                rect.contains(&format!("y=\"{}\"", fmt(ay - rh / 2.0))),
+                "{label} rect y: {rect}"
+            );
+            assert!(
+                rect.contains(&format!("width=\"{}\"", fmt(rw))),
+                "{label} rect w: {rect}"
+            );
+            assert!(
+                rect.contains(&format!("height=\"{}\"", fmt(rh))),
+                "{label} rect h: {rect}"
+            );
         }
     }
 
@@ -1295,7 +1359,10 @@ mod tests {
         // must route around a peer `prd` node, plus a thick `User --> prd` edge
         // and several `VPN --> cvm` edges sharing VPN's bottom side (port
         // separation + lane separation) and a deep-target around-frame route.
-        assert_snapshot("finance", &render(include_str!("../../examples/finance.dgmr")));
+        assert_snapshot(
+            "finance",
+            &render(include_str!("../../examples/finance.dgmr")),
+        );
     }
 
     #[test]
@@ -1421,11 +1488,23 @@ mod tests {
              end\n",
         );
         let frame = frame_rect(&svg);
-        assert!(frame.contains("fill=\"#eef\""), "group fill not rendered: {frame}");
-        assert!(frame.contains("stroke=\"#888\""), "group border color not rendered: {frame}");
-        assert!(frame.contains("stroke-dasharray=\"6 4\""), "dashed group line not rendered: {frame}");
+        assert!(
+            frame.contains("fill=\"#eef\""),
+            "group fill not rendered: {frame}"
+        );
+        assert!(
+            frame.contains("stroke=\"#888\""),
+            "group border color not rendered: {frame}"
+        );
+        assert!(
+            frame.contains("stroke-dasharray=\"6 4\""),
+            "dashed group line not rendered: {frame}"
+        );
         let title = svg.lines().find(|l| l.contains(">S</text>")).unwrap();
-        assert!(title.contains("fill=\"#005\""), "group title text color not rendered: {title}");
+        assert!(
+            title.contains("fill=\"#005\""),
+            "group title text color not rendered: {title}"
+        );
     }
 
     #[test]
@@ -1433,17 +1512,32 @@ mod tests {
         // thick doubles the frame stroke width (1 -> 2) and stays solid.
         let svg = render("diagram top-down\ngroup \"S\" line=\"thick\"\na\nend\n");
         let frame = frame_rect(&svg);
-        assert!(frame.contains("stroke-width=\"2\""), "thick frame not wider: {frame}");
-        assert!(!frame.contains("stroke-dasharray"), "thick frame should not be dashed: {frame}");
+        assert!(
+            frame.contains("stroke-width=\"2\""),
+            "thick frame not wider: {frame}"
+        );
+        assert!(
+            !frame.contains("stroke-dasharray"),
+            "thick frame should not be dashed: {frame}"
+        );
         // dotted reuses the same 1-4 dash as dotted edges.
         let svg = render("diagram top-down\ngroup \"S\" line=\"dotted\"\na\nend\n");
         let frame = frame_rect(&svg);
-        assert!(frame.contains("stroke-dasharray=\"1 4\""), "dotted frame: {frame}");
+        assert!(
+            frame.contains("stroke-dasharray=\"1 4\""),
+            "dotted frame: {frame}"
+        );
         // solid is explicit but equivalent to the default.
         let svg = render("diagram top-down\ngroup \"S\" line=\"solid\"\na\nend\n");
         let frame = frame_rect(&svg);
-        assert!(!frame.contains("stroke-dasharray"), "solid frame should have no dash: {frame}");
-        assert!(frame.contains("stroke-width=\"1\""), "solid frame width: {frame}");
+        assert!(
+            !frame.contains("stroke-dasharray"),
+            "solid frame should have no dash: {frame}"
+        );
+        assert!(
+            frame.contains("stroke-width=\"1\""),
+            "solid frame width: {frame}"
+        );
     }
 
     #[test]
@@ -1458,7 +1552,10 @@ mod tests {
         assert!(frame.contains("stroke-width=\"1\""), "{frame}");
         assert!(!frame.contains("stroke-dasharray"), "{frame}");
         let title = svg.lines().find(|l| l.contains(">S</text>")).unwrap();
-        assert!(!title.contains("fill="), "default title should inherit the group fill: {title}");
+        assert!(
+            !title.contains("fill="),
+            "default title should inherit the group fill: {title}"
+        );
     }
 
     #[test]
@@ -1476,12 +1573,27 @@ mod tests {
              end\n",
         );
         let frame = frame_rect(&svg);
-        assert!(frame.contains("stroke=\"none\""), "empty color should suppress the border: {frame}");
-        assert!(frame.contains("fill=\"none\""), "empty fill should suppress the interior: {frame}");
-        assert!(!frame.contains("stroke=\"#88BDA4\""), "border must not fall back to the default: {frame}");
-        assert!(!frame.contains("fill=\"#f2f8f4\""), "interior must not fall back to the default: {frame}");
+        assert!(
+            frame.contains("stroke=\"none\""),
+            "empty color should suppress the border: {frame}"
+        );
+        assert!(
+            frame.contains("fill=\"none\""),
+            "empty fill should suppress the interior: {frame}"
+        );
+        assert!(
+            !frame.contains("stroke=\"#88BDA4\""),
+            "border must not fall back to the default: {frame}"
+        );
+        assert!(
+            !frame.contains("fill=\"#f2f8f4\""),
+            "interior must not fall back to the default: {frame}"
+        );
         // The group behaves normally otherwise: the title still renders.
-        assert!(svg.contains(">S</text>"), "invisible frame should still render its title: {svg}");
+        assert!(
+            svg.contains(">S</text>"),
+            "invisible frame should still render its title: {svg}"
+        );
         // Only one of the two suppressed: `color=""` with a real fill.
         let svg = render("diagram top-down\ngroup \"S\" color=\"\" fill=\"#eef\"\na\nend\n");
         let frame = frame_rect(&svg);
@@ -1496,29 +1608,44 @@ mod tests {
         // separate default stroke; only node boxes use NODE_STROKE.)
         let svg = render("diagram top-down\na \"A\"\n");
         let box_line = svg.lines().find(|l| l.contains("rx=\"6\"")).unwrap();
-        assert!(box_line.contains("fill=\"#c0e1fc\""), "default node fill: {box_line}");
-        assert!(box_line.contains("stroke=\"#2196F3\""), "default node stroke: {box_line}");
+        assert!(
+            box_line.contains("fill=\"#c0e1fc\""),
+            "default node fill: {box_line}"
+        );
+        assert!(
+            box_line.contains("stroke=\"#2196F3\""),
+            "default node stroke: {box_line}"
+        );
     }
 
     #[test]
     fn node_text_color_is_rendered() {
         let svg = render("diagram top-down\na \"A\" text=\"#0055ff\"\n");
         let text = svg.lines().find(|l| l.contains(">A</text>")).unwrap();
-        assert!(text.contains("fill=\"#0055ff\""), "node text color not rendered: {text}");
+        assert!(
+            text.contains("fill=\"#0055ff\""),
+            "node text color not rendered: {text}"
+        );
     }
 
     #[test]
     fn default_node_text_color_is_ink() {
         let svg = render("diagram top-down\na \"A\"\n");
         let text = svg.lines().find(|l| l.contains(">A</text>")).unwrap();
-        assert!(text.contains("fill=\"#222\""), "default node text should be INK #222: {text}");
+        assert!(
+            text.contains("fill=\"#222\""),
+            "default node text should be INK #222: {text}"
+        );
     }
 
     #[test]
     fn edge_text_color_is_rendered() {
         let svg = render("diagram top-down\na -- \"sync\" text=\"#005\" --> b\n");
         let text = svg.lines().find(|l| l.contains(">sync</text>")).unwrap();
-        assert!(text.contains("fill=\"#005\""), "edge label text color not rendered: {text}");
+        assert!(
+            text.contains("fill=\"#005\""),
+            "edge label text color not rendered: {text}"
+        );
     }
 
     #[test]
@@ -1527,7 +1654,10 @@ mod tests {
         // than carrying its own, so the output stays minimal.
         let svg = render("diagram top-down\na -- \"sync\" --> b\n");
         let text = svg.lines().find(|l| l.contains(">sync</text>")).unwrap();
-        assert!(!text.contains("fill="), "default edge label should inherit the group fill: {text}");
+        assert!(
+            !text.contains("fill="),
+            "default edge label should inherit the group fill: {text}"
+        );
     }
 
     #[test]
@@ -1540,7 +1670,10 @@ mod tests {
         let frame = svg.lines().find(|l| l.contains("rx=\"8\"")).unwrap();
         let node = svg.lines().find(|l| l.contains("rx=\"6\"")).unwrap();
         assert!(frame.contains("fill=\"#eef\""), "frame fill: {frame}");
-        assert!(node.contains("fill=\"#c0e1fc\""), "node keeps its own default fill: {node}");
+        assert!(
+            node.contains("fill=\"#c0e1fc\""),
+            "node keeps its own default fill: {node}"
+        );
     }
 
     #[test]

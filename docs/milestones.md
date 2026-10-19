@@ -6,11 +6,11 @@ how the remaining work depends on itself.
 
 **Status legend:** ✅done · ▶ next · ☐ planned
 
-**Current position:** M0–M7.5, M9–M15, M16, M17, and M18 are complete (M12
-was absorbed by M11.5), plus the post-M13 hardening pass below and the
-post-M17 routing hardening (escape-stub spikes) recorded under M17, and
-S19a + S19b (the first two of M19's three sessions) are complete.
-**M19 continues with S19c. M8 (CLI polish) remains the last milestone.**
+**Current position:** M0–M7.5, M9–M15, M16, M17, M18, and M19 are
+complete (M12 was absorbed by M11.5), plus the post-M13 hardening pass
+below and the post-M17 routing hardening (escape-stub spikes) recorded
+under M17.
+**M8 (CLI polish) is the last open milestone.**
 
 ---
 
@@ -1394,7 +1394,7 @@ interior rows beyond obstacle-edge ± [`TRACK_OFF`] when only one exists
 **Blocked by:** nothing (M17's escape bars are a constraint the fix must
 respect, not a blocker). **Blocks:** M19.
 
-### ▶ M19 — Stub routing unified into the one-regime dispatch (option 2)
+### ✅ M19 — Stub routing unified into the one-regime dispatch (option 2)
 
 The end-state refactor M18 deliberately defers: complete the M11.5 unifying
 move — "one obstacle world, one routing regime" — over the *stub* spans,
@@ -1496,20 +1496,68 @@ refactor.
   permutation invariance, escape-stub bars, pocket right-of-way, and the
   snapshot suite.
 
-#### ☐ S19c — M18 residue: corridor coordination (new geometry; output expected to change)
+#### ✅ S19c — M18 residue: corridor coordination (new geometry; output expected to change)
 
-- [ ] **Row-fan coordination** across simultaneously routed detours that
+- [x] **Row-fan coordination** across simultaneously routed detours that
       share a corridor row: M18 established that no single-edge reroute
       can see the pairwise defect (two target stubs parking collinear
       spines on the one-row corridor above the Inner group), so the
-      coordination must be a simultaneous-routing mechanism.
-- [ ] **Corridor seeding that offers interior rows** between a frame band
+      coordination must be a simultaneous-routing mechanism. *(Landed as
+      two cooperating mechanisms, both proven load-bearing by reverting
+      each and watching the sweep fail: (1) the escape seed treats soft
+      peer bands as barriers — `clamped_escape` cuts the seed short of
+      any soft band the escape ray enters (orientation-agnostic, unlike
+      the hard kinds: a hard parallel band bars the escape leg itself,
+      while a soft band only poisons a seed born inside it — whose
+      approach leg then rides the peer's centerline exactly and no later
+      negotiation can clear, because the phase-2 retry pins the ridden
+      band as a border and the Dijkstra, starting inside the pinned
+      obstacle, finds no route. Seeding short parks the seed in a free
+      row and the band's own edge-seeded track rows give the
+      simultaneously rerouted detours distinct corridor rows to fan
+      onto, in deterministic repair order); (2) the dispatch consults
+      the M16 frame rep-crossing fan for *every* cross-boundary edge —
+      `route_edge` now always pushes the decoupled `cross_pieces_candidate`
+      first (it reads `ctx.{from,to}_rep_cross`, the fanned crossings),
+      keeping the coupled reading as the terminal fallback. Before S19c
+      the decoupled candidate was pushed only for mismatched ends, and
+      the M14 claim that the two readings are "identical for edges with
+      no mismatched end" had been silently broken by the M16 fan: an
+      unforced edge never consulted it, so two edges into one frame
+      parked their LCA approaches on one shared column.)*
+- [x] **Corridor seeding that offers interior rows** between a frame band
       and member padding when obstacle-edge ± [`TRACK_OFF`] seeds supply
       only one — enough vocabulary for the coordination to spread onto.
+      *(Found unnecessary: with (1)+(2) in place the negotiation's
+      band-edge rows suffice — the defect pair fans onto rows 9 px apart
+      (a band edge vs the `BORDER_PAD`-inflated frame band's own edge
+      track). A third change tried during the session — generalizing
+      `lca_segment`'s escape bars to flow-parallel rep ports (seam
+      bars: the LCA span may not double back over the within-frame stub
+      it meets at the port) — turned out to be masking, not fixing: the
+      seam spikes were downstream symptoms of the shared rep column,
+      and with the fan consulted the bars stay scoped to the
+      perpendicular (escaped) ports as before. The lesson is recorded by
+      the `lca_seam_never_reverses_over_the_stub` fixture, which pins
+      the seam's no-self-overlap invariant on the deep cross-group fan
+      geometry that produced it.)*
 - **Deliverable:** the dense-stress invariant sweep
-  (`global_pass_stress_dense_compound_graph`) fully green; the affected
-  snapshot regions hand-reviewed; phase-1 permutation invariance stays
-  pinned.
+  (`global_pass_stress_dense_compound_graph`) fully green *(the last
+  defect pair — n6→n14 vs n1→n14's collinear spines on the one-row
+  corridor — now fans onto distinct rows)*; the affected snapshot
+  regions hand-reviewed *(all twelve golden files regenerated and
+  byte-identical to the committed state — no sample exercises the new
+  mechanisms hard enough to move a route; the only byte change seen
+  during the session was cluster.svg under the later-reverted seam bars,
+  hand-reviewed and then moot)*; phase-1 permutation invariance stays
+  pinned *(both mechanisms are simultaneous-assignment-clean: the seed
+  clamp reads only the shared world's facts, and the fanned crossings
+  come from the pre-pass fan whose tie-breaks are content-keyed)*. Two
+  unit fixtures pin the mechanisms:
+  `unforced_cross_edges_use_their_fanned_rep_crossings` (two unforced
+  edges into one frame side must cross the border on distinct fanned
+  columns) and `lca_seam_never_reverses_over_the_stub` (the LCA↔stub
+  seam draws no out-and-back spike on a deep cross-group fan).
 
 Rationale for the sequencing (M18 before this milestone): M19 needs M18's
 geometry proven (chain bands, the clamped track start, designated

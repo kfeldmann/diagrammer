@@ -1479,9 +1479,20 @@ fn route_edge(
         if let Some(route) = around_target_candidate(ctx, geom, world) {
             candidates.push(route);
         }
-        if ctx.from_mismatched || ctx.to_mismatched {
-            candidates.push(cross_pieces_candidate(ctx, geom, world, false));
-        }
+        // S19c: the decoupled reading (M14 — forced sides bind the node
+        // only) is the primary candidate for *every* cross-boundary edge,
+        // not only the mismatched ones. Its rep crossings are the M16
+        // frame rep-crossing fan's coordinates ([`EdgeCtx::to_rep_cross`]
+        // et al.), which separate edges converging on one frame side onto
+        // distinct crossings; the coupled reading reads the raw node-port
+        // crosses instead, so before S19c an unforced edge never consulted
+        // the fan at all — two edges into the same frame parked their LCA
+        // approaches on one shared column and overlapped (the dense-stress
+        // row-fan defect). For a mismatched end the decoupled corridor is
+        // the whole point; for a matched end the two readings differ only
+        // in the fanned crossing. The coupled reading stays the terminal
+        // fallback (routing always succeeds).
+        candidates.push(cross_pieces_candidate(ctx, geom, world, false));
         candidates.push(cross_pieces_candidate(ctx, geom, world, true));
     }
     // Accept (M16): the first candidate that clears the hard world *and*
@@ -4677,6 +4688,22 @@ fn clamped_escape(
             consider(into_param(port, dx, dy, r));
         }
     }
+    // S19c row-fan coordination: soft peer bands are barriers to the
+    // *seed*, not to the route — orientation-agnostic, unlike the hard
+    // kinds above (a hard parallel band bars the escape leg itself; a
+    // soft band only poisons a seed born inside it, whose own approach
+    // leg then rides the peer's centerline exactly and no later
+    // negotiation can clear: the phase-2 retry pins the ridden band as a
+    // border, and the Dijkstra — starting inside that pinned obstacle —
+    // finds no route, so the exact ride survives every repair pass: the
+    // dense-stress corridor defect). Seeding short of the band instead
+    // parks the seed in a free row, and the track rows the band's own
+    // edges seed give the simultaneously rerouted detours distinct
+    // corridor rows to fan onto, in repair order (phase 2), which is
+    // deterministic.
+    for &r in obs.soft.iter() {
+        consider(into_param(port, dx, dy, r));
+    }
     for &b in obs.borders.iter() {
         // A border band is run into when the line rides it parallel; a
         // perpendicular transversal is legal *with a waypoint*, which the
@@ -4860,7 +4887,7 @@ fn reroute_stub_span(
     } else {
         track_route_negotiated(a, rep_port, obs, esc)
     };
-    if routed.is_empty() || !obs.clear(&routed) {
+    if routed.is_empty() || !obs.clear(&routed) || esc.defective(&routed) {
         return None;
     }
     let mut stub = if inward {
@@ -10670,6 +10697,93 @@ src -- to="bottom" --> t
         }
     }
 
+    // ============ S19c — corridor coordination & seam bars ===================
+
+    /// The M16 frame rep-crossing fan must be consulted by *unforced*
+    /// cross-boundary edges: two edges entering the same frame side take
+    /// their fanned crossings (distinct columns on the frame border), not
+    /// one shared column — before S19c the dispatch only pushed the
+    /// coupled candidate for an unforced edge, which reads the raw
+    /// node-port crosses and never consults the fan, so two edges into one
+    /// frame parked their approaches on one column and overlapped (the
+    /// dense-stress row-fan defect).
+    #[test]
+    fn unforced_cross_edges_use_their_fanned_rep_crossings() {
+        let (d, l) = lay_final(
+            r#"diagram top-down
+a "A"
+b "B"
+group "G"
+    t1 "T1"
+    t2 "T2"
+end
+a --> t1
+a --> t2
+b --> t1
+"#,
+        );
+        assert_no_edge_overlaps_or_node_passage(&d, &l);
+        // The two a-edges enter frame G from the top at their fanned
+        // crossings: their rep-port legs (the vertical descent into the
+        // frame) must run on distinct columns.
+        let g = &l.groups[0];
+        let g_top = g.y;
+        let mut cols: Vec<f32> = Vec::new();
+        for e in &l.edges {
+            if e.from != "a" {
+                continue;
+            }
+            // The leg crossing the frame's top border: the point at the
+            // border, on the segment that crosses it.
+            for w in e.points.windows(2) {
+                let y0 = w[0].1.min(w[1].1);
+                let y1 = w[0].1.max(w[1].1);
+                let vertical = (w[0].0 - w[1].0).abs() < 1e-3;
+                if vertical && y0 < g_top - 1e-3 && y1 >= g_top - 1e-3 {
+                    cols.push(w[0].0);
+                }
+            }
+        }
+        assert_eq!(cols.len(), 2, "both a-edges must cross G's top border");
+        assert!(
+            (cols[0] - cols[1]).abs() > 1e-3,
+            "the a-edges ride one shared rep column: {cols:?}"
+        );
+    }
+
+    /// The LCA↔stub seam never draws an out-and-back spike: the routed
+    /// span meets the within-frame stubs at the rep ports, and neither may
+    /// double back over the other (the whole-suite no-self-overlap
+    /// invariant). During S19c a generalized `Escapes` bar over every
+    /// port kind was tried here and found unnecessary once the fanned
+    /// rep crossings were actually consulted — the spikes were downstream
+    /// symptoms of two edges converging on one shared rep column — so the
+    /// bars stay scoped to the perpendicular (escaped) ports; this fixture
+    /// pins the seam's invariants on the geometry class that produced
+    /// the defect (a deep cross-group fan), so a regression in either
+    /// mechanism surfaces here before it surfaces as a stress-sweep
+    /// failure.
+    #[test]
+    fn lca_seam_never_reverses_over_the_stub() {
+        let (d, l) = lay_final(
+            r#"diagram top-down
+a "A"
+b "B"
+group "G"
+    t1 "T1"
+    t2 "T2"
+    t3 "T3"
+end
+a --> t1
+b --> t3
+"#,
+        );
+        assert_no_edge_overlaps_or_node_passage(&d, &l);
+        for e in &l.edges {
+            assert!(is_orthogonal(&e.points), "{}->{}", e.from, e.to);
+        }
+    }
+
     // ============ M17 — phase-1 permutation invariance ======================
     // M16 finding 2, enshrined: the routing pass's phase 1 is simultaneous —
     // every edge routes against the same world (nodes, frame borders,
@@ -10970,6 +11084,7 @@ end
             "single-frame mismatched geometry must not flip"
         );
     }
+
 
     #[test]
     #[ignore = "trace phase-2 negotiation (DIAG_SRC = a .dgmr path)"]

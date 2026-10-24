@@ -9,8 +9,9 @@ how the remaining work depends on itself.
 **Current position:** M0–M7.5, M9–M15, M16, M17, M18, and M19 are
 complete (M12 was absorbed by M11.5), plus the post-M13 hardening pass
 below and the post-M17 routing hardening (escape-stub spikes) recorded
-under M17. **M20.1 (whole-path maze routing: foundation) is complete.**
-**M8 (CLI polish) and the M20.2–M20.6 routing migration remain open.**
+under M17. **M20.1 (whole-path maze routing: foundation) and M20.2 (whole-path search
+for direct internal edges) are complete.**
+**M8 (CLI polish) and the M20.3–M20.6 routing migration remain open.**
 
 ---
 
@@ -1636,8 +1637,8 @@ the suite and by re-rendering the examples).
       with the canvas clamp being the load-bearing half (the old derived
       region can extend past the canvas and "detour" through undrawable
       space; the widened one cannot).
-      [`whole_path_route`] is the M20.2 entry point that ties the pieces
-      together (still unused by the live pipeline).
+      [`whole_path_route`] ties the pieces together — the M20.2 router
+      (live from M20.2 on, see below).
 - [x] **Tests** (7 new + 2 mechanism tests):
       - classification: root-level endpoints (unrelated frame solid),
         both endpoints in one group, nested chain (both frames
@@ -1655,18 +1656,95 @@ the suite and by re-rendering the examples).
         defect region widening closes), the widened region finds the
         drawable corridor below the wall and stays inside the canvas;
       - `whole_path_route`: exercised through its cost/region pieces
-        (the end-to-end adoption is M20.2's deliverable).
+        (the end-to-end adoption landed in M20.2, below).
 - **Deliverable:** suite green (223 tests; snapshots byte-stable); no
   routing behavior change — [`edge_world`] and the whole dispatch
-  ladder are untouched. The classification is precomputed and dead-read
-  today by design: M20.2 flips the direct-edge regime to
+  ladder were untouched at M20.1. The classification was precomputed and
+  dead-read by design; M20.2 flipped the direct-edge regime to
   [`whole_path_route`] and the same tests re-pin its live behavior.
 
-**Blocked by:** nothing. **Blocks:** M20.2 (which consumes
-[`whole_path_route`] / [`EdgeFrameWorld`] directly).
+**Blocked by:** nothing. **Blocks:** M20.2 (which consumed
+[`whole_path_route`] / [`EdgeFrameWorld`] directly — done, see below).
 
-### [ ] M20.2 — Whole-path search for direct internal edges.
-(See ./plan-for-whole-path-maze-routing.md)
+### ✅ M20.2 — Whole-path search for direct internal edges
+
+The plan's canary milestone, landed as scoped: **every unforced direct
+(direct internal) edge is now routed by one whole-path A\* search**
+([`whole_path_route`]) over the M20.1 frame world, and the search's result
+is the route that is drawn. All twelve golden snapshots are **byte-identical
+to the M20.1 state** — the search re-derives exactly the shapes the ladder
+drew, which is the quality signal the plan asked for. The cross-boundary
+regime (rep model, `cross_pieces_candidate`, `around_target_candidate`,
+title detours, `route_lca` for cross-boundary spans) is untouched; M20.3
+repoints it.
+
+- [x] **The search is the router, not a trailing candidate.** For a direct
+      edge the dispatch pushes the search result **first**, so it wins
+      whenever it clears the hard world; the ladder's candidates stay behind
+      it as the bounded fallback (a search that finds nothing leaves them to
+      win — the M16 convention). The M20.1 skeleton had it as a *last*
+      candidate, which could never win: the ladder's clean route always
+      short-circuited the acceptance loop first, so the search fired on every
+      edge and was chosen on none.
+- [x] **The search re-derives the flat engine's shapes.** Two pieces were
+      needed, both scoped to the whole-path search so no other route's graph
+      or cost model moves:
+      - [`Obstacles::jog_rows`] — the flat engine's own jog rows (the flow
+        midpoints of its waypoint pairs) are seeded as extra tracks. A Z's
+        total length is **jog-row-invariant**, so every row ties on length
+        and bends; without these rows the search's shape for a simple
+        diagonal was decided by tie-break alone.
+      - [`Obstacles::port_graph`] — the start/goal are *points*, not tracks.
+        A plain track graph connects only *adjacent* tracks, so a port's
+        approach leg is always exactly one track gap ([`TRACK_OFF`] = 8) —
+        short enough to disappear under the arrowhead, and identical for
+        every jog row (which is why the tie could never be broken by a
+        stub-length term). `port_graph` lets the start leave for, and the
+        goal be entered from, any track visible along the shared row/column,
+        making the stub length a real degree of freedom; the new
+        [`MIN_TERMINAL_STUB`] / [`STUB_SHORTFALL_COST`] terms then keep the
+        search off the degenerate 8 px approach.
+- [x] **Forced sides stay on the ladder.** A forced `from=`/`to=` side binds
+      the node port with M11/M14 semantics (the port lands on the requested
+      side and escapes it by [`SIDE_ESCAPE`]; a contradicting request routes
+      around). The search's free-choice port model cannot honor that, so the
+      search is scoped to **unforced** direct edges; forced direct edges keep
+      the M11 ladder until M20.4 re-grounds port selection on search outputs.
+      (Unscoped, the search shortened `sides.dgmr`'s mandatory 24 px escapes
+      to 8 px.)
+- [x] **The obstacle model is the M20 one.** [`edge_world`] pushes the frame
+      world's solid frames for direct edges (the plan's "unrelated frames may
+      not be punctured" rule, by construction rather than cost tuning), and
+      [`whole_path_route`] adds the ancestor bands as `borders` (parallel
+      riding barred, perpendicular crossings at recorded waypoints) plus the
+      `cross_bands` crossing cost ([`FRAME_CROSS_PENALTY`] per mid-run
+      transversal). Self-loops keep their dedicated generator.
+- [x] **Tests** (3 new; the two M20.1 placeholders for the live adoption are
+      now real):
+      - `whole_path_search_routes_direct_edges` — the classic mid-gap Z, with
+        both terminal legs clearing the arrowhead's back-extent (10);
+      - `whole_path_search_jogs_at_the_flat_engines_row` — the jog row is the
+        gap midpoint, not the track the heap reaches first;
+      - `whole_path_search_leaves_forced_sides_to_the_ladder` — a forced
+        `from="top"` port stays on its side and escapes outward.
+      The M16 dense-stress fixture and the M9/M16 regressions still pass; a
+      node-interior cut count over the dense fixture is 0 with the search
+      live (and 0 without — the search is not *needed* there, only
+      equivalent, which is the point of this milestone).
+- [x] **Removed:** the session's dead instrumentation (`SEARCH_WINS` /
+      `SEARCH_FIRES` atomics, the `[m20-wave]` `eprintln!` probes and the
+      `m20_wave_search_adoption_probe` test, whose counters never moved
+      because the search could not win) and the now-superseded
+      [`EdgeFrameWorld::track_seeds`] (the `Obstacles` seeding path replaced
+      it; it was dead code).
+- **Deliverable:** suite green (226 tests; snapshots byte-stable and
+  deterministic across runs). Direct edges are drawn from one A\* route
+  against the unified M20 obstacle model; the ladder remains only as their
+  bounded fallback and as the live regime for cross-boundary and forced-side
+  edges.
+
+**Blocked by:** nothing. **Blocks:** M20.3 (which repoints the cross-boundary
+regime at the same search and deletes the rep model).
 ### [ ] M20.3 — Whole-path search for cross-boundary edges; delete the rep model.
 ### [ ] M20.4 — Frames bands, fans, pockets, repair loop re-grounded.
 ### [ ] M20.5 — Labels re-tuned (M13 still holds its contract).

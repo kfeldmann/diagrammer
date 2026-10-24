@@ -1634,41 +1634,6 @@ impl EdgeFrameWorld {
             })
             .sum()
     }
-
-    /// Track seeds for the whole-path search (M20.2): ancestor bands seed
-    /// their edges ±[`TRACK_OFF`] *and* their centerlines (the drawn
-    /// outlines — designated crossings, as [`track_route`] seeds them
-    /// today); solid frames seed only their edges ±[`TRACK_OFF`] (nothing
-    /// may touch a solid frame, so no centerline track exists). Sorted and
-    /// deduped so shared frame edges seed one track, not two.
-    fn track_seeds(&self, geom: &Geometry) -> (Vec<f32>, Vec<f32>) {
-        let mut vts: Vec<f32> = Vec::new();
-        let mut hts: Vec<f32> = Vec::new();
-        for &b in &self.ancestor_bands {
-            let (x, y, w, h) = b;
-            vts.push(x - TRACK_OFF);
-            vts.push(x + w + TRACK_OFF);
-            hts.push(y - TRACK_OFF);
-            hts.push(y + h + TRACK_OFF);
-            if h <= w {
-                hts.push(y + h / 2.0);
-            } else {
-                vts.push(x + w / 2.0);
-            }
-        }
-        for &(x, y, w, h) in &self.solid {
-            vts.push(x - TRACK_OFF);
-            vts.push(x + w + TRACK_OFF);
-            hts.push(y - TRACK_OFF);
-            hts.push(y + h + TRACK_OFF);
-        }
-        let _ = geom;
-        vts.sort_by(f32::total_cmp);
-        hts.sort_by(f32::total_cmp);
-        vts.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
-        hts.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
-        (vts, hts)
-    }
 }
 
 /// The widened region a whole-path search routes in (M20.1): the frame
@@ -1743,6 +1708,28 @@ fn track_route_in_region(
             vts.push(x + w / 2.0);
         }
     }
+    // M20.2: the whole-path search's ancestor bands ride the same track
+    // seeding as borders (their edges ± TRACK_OFF + their centerlines —
+    // the designated-crossing rows); because `push_cross_bands` mirrors
+    // them into `borders` they are usually already present, but a
+    // hand-built world may seed one list without the other, so both are
+    // seeded here (deterministic and order-insensitive — the tracks are
+    // sorted and deduped below).
+    for &(x, y, w, h) in obs.cross_bands.iter() {
+        vts.push(x - TRACK_OFF);
+        vts.push(x + w + TRACK_OFF);
+        hts.push(y - TRACK_OFF);
+        hts.push(y + h + TRACK_OFF);
+        if h <= w {
+            hts.push(y + h / 2.0);
+        } else {
+            vts.push(x + w / 2.0);
+        }
+    }
+    for &t in obs.jog_rows.iter() {
+        vts.push(t);
+        hts.push(t);
+    }
     vts.sort_by(f32::total_cmp);
     hts.sort_by(f32::total_cmp);
     vts.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
@@ -1777,16 +1764,28 @@ fn track_route_in_region(
     )
 }
 
-/// The whole-path A* (M20.1): the track-graph Dijkstra runs over the
-/// widened [`around_region`] box with the [`FRAME_CROSS_PENALTY`] charged
-/// per ancestor-frame crossing, so the search can find whole-path detours
-/// a local box hides. The frame world contributes its tracks (via
-/// [`EdgeFrameWorld::track_seeds`]) and the crossing penalty; the cost
-/// model is segment length + bends + soft occupancy + frame crossings.
+/// The whole-path search (M20.2): one A* from source port to target port
+/// over a track graph against the full obstacle model — the widened
+/// [`around_region`] box, the per-edge frame world's ancestor bands (as
+/// `borders`: parallel riding barred, perpendicular crossings at recorded
+/// waypoints) and its solid frames (as node rects: fully blocked), with
+/// the [`FRAME_CROSS_PENALTY`] charged per mid-run ancestor transversal so
+/// the search crosses each ancestor frame as few times as possible. The
+/// graph's cost model is segment length + bends + soft peer occupancy +
+/// frame crossings.
 ///
-/// M20.1 wires the machinery and pins its semantics with tests; the live
-/// routing regime adopts it in M20.2.
-#[allow(dead_code)]
+/// `esc` carries the endpoint escape stubs (the outward port escapes) so
+/// the search never draws a spike back over them; `nodes` must hold every
+/// node rect (the region's other extent input) and `canvas` the page
+/// size. Returns the polyline, or an empty vec when no route exists in
+/// the region (the caller falls back — the bounded convention).
+///
+/// This is the M20.2 router: [`route_edge`] pushes its result *first* for
+/// every unforced direct edge, so the search — not the piecewise ladder — is
+/// what those edges are drawn from. It re-derives the flat engine's shapes
+/// because the caller seeds the engine's own jog rows
+/// ([`Obstacles::jog_rows`]); the ladder's candidates remain behind it as the
+/// bounded fallback for a region where no route exists.
 fn whole_path_route(
     a: (f32, f32),
     b: (f32, f32),
@@ -1796,8 +1795,26 @@ fn whole_path_route(
     nodes: &[(f32, f32, f32, f32)],
     canvas: (f32, f32),
 ) -> Vec<(f32, f32)> {
+    // The world: what the caller's obstacle model knows plus the frame
+    // world's ancestor bands (as borders + the crossing cost) and its
+    // solid frames (as node rects).
+    let mut world = obs.clone();
+    world.port_graph = true;
+    world.push_cross_bands(&fw.ancestor_bands);
+    for &r in &fw.solid {
+        world.push_node(r);
+    }
     let region = around_region(fw, nodes, canvas);
-    track_route_in_region(a, b, obs, esc, region)
+    let pts = track_route_in_region(a, b, &world, esc, region);
+    if pts.is_empty() {
+        return pts;
+    }
+    // Re-record the ancestor crossings the polyline collapse may have
+    // folded away: a straight run hopping across a band's centerline
+    // collapses to one segment through the band, which the clearance
+    // check would bar — the waypoint keeps it a designated crossing
+    // (the same convention [`track_route`] applies to its own bands).
+    record_border_crossings(&pts, &fw.ancestor_bands)
 }
 
 fn edge_world(geom: &Geometry, ctx: &EdgeCtx) -> Obstacles {
@@ -1808,6 +1825,20 @@ fn edge_world(geom: &Geometry, ctx: &EdgeCtx) -> Obstacles {
     for &(idx, r) in geom.level_items.get(&ctx.lca).into_iter().flatten() {
         if matches!(idx, ItemRef::Sub(_)) {
             obs.push_frame(r);
+        }
+    }
+    // M20.2: a direct internal edge also carries the solid frames of its
+    // frame world (every group frame that is neither endpoint's
+    // ancestor-or-self) as fully-blocked rects — the M20 obstacle model's
+    // "unrelated frames may not be punctured" rule. Cross-boundary edges
+    // keep their world as-is until M20.3 repoints their regime (a
+    // cross-boundary edge's own chain frames still appear as ordinary
+    // LCA-level bands here, and its solid frames arrive with the
+    // whole-path search's adoption of the frame world).
+    if ctx.is_direct {
+        let fw = ctx.frame_world(geom);
+        for &r in &fw.solid {
+            obs.nodes.push(r);
         }
     }
     obs
@@ -1876,7 +1907,6 @@ fn route_edge(
             // soft band — two aligned chains converge on one line), the
             // separating jog must exist as a candidate to win the cost
             // comparison; the flat waypoints alone would freeze the ride.
-            // Terminal.
             candidates.push(direct_chain_route(&ctx.raw, ctx.flow, world));
             candidates.push(forced_direct_path(
                 ctx.from_port,
@@ -1886,6 +1916,45 @@ fn route_edge(
                 ctx.flow,
                 world,
             ));
+        }
+        // M20.2: the whole-path search is the router for unforced direct
+        // edges. It is pushed *first*, so its route wins whenever it clears
+        // the hard world — and because it re-derives the flat engine's shapes
+        // (the jog rows are seeded, see [`Obstacles::jog_rows`]) the shapes
+        // the ladder drew survive, while a blocked or soft-conflicted edge now
+        // gets one coherent whole-path route against the full M20 obstacle
+        // model instead of a piecewise ladder: solid unrelated frames (which
+        // `edge_world` pushes for direct edges) are fully blocked, ancestor
+        // bands are crossable at a per-crossing penalty, and soft peers are
+        // negotiable. The ladder's candidates stay behind it as the bounded
+        // fallback (a search that finds nothing leaves them to win).
+        //
+        // Scope: unforced edges only. A forced `from=`/`to=` side binds the
+        // node port with M11/M14 semantics — the port lands on the requested
+        // side and escapes it by [`SIDE_ESCAPE`], and a contradicting request
+        // routes around — which the search's free-choice port model has no
+        // way to honor. Forced edges keep their ladder until M20.4 re-grounds
+        // port selection.
+        if ctx.raw.len() >= 2 && ctx.forced_from.is_none() && ctx.forced_to.is_none() {
+            let fw = ctx.frame_world(geom);
+            let esc = Escapes {
+                start: Some(Dir::of_side(ctx.from_side)),
+                end: Some(Dir::of_side(ctx.to_side)),
+            };
+            let nodes: Vec<(f32, f32, f32, f32)> = (0..geom.diagram.nodes.len())
+                .map(|gi| geom.node(gi))
+                .collect();
+            let mut wj = world.clone();
+            wj.jog_rows = ctx
+                .raw
+                .windows(2)
+                .map(|w| jog_flow(cross_flow(w[0], ctx.flow).1, cross_flow(w[1], ctx.flow).1))
+                .collect();
+            let search =
+                whole_path_route(ctx.from_port, ctx.to_port, &fw, &wj, esc, &nodes, canvas);
+            if !search.is_empty() && world.clear(&search) {
+                candidates.insert(0, search);
+            }
         }
     } else {
         // Cross-boundary: the around-target-frame candidate first (it
@@ -3218,6 +3287,17 @@ const LANE_INSET: f32 = 5.0;
 /// Bend penalty added per turn in the track-graph route, so a shortest path
 /// with fewer right-angle bends is preferred.
 const BEND_PENALTY: f32 = 12.0;
+/// Shortest terminal leg (port stub) the whole-path search prefers (M20.2):
+/// it must exceed the arrowhead's back-extent (`render`'s `markerHeight`, 10)
+/// or the final approach line cuts into the arrowhead's side. Matches the
+/// figure [`STUB_JOG_CLEARANCE`] promises the renderer.
+const MIN_TERMINAL_STUB: f32 = 12.0;
+/// Cost per pixel a terminal leg falls short of [`MIN_TERMINAL_STUB`]
+/// (M20.2) — a *preference*, never a bar. A Z's length is jog-row-invariant,
+/// so every row ties on length and bends; without this the search jogs one
+/// track gap off the target (an 8 px stub, under the arrowhead) instead of a
+/// legible mid-gap jog.
+const STUB_SHORTFALL_COST: f32 = 25.0;
 /// How far a forced-side route escapes outward from a port (along the
 /// side's outward normal) before orthogonal routing begins (M11). Sized to
 /// clear the arrowhead's back-extent (`markerHeight`, 10) comfortably, and
@@ -3392,6 +3472,22 @@ struct Obstacles {
     /// `line_rect_exit` clipping). A frame's interior stays legal: the
     /// bands, not the frame rect, are the obstacle.
     borders: Vec<(f32, f32, f32, f32)>,
+    /// Ancestor-frame border bands (M20.2): the *cost* counterpart of
+    /// `borders` for the whole-path search. A mid-run perpendicular
+    /// transversal of one costs [`FRAME_CROSS_PENALTY`] in
+    /// [`track_search`]'s Dijkstra — the strong preference for crossing
+    /// each ancestor frame as few times as possible — while staying legal
+    /// (a recorded waypoint clears it, as with `borders`). Nothing ever
+    /// pushes into it outside the whole-path search, so the ordinary
+    /// ladder's cost model (and every snapshot it re-derives) is
+    /// untouched.
+    cross_bands: Vec<(f32, f32, f32, f32)>,
+    /// The whole-path search's port-stub freedom (M20.2). False for every
+    /// other caller, so no other route's graph or cost model changes.
+    port_graph: bool,
+    /// The flat engine's own jog rows (flow midpoints of its waypoint pairs),
+    /// seeded as extra tracks by the whole-path search only (M20.2).
+    jog_rows: Vec<f32>,
 }
 
 impl Obstacles {
@@ -3402,6 +3498,9 @@ impl Obstacles {
             soft: Vec::new(),
             corridors: Vec::new(),
             borders: Vec::new(),
+            cross_bands: Vec::new(),
+            port_graph: false,
+            jog_rows: Vec::new(),
         }
     }
 
@@ -3411,6 +3510,9 @@ impl Obstacles {
             && self.soft.is_empty()
             && self.corridors.is_empty()
             && self.borders.is_empty()
+            && self.cross_bands.is_empty()
+            && !self.port_graph
+            && self.jog_rows.is_empty()
     }
 
     fn push_node(&mut self, r: (f32, f32, f32, f32)) {
@@ -3419,6 +3521,16 @@ impl Obstacles {
 
     fn push_frame(&mut self, r: (f32, f32, f32, f32)) {
         self.borders.extend(border_bands(r));
+    }
+
+    /// Push the ancestor-frame bands of one edge's frame world (M20.2):
+    /// `cross_bands` for the whole-path search's crossing cost, and the
+    /// same bands as `borders` — the ancestor band's parallel-riding bar
+    /// and its designated-crossing waypoint rows are exactly the border
+    /// semantics.
+    fn push_cross_bands(&mut self, bands: &[(f32, f32, f32, f32)]) {
+        self.cross_bands.extend_from_slice(bands);
+        self.borders.extend_from_slice(bands);
     }
 
     fn push_segment(&mut self, s0: (f32, f32), s1: (f32, f32)) {
@@ -3432,6 +3544,23 @@ impl Obstacles {
 
     fn push_corridor(&mut self, r: (f32, f32, f32, f32)) {
         self.corridors.push(r);
+    }
+
+    /// The whole-path search's crossing cost (M20.2): a
+    /// [`FRAME_CROSS_PENALTY`] per mid-segment perpendicular transversal
+    /// of a `cross_bands` band. A band not in `cross_bands` costs nothing
+    /// (the ordinary ladder's world never pushes into the list, so its
+    /// cost model is untouched).
+    fn cross_cost(&self, pts: &[(f32, f32)]) -> f32 {
+        pts.windows(2)
+            .map(|w| {
+                self.cross_bands
+                    .iter()
+                    .filter(|&&b| band_crossing(w[0], w[1], b).is_some())
+                    .count() as f32
+                    * FRAME_CROSS_PENALTY
+            })
+            .sum()
     }
 
     /// Is the polyline clear of the whole hard world (nodes, hard segments,
@@ -4190,8 +4319,9 @@ struct LaneEdge {
 /// knockout would otherwise reach a neighbor's line. The lanes are ordered
 /// along the band by [`lane_order`] — the source-port order adjusted so that
 /// sibling Z-routes cannot cross each other.
-/// An edge's gap span on its own side: the flow interval between its two
-/// ports' flow-coordinates (low, high).
+///
+/// One cross-boundary edge's gap span on its own side: the flow interval
+/// between its two ports' flow-coordinates (low, high).
 fn gap_span(edges: &[LaneEdge], k: usize) -> (f32, f32) {
     let e = &edges[k];
     (e.from_flow.min(e.to_flow), e.from_flow.max(e.to_flow))
@@ -4645,7 +4775,9 @@ fn track_search(
         let mut out = Vec::new();
         let x = vts[i];
         let y = hts[j];
-        let cost = |x1: f32, y1: f32| obs.soft_cost_seg((x, y), (x1, y1));
+        let cost = |x1: f32, y1: f32| {
+            obs.soft_cost_seg((x, y), (x1, y1)) + obs.cross_cost(&[(x, y), (x1, y1)])
+        };
         if j + 1 < nh && clear(x, y, x, hts[j + 1]) {
             out.push((i, j + 1, 2, (hts[j + 1] - y).abs(), cost(x, hts[j + 1])));
         }
@@ -4657,6 +4789,48 @@ fn track_search(
         }
         if i > 0 && clear(x, y, vts[i - 1], y) {
             out.push((i - 1, j, 1, (x - vts[i - 1]).abs(), cost(vts[i - 1], y)));
+        }
+        if obs.port_graph {
+            // The ports are points, not tracks: let the start leave for, and
+            // the goal be entered from, any track visible along the shared
+            // row/column — so the approach stub's length is a real choice.
+            let mut long = |ti: usize, tj: usize| {
+                if (ti, tj) == (i, j) {
+                    return;
+                }
+                let (tx, ty) = (vts[ti], hts[tj]);
+                if (tx - x).abs() > 1e-6 && (ty - y).abs() > 1e-6 {
+                    return;
+                }
+                if !clear(x, y, tx, ty) {
+                    return;
+                }
+                let len = (tx - x).abs() + (ty - y).abs();
+                let dir = if (tx - x).abs() > 1e-6 {
+                    if tx > x { 0 } else { 1 }
+                } else if ty > y {
+                    2
+                } else {
+                    3
+                };
+                out.push((ti, tj, dir, len, cost(tx, ty)));
+            };
+            if i == ai {
+                for tj in 0..nh {
+                    long(ai, tj);
+                }
+            }
+            if j == aj {
+                for ti in 0..nv {
+                    long(ti, aj);
+                }
+            }
+            if i == bi {
+                long(bi, bj);
+            }
+            if j == bj {
+                long(bi, bj);
+            }
         }
         out
     };
@@ -4704,10 +4878,16 @@ fn track_search(
                 continue;
             }
             let v = ni * nh + nj;
+            let terminal = obs.port_graph && (node == start || v == goal);
             let cost = len
                 + soft
                 + if d_in != 4 && d_in != d_out {
                     BEND_PENALTY
+                } else {
+                    0.0
+                }
+                + if terminal {
+                    STUB_SHORTFALL_COST * (MIN_TERMINAL_STUB - len).max(0.0)
                 } else {
                     0.0
                 };
@@ -5302,6 +5482,9 @@ fn stub_world(
     obs.soft = world.soft.clone();
     obs.segments = world.segments.clone();
     obs.corridors = world.corridors.clone();
+    obs.cross_bands = world.cross_bands.clone();
+    obs.port_graph = world.port_graph;
+    obs.jog_rows = world.jog_rows.clone();
     obs
 }
 
@@ -10517,6 +10700,73 @@ src -- to="bottom" --> t
             }
             placed.push((i, r));
         }
+    }
+
+    // ---- M20.2: the whole-path search as the direct-edge router ----
+
+    /// The search is the live router for unforced direct edges (M20.2), and
+    /// it re-derives the flat engine's shapes rather than inventing new ones:
+    /// a clean diagonal still gets the familiar mid-gap Z, with approach
+    /// stubs long enough to read under the arrowhead.
+    #[test]
+    fn whole_path_search_routes_direct_edges() {
+        let (_d, l) = lay_final("diagram top-down\na-->b\na-->c\nb-->d\nc-->d\n");
+        for e in &l.edges {
+            // The classic Z: out, across at the gap's midpoint, in.
+            assert_eq!(e.points.len(), 4, "{}->{}: {:?}", e.from, e.to, e.points);
+            let (a, b) = (e.points[0], e.points[1]);
+            let (c, d) = (e.points[2], e.points[3]);
+            assert!((a.0 - b.0).abs() < 1e-2, "first leg must be vertical");
+            assert!((c.0 - d.0).abs() < 1e-2, "last leg must be vertical");
+            assert!((b.1 - c.1).abs() < 1e-2, "the cross-run is horizontal");
+            // Both terminal legs clear the arrowhead's back-extent (10).
+            assert!(b.1 - a.1 >= 10.0, "start stub {} too short", b.1 - a.1);
+            assert!(d.1 - c.1 >= 10.0, "end stub {} too short", d.1 - c.1);
+        }
+    }
+
+    /// The search jogs at the flat engine's own row (the flow midpoint), not
+    /// at whichever track the heap reaches first: without the seeded jog rows
+    /// every row ties on length and the tie lands one track gap off the
+    /// target — an 8 px stub that disappears under the arrowhead.
+    #[test]
+    fn whole_path_search_jogs_at_the_flat_engines_row() {
+        let (_d, l) = lay_final("diagram top-down\na-->b\na-->c\n");
+        let p = &edge_path(&l, "a", "b").points;
+        assert_eq!(p.len(), 4, "{p:?}");
+        let a = node_rect(&l, "a");
+        let b = node_rect(&l, "b");
+        let want = ((a.y + a.h) + b.y) / 2.0;
+        assert!(
+            (p[1].1 - want).abs() < 1e-2,
+            "jog row {} is not the gap midpoint {want}",
+            p[1].1
+        );
+    }
+
+    /// A forced side keeps M11/M14 semantics: the port lands on the
+    /// requested side and the edge is routed by the M11 ladder, whose escape
+    /// geometry the search's free-choice port model would overwrite. The
+    /// search is therefore scoped to *unforced* direct edges until M20.4
+    /// re-grounds port selection.
+    #[test]
+    fn whole_path_search_leaves_forced_sides_to_the_ladder() {
+        let (d, l) = lay_final(include_str!("../examples/sides.dgmr"));
+        // `sides.dgmr` declares `api -> db` twice; the second is the forced
+        // `from="top"` one.
+        let ei = d
+            .edges
+            .iter()
+            .position(|e| {
+                e.from == "api" && e.to == "db" && e.from_side == Some(crate::ast::EdgeSide::Top)
+            })
+            .expect("the forced from=top api->db edge");
+        let p = &l.edges[ei].points;
+        let a = node_rect(&l, "api");
+        // The forced port is on the node's top edge and the route leaves it
+        // upward before turning — the M11 shape, untouched by the search.
+        assert!((p[0].1 - a.y).abs() < 1e-2, "port not on the forced side");
+        assert!(p[1].1 < p[0].1, "the port must escape outward");
     }
 
     #[test]

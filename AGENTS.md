@@ -65,7 +65,11 @@ src/
                  a bounded rip-up-and-repair loop with soft peer occupancy
                  and reserved port pockets) + M17 union-merge lane grouping
                  with content-keyed (endpoint-id) sort tie-breaks, so phase-1
-                 routing is invariant under edge permutation → Layout
+                 routing is invariant under edge permutation + M20.1/M20.2
+                 whole-path maze routing: per-edge solid/ancestor frame
+                 classifier, and unforced direct edges routed by one A*
+                 whole-path search against the unified obstacle model
+                 → Layout
   text.rs        label measurement against the baked metrics table
   metrics_table.rs  GENERATED baked DejaVu metrics — never hand-edit;
                  regenerate: cargo run -p gen-metrics-table
@@ -138,6 +142,19 @@ as the host UID:GID. See `build/README.md`.
   order leaking into output, system fonts). Edge-label placement (M13) is a
   fixed-order greedy pass plus one refinement pass over candidate anchors —
   keep it that way (no randomness, no iteration-order dependence).
+- **The whole-path search is the direct-edge router (M20.2).** For an
+  *unforced* direct edge, `route_edge` pushes the `whole_path_route` result
+  **first**, so the A* route is what is drawn and the M11 ladder's candidates
+  are only its bounded fallback. Two things keep that from silently
+  regressing: (a) the caller must seed `Obstacles::jog_rows` with the flat
+  engine's own jog rows and set `Obstacles::port_graph`, or the search cannot
+  re-derive the ladder's shapes (a Z's length is jog-row-invariant, so
+  without them the shape is decided by tie-break); (b) the search is scoped to
+  **unforced** edges only — a forced `from=`/`to=` side keeps M11/M14
+  semantics (port on the requested side, `SIDE_ESCAPE` outward) which the
+  search's free-choice port model cannot honor. Cross-boundary edges still go
+  through the rep model until M20.3; don't half-repoint one regime without the
+  other.
 - **Measurement is baked and verified.** `src/metrics_table.rs` is *generated*
   — never hand-edit it; regenerate with `cargo run -p gen-metrics-table`
   (and commit the result) when the bundled font changes. The
@@ -173,6 +190,13 @@ breaks geometry):
   `render::FRAME_TITLE_X` (10.0), `render::FRAME_TITLE_Y` (4.0), and
   `render::FRAME_TITLE_SIZE` (12.0), else the title-detour would misjudge the
   title's extent and labels would clear the wrong box.
+- `layout::MIN_TERMINAL_STUB = 12.0` and
+  `layout::STUB_SHORTFALL_COST = 25.0` — the whole-path search's port-stub
+  preference (M20.2). A Z's total length is jog-row-invariant, so every track
+  row ties on length and bends; without a stub term the search jogs one track
+  gap (8 px) off the target, which hides under the arrowhead. `MIN_TERMINAL_STUB`
+  must exceed the arrowhead's back-extent (`render`'s `markerHeight`, 10) for
+  the same reason [`STUB_JOG_CLEARANCE`] does — keep the two in step.
 - `layout::STUB_JOG_CLEARANCE = 12.0` — how far a title-detour within-frame
   stub jogs from a node port (it sits in the grown `CROSS_FRAME_PAD` band just
   below the title). Detours apply per chain frame — one jog per titled frame

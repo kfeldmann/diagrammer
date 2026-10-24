@@ -680,6 +680,28 @@ struct EdgeCtx {
     from_rep_cross: f32,
     to_rep_cross: f32,
     lane: f32,
+    /// The per-edge frame world (M20.1): solid/ancestor classification and
+    /// its band/solid obstacle fields, built once in [`assemble`]. `None`
+    /// only in hand-built test contexts that construct a context directly
+    /// (the helpers default it via [`EdgeCtx::frame_world`] access below);
+    /// production contexts are always filled in.
+    frame_world: Option<EdgeFrameWorld>,
+}
+
+impl EdgeCtx {
+    /// The edge's frame world (M20.1): the classification built in
+    /// [`assemble`], or — for contexts assembled without it (direct
+    /// unit-fixture construction) — derived on the spot from the endpoint
+    /// nodes' group memberships. Pure; the derived result equals the
+    /// precomputed one.
+    fn frame_world(&self, geom: &Geometry) -> EdgeFrameWorld {
+        if let Some(fw) = &self.frame_world {
+            return fw.clone();
+        }
+        let fg = geom.diagram.nodes[self.fi].group;
+        let tg = geom.diagram.nodes[self.ti].group;
+        EdgeFrameWorld::build(geom, fg, tg)
+    }
 }
 
 /// Derive one edge's [`EdgeCtx`] from the laid-out geometry.
@@ -778,6 +800,7 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
         from_rep_cross: 0.0,
         to_rep_cross: 0.0,
         lane: 0.0,
+        frame_world: None,
     }
 }
 
@@ -870,6 +893,19 @@ fn assemble(
     let mut ctxs: Vec<EdgeCtx> = (0..diagram.edges.len())
         .map(|ei| edge_context(&geom, edge_infos, ei))
         .collect();
+
+    // ---- M20.1: per-edge frame classification ----------------------------
+    // One classifier pass over the containment tree: every edge learns its
+    // ancestor frames (crossable borders) and solid frames (fully blocked)
+    // once, precomputed for the whole-path search regime (M20.2). No
+    // routing behavior changes here — today's consumers still read the
+    // LCA-level field via `edge_world`, which the classification reproduces
+    // exactly for the ancestor side.
+    for ctx in ctxs.iter_mut() {
+        let fg = diagram.nodes[ctx.fi].group;
+        let tg = diagram.nodes[ctx.ti].group;
+        ctx.frame_world = Some(EdgeFrameWorld::build(&geom, fg, tg));
+    }
 
     // ---- M13: edge-label knockout sizes ----------------------------------
     // Shared by the spacing pre-passes below (which grow fan/lane gaps with
@@ -1374,13 +1410,396 @@ fn assemble(
     }
 }
 
+//
+// ============ M20 — whole-path maze routing ============
+//
+// The plan (docs/plan-for-whole-path-maze-routing.md): the end state routes
+// every edge by one whole-path search from source port to target port over
+// a track graph, against one obstacle model, with frame-crossing topology
+// as a *search output*. M20.1 lays the foundation without changing any
+// routing behavior: the per-edge frame classifier (which frames are solid,
+// which are rideable ancestors) and the track-graph machinery needed to
+// route against it. The classifier is a pure function of the containment
+// tree and the endpoint node indices — precomputed once per edge in
+// [`assemble`] and consumed from [`EdgeCtx::frame_world`].
+
 /// The per-edge *base* obstacle world (M11.5/M16): every node interior —
 /// including its own endpoints, which a route may touch only at a
 /// designated port (so it cannot cut back through either box) — and the
 /// frame outlines at its LCA level as thin bands (crossable only at
 /// designated waypoints: a rep port or a recorded stub crossing). The
 /// occupancy lists (hard/soft peer segments, other edges' reserved port
-/// corridors) are added by the routing phase in [`assemble`].
+/// corridors) are added by the routing phase in [`assemble`]. M20
+/// (whole-path maze routing) layers the solid/ancestor classification on
+/// top of this world: see the M20 section above for the classifier the
+/// whole-path search (M20.2 on) routes against.
+//
+// ---- M20.1 constants ----
+//
+/// How far outside a per-edge frame world the track-graph routing region
+/// extends (M20.1): the A* must be able to find *around-the-neighborhood*
+/// detours — a route can legitimately leave the ports' bounding span to go
+/// around a wall of sibling frames — so the region is the obstacles' own
+/// extent pushed out by this margin on every side, clamped to the canvas.
+/// This replaces the old ports-and-obstacles bounding box for whole-path
+/// searches; [`track_route`]'s own narrow region survives for the ordinary
+/// local reroutes.
+const AROUND_MARGIN: f32 = 60.0;
+
+/// Routing cost of a perpendicular crossing of an ancestor frame's border
+/// band (M20.1, consumed from M20.2 on): the strong preference the cost
+/// model needs for crossing each ancestor frame as few times as possible.
+/// A few hundred — far above [`BEND_PENALTY`] and a typical detour's length
+/// delta, so a whole-path search does not exit a frame through the top and
+/// re-enter through the left over a shorter span — and comparable in
+/// weight to the soft-occupancy tier ([`SOFT_RIDE_COST`]): one extra
+/// crossing of the edge's own ancestor frames is as bad as riding a
+/// peer's band.
+const FRAME_CROSS_PENALTY: f32 = 300.0;
+
+/// The class of one group frame for one edge (M20.1), as
+/// [`FrameClass::of_frame`] reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrameClassKind {
+    /// On an endpoint's ancestor-or-self chain: perpendicular crossing
+    /// legal (a search output, M20.2+), parallel riding barred.
+    Ancestor,
+    /// Neither endpoint's ancestor: fully solid — interior and border
+    /// band; nothing may touch it. (A corridor *between* two solid frames
+    /// is open space and legal.)
+    Solid,
+}
+
+/// The per-edge frame classification (M20.1): a pure function of the
+/// containment tree and the two endpoint node indices. The containment
+/// tree's only remaining routing role in the whole-path regime (M20.2 on)
+/// is exactly this two-way split:
+///
+/// - **ancestor frames** — the frames on the ancestor-or-self chains of
+///   the two endpoints (the chains [`chain_to_lca`] reads). An edge may
+///   cross such a frame's border band perpendicularly at any coordinate
+///   of its choosing, and may not ride parallel on the band: the existing
+///   border-band semantics, applied without the rep-port / stub-crossing
+///   decomposition.
+/// - **solid frames** — every group frame that is neither endpoint's
+///   ancestor-or-self: sibling groups and unrelated deep subtrees. Fully
+///   blocked — interior *and* border band.
+///
+/// In the current (pre-M20.2) regime only [`FrameClass::ancestors`] is
+/// consulted — it reproduces today's LCA-level band field exactly, so
+/// [`edge_world`] keeps its behavior bit-for-bit. The solid list and
+/// [`FrameClassKind::Solid`] exist now so M20.2's whole-path search and
+/// the classification unit tests can exercise the full semantics before
+/// any routing behavior flips.
+#[derive(Debug, Clone, Default)]
+struct FrameClass {
+    /// Ancestor-or-self frames of either endpoint, sorted by index (the
+    /// two chains' union; deterministic, and equal worlds compare equal).
+    /// `None` (top level) is not a frame and never appears.
+    ancestors: Vec<usize>,
+    /// Every other group frame: fully solid, sorted by index.
+    solid: Vec<usize>,
+    /// True when the two endpoints' chain heads are *disjoint* subtrees
+    /// (neither group is an ancestor-or-self of the other) — the
+    /// genuinely cross-boundary shape. False when one chain contains the
+    /// other (one endpoint nests inside the other's group) or when either
+    /// endpoint is top-level (`None` — the top level contains every
+    /// group, so no group-vs-group disjointness applies).
+    chains_disjoint: bool,
+}
+
+/// Does the ancestor-or-self chain of `node_group` (innermost first)
+/// contain group frame `g`?
+fn chain_contains(groups: &[Group], node_group: Option<usize>, g: usize) -> bool {
+    let mut cur = node_group;
+    while let Some(idx) = cur {
+        if idx == g {
+            return true;
+        }
+        cur = groups[idx].parent;
+    }
+    false
+}
+
+impl FrameClass {
+    /// Classify the frames for one edge's endpoints (M20.1). `fg`/`tg` are
+    /// the two endpoints' group memberships (`None` = top level).
+    fn of(fg: Option<usize>, tg: Option<usize>, groups: &[Group]) -> Self {
+        let mut solid: Vec<usize> = (0..groups.len())
+            .filter(|&g| !chain_contains(groups, fg, g) && !chain_contains(groups, tg, g))
+            .collect();
+        let mut ancestors: Vec<usize> = Vec::new();
+        let mut cur = fg;
+        while let Some(idx) = cur {
+            if !ancestors.contains(&idx) {
+                ancestors.push(idx);
+            }
+            cur = groups[idx].parent;
+        }
+        let mut cur = tg;
+        while let Some(idx) = cur {
+            if !ancestors.contains(&idx) {
+                ancestors.push(idx);
+            }
+            cur = groups[idx].parent;
+        }
+        ancestors.sort_unstable();
+        solid.sort_unstable();
+        Self {
+            ancestors,
+            solid,
+            chains_disjoint: fg.is_some()
+                && tg.is_some()
+                && fg != tg
+                && !chain_contains(groups, fg, tg.unwrap())
+                && !chain_contains(groups, tg, fg.unwrap()),
+        }
+    }
+
+    /// The class of one frame index.
+    fn of_frame(&self, g: usize) -> FrameClassKind {
+        if self.ancestors.binary_search(&g).is_ok() {
+            FrameClassKind::Ancestor
+        } else {
+            FrameClassKind::Solid
+        }
+    }
+}
+
+/// A per-edge frame world (M20.1): the classification plus the obstacle
+/// fields built from it, carried on [`EdgeCtx`] so the routing regime (and,
+/// from M20.2 on, the whole-path search) reads one struct instead of
+/// re-deriving the per-LCA-context frame list.
+#[derive(Debug, Clone, Default)]
+struct EdgeFrameWorld {
+    /// The classification the fields derive from.
+    class: FrameClass,
+    /// Thin border bands of every ancestor-or-self frame — the edge's
+    /// crossable border field, the LCA-level band field generalized to
+    /// the whole ancestor chain.
+    ancestor_bands: Vec<(f32, f32, f32, f32)>,
+    /// Full rects of the unrelated (solid) frames.
+    solid: Vec<(f32, f32, f32, f32)>,
+}
+
+impl EdgeFrameWorld {
+    /// Build from the laid-out geometry: the classification runs once and
+    /// the rect fields resolve here, not per lookup.
+    fn build(geom: &Geometry, fg: Option<usize>, tg: Option<usize>) -> Self {
+        let class = FrameClass::of(fg, tg, &geom.diagram.groups);
+        Self {
+            ancestor_bands: class
+                .ancestors
+                .iter()
+                .flat_map(|&g| border_bands(geom.frame(g)))
+                .collect(),
+            solid: class.solid.iter().map(|&g| geom.frame(g)).collect(),
+            class,
+        }
+    }
+
+    /// Is the polyline clear of the *frame* world alone: every ancestor
+    /// band (designated-crossing semantics, [`seg_clear_border`]) and
+    /// every solid frame rect (full [`ROUTE_PAD`] clearance,
+    /// [`seg_clear_solid`], like a node interior)? The routing phase adds
+    /// peer occupancy on top; this predicate is the frame contribution the
+    /// whole-path search (M20.2+) scores against.
+    fn clear(&self, pts: &[(f32, f32)]) -> bool {
+        pts.windows(2).all(|w| self.seg_clear(w[0], w[1]))
+    }
+
+    /// One segment against the frame world alone.
+    fn seg_clear(&self, p0: (f32, f32), p1: (f32, f32)) -> bool {
+        self.ancestor_bands
+            .iter()
+            .all(|&b| seg_clear_border(p0, p1, b))
+            && self.solid.iter().all(|&r| seg_clear_solid(p0, p1, r))
+    }
+
+    /// The routing cost of a polyline against the frame world: a
+    /// [`FRAME_CROSS_PENALTY`] per mid-segment perpendicular crossing of
+    /// an ancestor band. A segment *ending* on a band's centerline is a
+    /// designated crossing (a port or a recorded waypoint), not a mid-run
+    /// transversal, and is free — matching [`seg_clear_border`]'s
+    /// designated-crossing exemption. (Consumed from M20.2 on; kept next
+    /// to the classifier it belongs to.)
+    fn cross_cost(&self, pts: &[(f32, f32)]) -> f32 {
+        pts.windows(2)
+            .map(|w| {
+                self.ancestor_bands
+                    .iter()
+                    .filter(|&&b| band_crossing(w[0], w[1], b).is_some())
+                    .count() as f32
+                    * FRAME_CROSS_PENALTY
+            })
+            .sum()
+    }
+
+    /// Track seeds for the whole-path search (M20.2): ancestor bands seed
+    /// their edges ±[`TRACK_OFF`] *and* their centerlines (the drawn
+    /// outlines — designated crossings, as [`track_route`] seeds them
+    /// today); solid frames seed only their edges ±[`TRACK_OFF`] (nothing
+    /// may touch a solid frame, so no centerline track exists). Sorted and
+    /// deduped so shared frame edges seed one track, not two.
+    fn track_seeds(&self, geom: &Geometry) -> (Vec<f32>, Vec<f32>) {
+        let mut vts: Vec<f32> = Vec::new();
+        let mut hts: Vec<f32> = Vec::new();
+        for &b in &self.ancestor_bands {
+            let (x, y, w, h) = b;
+            vts.push(x - TRACK_OFF);
+            vts.push(x + w + TRACK_OFF);
+            hts.push(y - TRACK_OFF);
+            hts.push(y + h + TRACK_OFF);
+            if h <= w {
+                hts.push(y + h / 2.0);
+            } else {
+                vts.push(x + w / 2.0);
+            }
+        }
+        for &(x, y, w, h) in &self.solid {
+            vts.push(x - TRACK_OFF);
+            vts.push(x + w + TRACK_OFF);
+            hts.push(y - TRACK_OFF);
+            hts.push(y + h + TRACK_OFF);
+        }
+        let _ = geom;
+        vts.sort_by(f32::total_cmp);
+        hts.sort_by(f32::total_cmp);
+        vts.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
+        hts.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
+        (vts, hts)
+    }
+}
+
+/// The widened region a whole-path search routes in (M20.1): the frame
+/// world's obstacle extents pushed out by [`AROUND_MARGIN`] on every side
+/// (the room an around-the-neighborhood detour needs), clamped to the
+/// canvas. Pure and deterministic — a pure function of the frame world,
+/// the node rects, and the canvas.
+fn around_region(
+    fw: &EdgeFrameWorld,
+    nodes: &[(f32, f32, f32, f32)],
+    canvas: (f32, f32),
+) -> (f32, f32, f32, f32) {
+    let mut minx = f32::INFINITY;
+    let mut miny = f32::INFINITY;
+    let mut maxx = f32::NEG_INFINITY;
+    let mut maxy = f32::NEG_INFINITY;
+    let mut grow = |(x, y, w, h): (f32, f32, f32, f32)| {
+        minx = minx.min(x);
+        miny = miny.min(y);
+        maxx = maxx.max(x + w);
+        maxy = maxy.max(y + h);
+    };
+    for &r in nodes {
+        grow(r);
+    }
+    for &r in &fw.solid {
+        grow(r);
+    }
+    for &b in &fw.ancestor_bands {
+        grow(b);
+    }
+    if !minx.is_finite() {
+        return (0.0, 0.0, canvas.0, canvas.1);
+    }
+    let x0 = (minx - AROUND_MARGIN).max(0.0);
+    let y0 = (miny - AROUND_MARGIN).max(0.0);
+    let x1 = (maxx + AROUND_MARGIN).min(canvas.0.max(x0 + 1.0));
+    let y1 = (maxy + AROUND_MARGIN).min(canvas.1.max(y0 + 1.0));
+    (x0, y0, (x1 - x0).max(1.0), (y1 - y0).max(1.0))
+}
+
+/// [`track_route`] with a caller-chosen bounding region (M20.1): identical
+/// track seeding (node rects and bands seed their edges ±[`TRACK_OFF`],
+/// bands also their centerlines) but the *given* region instead of the
+/// derived ports-and-obstacles one, so a whole-path search (M20.2) can look
+/// beyond the ports' bounding span to find around-the-neighborhood detours.
+/// Returns the polyline, or an empty vec when no route exists in the region
+/// (the caller falls back — the bounded convention).
+fn track_route_in_region(
+    a: (f32, f32),
+    b: (f32, f32),
+    obs: &Obstacles,
+    esc: Escapes,
+    region: (f32, f32, f32, f32),
+) -> Vec<(f32, f32)> {
+    let mut vts = vec![a.0, b.0];
+    let mut hts = vec![a.1, b.1];
+    for &(x, y, w, h) in obs.nodes.iter() {
+        vts.push(x - TRACK_OFF);
+        vts.push(x + w + TRACK_OFF);
+        hts.push(y - TRACK_OFF);
+        hts.push(y + h + TRACK_OFF);
+    }
+    for &(x, y, w, h) in obs.borders.iter() {
+        vts.push(x - TRACK_OFF);
+        vts.push(x + w + TRACK_OFF);
+        hts.push(y - TRACK_OFF);
+        hts.push(y + h + TRACK_OFF);
+        if h <= w {
+            hts.push(y + h / 2.0);
+        } else {
+            vts.push(x + w / 2.0);
+        }
+    }
+    vts.sort_by(f32::total_cmp);
+    hts.sort_by(f32::total_cmp);
+    vts.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
+    hts.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
+    let (rx, ry, rw, rh) = region;
+    vts.retain(|&x| x >= rx - 1e-2 && x <= rx + rw + 1e-2);
+    hts.retain(|&y| y >= ry - 1e-2 && y <= ry + rh + 1e-2);
+    let nv = vts.len();
+    let nh = hts.len();
+    if nv == 0 || nh == 0 {
+        return Vec::new();
+    }
+    // The ports must survive the region clip (the caller's region is built
+    // to contain them; a degenerate region that lost a port routes nothing
+    // and the caller falls back, the bounded convention).
+    let (Some(ai), Some(aj), Some(bi), Some(bj)) = (
+        vts.iter().position(|&x| (x - a.0).abs() < 1e-2),
+        hts.iter().position(|&y| (y - a.1).abs() < 1e-2),
+        vts.iter().position(|&x| (x - b.0).abs() < 1e-2),
+        hts.iter().position(|&y| (y - b.1).abs() < 1e-2),
+    ) else {
+        return Vec::new();
+    };
+    track_search(
+        (ai, aj),
+        (bi, bj),
+        &vts,
+        &hts,
+        obs,
+        esc,
+        (rx, ry, rx + rw, ry + rh),
+    )
+}
+
+/// The whole-path A* (M20.1): the track-graph Dijkstra runs over the
+/// widened [`around_region`] box with the [`FRAME_CROSS_PENALTY`] charged
+/// per ancestor-frame crossing, so the search can find whole-path detours
+/// a local box hides. The frame world contributes its tracks (via
+/// [`EdgeFrameWorld::track_seeds`]) and the crossing penalty; the cost
+/// model is segment length + bends + soft occupancy + frame crossings.
+///
+/// M20.1 wires the machinery and pins its semantics with tests; the live
+/// routing regime adopts it in M20.2.
+#[allow(dead_code)]
+fn whole_path_route(
+    a: (f32, f32),
+    b: (f32, f32),
+    fw: &EdgeFrameWorld,
+    obs: &Obstacles,
+    esc: Escapes,
+    nodes: &[(f32, f32, f32, f32)],
+    canvas: (f32, f32),
+) -> Vec<(f32, f32)> {
+    let region = around_region(fw, nodes, canvas);
+    track_route_in_region(a, b, obs, esc, region)
+}
+
 fn edge_world(geom: &Geometry, ctx: &EdgeCtx) -> Obstacles {
     let mut obs = Obstacles::empty();
     for (gi, _) in geom.diagram.nodes.iter().enumerate() {
@@ -4151,11 +4570,62 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> V
     if nv == 0 || nh == 0 {
         return Vec::new();
     }
-    let n = nv * nh;
-    let ai = vts.iter().position(|&x| (x - a.0).abs() < 1e-2).unwrap();
-    let aj = hts.iter().position(|&y| (y - a.1).abs() < 1e-2).unwrap();
-    let bi = vts.iter().position(|&x| (x - b.0).abs() < 1e-2).unwrap();
-    let bj = hts.iter().position(|&y| (y - b.1).abs() < 1e-2).unwrap();
+    let (Some(ai), Some(aj), Some(bi), Some(bj)) = (
+        vts.iter().position(|&x| (x - a.0).abs() < 1e-2),
+        hts.iter().position(|&y| (y - a.1).abs() < 1e-2),
+        vts.iter().position(|&x| (x - b.0).abs() < 1e-2),
+        hts.iter().position(|&y| (y - b.1).abs() < 1e-2),
+    ) else {
+        return Vec::new();
+    };
+    let pts = track_search(
+        (ai, aj),
+        (bi, bj),
+        &vts,
+        &hts,
+        obs,
+        esc,
+        (
+            minx - TRACK_OFF,
+            miny - TRACK_OFF,
+            maxx + TRACK_OFF,
+            maxy + TRACK_OFF,
+        ),
+    );
+    // Re-record the border crossings the collapse may have folded away: a
+    // straight run hopping across a band's centerline collapses to one
+    // segment through the band, which the clearance check would bar —
+    // re-inserting the crossing waypoints keeps it a designated crossing.
+    if !pts.is_empty() && !obs.borders.is_empty() {
+        record_border_crossings(&pts, &obs.borders)
+    } else {
+        pts
+    }
+}
+
+/// The track-graph Dijkstra shared by [`track_route`] (its own derived
+/// region) and [`track_route_in_region`] (a caller-chosen region — M20.1's
+/// whole-path groundwork): the graph (sorted, deduped tracks), the start
+/// and goal intersections, and the obstacle world are given; the search is
+/// the same bend-penalised, soft-costing Dijkstra with the M11 escape bars.
+/// `bounds` is the region's `(minx, miny, maxx, maxy)` — the world's
+/// extent in [`track_route`], the widened region in
+/// [`track_route_in_region`] — used only for the frame-crossing cost
+/// lookahead below (no cost term depends on it today; the parameter is the
+/// seam the two callers share).
+fn track_search(
+    start_ij: (usize, usize),
+    goal_ij: (usize, usize),
+    vts: &[f32],
+    hts: &[f32],
+    obs: &Obstacles,
+    esc: Escapes,
+    _bounds: (f32, f32, f32, f32),
+) -> Vec<(f32, f32)> {
+    let nv = vts.len();
+    let nh = hts.len();
+    let (ai, aj) = start_ij;
+    let (bi, bj) = goal_ij;
     let start = ai * nh + aj;
     let goal = bi * nh + bj;
 
@@ -4201,7 +4671,7 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> V
     // escape segment.
     let bar_first = esc.start.map(|d| d.opposite().code());
     let bar_last = esc.end.map(|d| d.code());
-    let n_states = n * 5;
+    let n_states = nv * nh * 5;
     let mut dist = vec![f32::INFINITY; n_states];
     let mut prev = vec![(usize::MAX, usize::MAX); n_states];
     let mut settled = vec![false; n_states];
@@ -4280,17 +4750,12 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> V
     // Collapse collinear interior points (the path runs through some track
     // intersections without turning).
     collapse_collinear(&mut pts);
-    // Ensure the endpoints are exactly a and b (snap away float drift).
+    // Ensure the endpoints are exactly the start/goal intersections (snap
+    // away float drift). [`track_route`] re-snaps to the exact port points
+    // afterwards.
     if !pts.is_empty() {
-        pts[0] = a;
-        *pts.last_mut().unwrap() = b;
-    }
-    // Re-record the border crossings the collapse may have folded away: a
-    // straight run hopping across a band's centerline collapses to one
-    // segment through the band, which the clearance check would bar —
-    // re-inserting the crossing waypoints keeps it a designated crossing.
-    if !pts.is_empty() && !obs.borders.is_empty() {
-        pts = record_border_crossings(&pts, &obs.borders);
+        pts[0] = (vts[ai], hts[aj]);
+        *pts.last_mut().unwrap() = (vts[bi], hts[bj]);
     }
     pts
 }
@@ -7014,6 +7479,23 @@ mod tests {
     use crate::ast::Shape;
     use crate::parser;
     use crate::resolve;
+
+    // ---- M20.1: solid/ancestor classifier + track-region widening ------
+
+    /// Parse + resolve a source, returning the resolved diagram (for
+    /// classifier unit tests).
+    fn diagram_of(src: &str) -> crate::ast::Diagram {
+        let raw = parser::parse_diagram(src).expect("parse");
+        resolve::resolve(&raw).expect("resolve")
+    }
+
+    /// Node indices for an id list, and the two endpoints' group
+    /// memberships.
+    fn memberships(d: &crate::ast::Diagram, ids: &[&str]) -> Vec<Option<usize>> {
+        ids.iter()
+            .map(|id| d.nodes.iter().find(|n| n.id == *id).expect("node").group)
+            .collect()
+    }
 
     /// The full pipeline (`phase1` stops after the M16 pass's simultaneous
     /// phase — phase 2's negotiation is declaration-order-dependent by
@@ -11085,7 +11567,6 @@ end
         );
     }
 
-
     #[test]
     #[ignore = "trace phase-2 negotiation (DIAG_SRC = a .dgmr path)"]
     fn _trace_m18_stress() {
@@ -11181,5 +11662,321 @@ B --> C
                 .collect();
             println!("  {:<10} -> {:<10} : {}", e.from, e.to, pts.join(" "));
         }
+    }
+
+    #[test]
+    fn classifier_root_level_edge_all_frames_solid() {
+        // Two top-level nodes, one group they don't belong to: the group
+        // frame is solid for the edge; the ancestor set is empty.
+        let d = diagram_of("diagram top-down\na \"A\"\nb \"B\"\ngroup \"G\"\nx \"X\"\nend\n");
+        let m = memberships(&d, &["a", "b", "x"]);
+        let fc = FrameClass::of(m[0], m[1], &d.groups);
+        assert!(
+            fc.ancestors.is_empty(),
+            "no ancestors for top-level endpoints"
+        );
+        assert_eq!(fc.solid, vec![0], "the only group is solid");
+        assert_eq!(fc.of_frame(0), FrameClassKind::Solid);
+        // Two top-level (`None`) endpoints share the level itself — the
+        // disjointness flag is about *group chains*, and neither endpoint
+        // has one.
+        assert!(!fc.chains_disjoint, "no group chains to be disjoint");
+    }
+
+    #[test]
+    fn classifier_both_endpoints_in_one_group() {
+        // Both endpoints in the same group: that frame is the only
+        // ancestor; nothing is solid.
+        let d = diagram_of("diagram top-down\ngroup \"G\"\na \"A\"\nb \"B\"\nend\n");
+        let m = memberships(&d, &["a", "b"]);
+        let fc = FrameClass::of(m[0], m[1], &d.groups);
+        assert_eq!(fc.ancestors, vec![0]);
+        assert!(fc.solid.is_empty());
+        assert_eq!(fc.of_frame(0), FrameClassKind::Ancestor);
+        assert!(!fc.chains_disjoint, "same-group endpoints are not disjoint");
+    }
+
+    #[test]
+    fn classifier_nested_edge_lists_the_whole_chain() {
+        // `a` inside Outer>Inner, `b` inside Outer: Inner and Outer are
+        // both ancestors; nothing else exists to be solid.
+        let d =
+            diagram_of("diagram top-down\ngroup \"O\"\ngroup \"I\"\na \"A\"\nend\nb \"B\"\nend\n");
+        let m = memberships(&d, &["a", "b"]);
+        let fc = FrameClass::of(m[0], m[1], &d.groups);
+        // Outer=0, Inner=1 in declaration order.
+        assert_eq!(fc.ancestors, vec![0, 1]);
+        assert!(fc.solid.is_empty());
+        assert!(!fc.chains_disjoint, "nested endpoint shares a chain tail");
+    }
+
+    #[test]
+    fn classifier_sibling_groups_are_mutually_solid() {
+        // `a --> b` with `a` in G1 and `b` in G2 (siblings): each group is
+        // an ancestor for its own endpoint and solid for the other's —
+        // both appear in the ancestor list, and nothing is left solid.
+        let d = diagram_of(
+            "diagram top-down\ngroup \"G1\"\na \"A\"\nend\ngroup \"G2\"\nb \"B\"\nend\n",
+        );
+        let m = memberships(&d, &["a", "b"]);
+        let fc = FrameClass::of(m[0], m[1], &d.groups);
+        assert_eq!(fc.ancestors, vec![0, 1]);
+        assert!(fc.solid.is_empty());
+        assert!(fc.chains_disjoint);
+    }
+
+    #[test]
+    fn classifier_unrelated_subtree_is_solid() {
+        // `a` in G1, `b` top-level, and G1 contains a nested subgroup H:
+        // H is solid for the edge (it is on neither endpoint's chain);
+        // G1 is an ancestor.
+        let d = diagram_of(
+            "diagram top-down\ngroup \"G1\"\ngroup \"H\"\nx \"X\"\nend\na \"A\"\nend\nb \"B\"\n",
+        );
+        let m = memberships(&d, &["a", "b", "x"]);
+        let fc = FrameClass::of(m[0], m[1], &d.groups);
+        assert_eq!(fc.ancestors, vec![0]);
+        assert_eq!(fc.solid, vec![1], "the unrelated nested frame is solid");
+        assert_eq!(fc.of_frame(1), FrameClassKind::Solid);
+    }
+
+    #[test]
+    fn classifier_deep_nesting_wall_of_siblings() {
+        // Deep nesting: `a` in Root > L1 > L2 > L3, `b` top-level, plus a
+        // sibling wall (L2's other child L2s with its own subtree). Every
+        // Root/L1/L2/L3 frame is an ancestor; the sibling subtree's frames
+        // are all solid.
+        let d = diagram_of(
+            "diagram top-down\ngroup \"R\"\ngroup \"L1\"\ngroup \"L2\"\ngroup \"L3\"\na \"A\"\nend\ngroup \"L2s\"\nl2sx \"S\"\nend\nend\nend\nend\nb \"B\"\n",
+        );
+        let m = memberships(&d, &["a", "b", "l2sx"]);
+        let fc = FrameClass::of(m[0], m[1], &d.groups);
+        // Root=0, L1=1, L2=2, L3=3, L2s=4.
+        assert_eq!(fc.ancestors, vec![0, 1, 2, 3]);
+        assert_eq!(fc.solid, vec![4]);
+        // `b` is top-level (`None`) — a top-level endpoint's chain is the
+        // empty group chain, so no group-vs-group containment applies;
+        // the sibling subtree is still solid for the edge.
+        assert!(!fc.chains_disjoint);
+    }
+
+    #[test]
+    fn classifier_nesting_endpoint_pair() {
+        // An edge from a node in Root to a node in Root > Inner: Root is
+        // the shared chain tail (not disjoint); Inner is an ancestor; the
+        // sibling S of Inner inside Root is solid.
+        let d = diagram_of(
+            "diagram top-down\ngroup \"R\"\ngroup \"I\"\na \"A\"\nend\ngroup \"S\"\nx \"X\"\nend\nb \"B\"\nend\n",
+        );
+        let m = memberships(&d, &["a", "b"]);
+        let fc = FrameClass::of(m[0], m[1], &d.groups);
+        // Root=0, Inner=1, S=2.
+        assert_eq!(fc.ancestors, vec![0, 1]);
+        assert_eq!(fc.solid, vec![2]);
+        assert!(!fc.chains_disjoint, "b's group contains a's group");
+    }
+
+    #[test]
+    fn frame_world_bands_and_solids_match_the_classification() {
+        // Build a Geometry with hand-placed frames: the world's band field
+        // covers the ancestors' four bands each; the solid field carries
+        // the unrelated frame's raw rect.
+        let d = diagram_of(
+            "diagram top-down\ngroup \"G1\"\na \"A\"\nend\ngroup \"G2\"\nb \"B\"\nend\ngroup \"G3\"\nx \"X\"\nend\n",
+        );
+        let mut id_index = std::collections::HashMap::new();
+        id_index.insert("a", 0usize);
+        id_index.insert("b", 1usize);
+        id_index.insert("x", 2usize);
+        let mut frame_rect = std::collections::HashMap::new();
+        frame_rect.insert(0usize, (0.0, 0.0, 100.0, 100.0));
+        frame_rect.insert(1usize, (200.0, 0.0, 100.0, 100.0));
+        frame_rect.insert(2usize, (100.0, 200.0, 100.0, 100.0));
+        let geom = Geometry {
+            diagram: &d,
+            id_index,
+            node_rect: std::collections::HashMap::new(),
+            frame_rect,
+            frame_children: std::collections::HashMap::new(),
+            direct_pts: std::collections::HashMap::new(),
+            level_items: std::collections::HashMap::new(),
+        };
+        // a in G1 (0), b in G2 (1), G3 (2) unrelated.
+        let fw = EdgeFrameWorld::build(&geom, Some(0), Some(1));
+        assert_eq!(fw.class.ancestors, vec![0, 1]);
+        assert_eq!(fw.class.solid, vec![2]);
+        assert_eq!(fw.ancestor_bands.len(), 8, "4 bands per ancestor frame");
+        assert_eq!(fw.solid, vec![(100.0, 200.0, 100.0, 100.0)]);
+        // A route straight between the frames (a horizontal leg through
+        // the open space between them) is clear of the frame world.
+        assert!(fw.seg_clear((100.0, 50.0), (200.0, 50.0)));
+        // A route riding the top band of G1 parallel is barred.
+        assert!(!fw.seg_clear((10.0, 0.0), (90.0, 0.0)));
+        // A route through the solid frame's interior is barred.
+        assert!(!fw.seg_clear((150.0, 150.0), (150.0, 250.0)));
+        assert!(fw.cross_cost(&[(100.0, 50.0), (200.0, 50.0)]) < 1e-6);
+    }
+
+    #[test]
+    fn around_region_widens_beyond_obstacles_and_clamps_to_canvas() {
+        // A frame world with one ancestor frame; nodes well inside the
+        // canvas. The region must extend AROUND_MARGIN past every
+        // obstacle extent and stay inside the canvas.
+        let d = diagram_of("diagram top-down\ngroup \"G\"\na \"A\"\nend\n");
+        let mut id_index = std::collections::HashMap::new();
+        id_index.insert("a", 0usize);
+        let mut frame_rect = std::collections::HashMap::new();
+        frame_rect.insert(0usize, (100.0, 100.0, 200.0, 100.0));
+        let geom = Geometry {
+            diagram: &d,
+            id_index,
+            node_rect: std::collections::HashMap::new(),
+            frame_rect,
+            frame_children: std::collections::HashMap::new(),
+            direct_pts: std::collections::HashMap::new(),
+            level_items: std::collections::HashMap::new(),
+        };
+        let fw = EdgeFrameWorld::build(&geom, Some(0), None);
+        let nodes = vec![(120.0, 120.0, 40.0, 40.0)];
+        let region = around_region(&fw, &nodes, (1000.0, 800.0));
+        // The world's extent is the *band* field: a band sits half the
+        // stroke (BORDER_HALF, 0.75) outside the frame rect and the
+        // region adds AROUND_MARGIN beyond that.
+        let e = 100.0 - BORDER_HALF - AROUND_MARGIN;
+        assert!((region.0 - e).abs() < 1e-2);
+        assert!((region.1 - e).abs() < 1e-2);
+        assert!((region.0 + region.2 - (300.0 + BORDER_HALF + AROUND_MARGIN)).abs() < 1e-2);
+        assert!((region.1 + region.3 - (200.0 + BORDER_HALF + AROUND_MARGIN)).abs() < 1e-2);
+        // Clamped to the canvas when the margin would pass it.
+        let tight = around_region(&fw, &nodes, (180.0, 150.0));
+        assert!(tight.0 >= 0.0 && tight.1 >= 0.0);
+        assert!(tight.0 + tight.2 <= 180.0 + 1e-2);
+        assert!(tight.1 + tight.3 <= 150.0 + 1e-2);
+    }
+
+    #[test]
+    fn track_route_in_region_finds_around_the_wall_detour_the_local_box_hides() {
+        // The region-widening payoff (still off the live pipeline): a
+        // solid frame wall sits between the two ports, extending far
+        // sideways. The local region (ports + obstacles' own extent)
+        // offers no way around; the widened region reaches past the
+        // wall's edge and finds the detour.
+        let d = diagram_of("diagram top-down\nw \"W\"\na \"A\"\nb \"B\"\n");
+        let mut id_index = std::collections::HashMap::new();
+        id_index.insert("a", 0usize);
+        id_index.insert("b", 1usize);
+        id_index.insert("w", 2usize);
+        let mut node_rect = std::collections::HashMap::new();
+        node_rect.insert(0usize, (0.0, 0.0, 40.0, 40.0)); // a
+        node_rect.insert(1, (400.0, 0.0, 40.0, 40.0)); // b
+        node_rect.insert(2, (200.0, 0.0, 40.0, 300.0)); // w — the wall itself
+        // The wall between them, flush to the canvas top: no room above.
+        let wall = (200.0, 0.0, 40.0, 300.0);
+        let mut frame_rect = std::collections::HashMap::new();
+        frame_rect.insert(0usize, wall);
+        let geom = Geometry {
+            diagram: &d,
+            id_index,
+            node_rect: node_rect.clone(),
+            frame_rect,
+            frame_children: std::collections::HashMap::new(),
+            direct_pts: std::collections::HashMap::new(),
+            level_items: std::collections::HashMap::new(),
+        };
+        let mut obs = Obstacles::empty();
+        obs.push_node(inflate(wall, BORDER_HALF));
+        // Ports on facing sides at the wall's y-band. The wall is pushed
+        // as a *solid* rect (the fully-blocked semantics an unrelated
+        // frame gets from the classifier) and is flush to the canvas
+        // top: no corridor exists above it at all, so the only way
+        // across is around its bottom.
+        let a = (40.0, 40.0);
+        let b = (400.0, 40.0);
+        // Local region (track_route's own derived one): its top boundary
+        // is the wall top − TRACK_OFF — *above* the canvas top — so the
+        // route it finds runs over the wall's top edge, outside the
+        // drawn world. That is exactly the defect the region widening
+        // exists to close: the local region cannot see the canvas
+        // boundary, so it "detours" through undrawable space. The
+        // widened region is clamped to the canvas, so the same search
+        // must take the real corridor below the wall instead.
+        let local = track_route(a, b, &obs, Escapes::default());
+        let local_min_y = local.iter().map(|p| p.1).fold(f32::INFINITY, f32::min);
+        assert!(
+            !local.is_empty() && local_min_y < 0.0,
+            "the local route must escape above the canvas (the defect)"
+        );
+        // Widened region: the around-margin reaches past the wall bottom
+        // *within* the canvas. The frame world is empty here (a
+        // hand-built obstacle world, not a classified one — `w` is a
+        // top-level node, no groups exist), so the region is built from
+        // the caller's node list directly; assert its shape and use it.
+        let fw = EdgeFrameWorld::build(&geom, None, None);
+        assert!(fw.solid.is_empty() && fw.ancestor_bands.is_empty());
+        // The world extent = the wall (the only node passed) + margin —
+        // but the *node rects* the caller passes are the edge's own
+        // endpoint nodes too, which span the ports; include them so the
+        // region actually contains both ports (a region that lost a port
+        // routes nothing, the bounded convention).
+        let region = around_region(
+            &fw,
+            &node_rect.values().copied().collect::<Vec<_>>(),
+            (500.0, 400.0),
+        );
+        // Left/top clamped at the canvas (the `a` node sits at the
+        // origin); right: past `b` (440) + margin → the canvas edge
+        // (500); bottom: the wall bottom (300) + margin → clamped to
+        // 360? No — 300 + 60 = 360, inside the canvas: exactly 360.
+        assert!((region.0 - 0.0).abs() < 1e-2, "clamped at the canvas left");
+        assert!((region.1 - 0.0).abs() < 1e-2, "clamped at the canvas top");
+        assert!((region.0 + region.2 - 500.0).abs() < 1e-2);
+        assert!((region.1 + region.3 - 360.0).abs() < 1e-2);
+        let wide = track_route_in_region(a, b, &obs, Escapes::default(), region);
+        assert!(!wide.is_empty(), "widened region must find the detour");
+        assert!(obs.clear(&wide), "the detour must clear the wall");
+        // It must actually go around the wall (drop below the wall
+        // bottom — the corridor's track row is the wall bottom +
+        // TRACK_OFF), and stay inside the canvas.
+        let max_y = wide.iter().map(|p| p.1).fold(f32::NEG_INFINITY, f32::max);
+        assert!(max_y > wall.1 + wall.3 - 1.0, "detour must pass the wall");
+        assert!(
+            wide.iter().all(|&(_, y)| y >= 0.0),
+            "the detour must stay within the canvas"
+        );
+    }
+
+    #[test]
+    fn whole_path_route_charges_frame_crossings() {
+        // The cross-cost hook: a world with one ancestor band; a route
+        // that crosses it twice (down then back) costs more than a
+        // straight crossing. Whole-path_route itself is exercised
+        // end-to-end in M20.2; here the cost term plus the widened-region
+        // route run together.
+        let d = diagram_of("diagram top-down\ngroup \"G\"\na \"A\"\nend\n");
+        let mut id_index = std::collections::HashMap::new();
+        id_index.insert("a", 0usize);
+        let mut frame_rect = std::collections::HashMap::new();
+        frame_rect.insert(0usize, (100.0, 100.0, 200.0, 100.0));
+        let geom = Geometry {
+            diagram: &d,
+            id_index,
+            node_rect: std::collections::HashMap::new(),
+            frame_rect,
+            frame_children: std::collections::HashMap::new(),
+            direct_pts: std::collections::HashMap::new(),
+            level_items: std::collections::HashMap::new(),
+        };
+        let fw = EdgeFrameWorld::build(&geom, Some(0), None);
+        // One straight perpendicular crossing.
+        let one = vec![(150.0, 50.0), (150.0, 250.0)];
+        // Out-and-back: two crossings of the same band.
+        let two = vec![(150.0, 50.0), (150.0, 250.0), (250.0, 250.0), (250.0, 50.0)];
+        assert!(fw.cross_cost(&one) < fw.cross_cost(&two) - FRAME_CROSS_PENALTY);
+        // And a designated-crossing end (endpoint on the centerline) is
+        // free: `one` ends inside the frame, so score the same shape
+        // split at the centerline — the cost counts only mid-segment
+        // transversals.
+        let touching = vec![(150.0, 50.0), (150.0, 150.0), (150.0, 250.0)];
+        assert!(fw.cross_cost(&touching) < fw.cross_cost(&two) - FRAME_CROSS_PENALTY);
     }
 }

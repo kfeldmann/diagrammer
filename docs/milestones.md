@@ -9,8 +9,8 @@ how the remaining work depends on itself.
 **Current position:** M0–M7.5, M9–M15, M16, M17, M18, and M19 are
 complete (M12 was absorbed by M11.5), plus the post-M13 hardening pass
 below and the post-M17 routing hardening (escape-stub spikes) recorded
-under M17.
-**M8 (CLI polish) is the last open milestone.**
+under M17. **M20.1 (whole-path maze routing: foundation) is complete.**
+**M8 (CLI polish) and the M20.2–M20.6 routing migration remain open.**
 
 ---
 
@@ -1046,7 +1046,7 @@ edge existed to enforce it.
 **Blocked by:** nothing (ranking-level change). **Blocks:** nothing, but it
 broadens exposure to the known routing limitation above.
 
-### ✅ M16 — Global routing pass (the M11.5 verdict, implemented)
+## ✅ M16 — Global routing pass (the M11.5 verdict, implemented)
 
 The M11.5 verdict recorded that the one-pass regime satisfies the invariants
 only through per-case fallbacks, because it cannot arbitrate a resource
@@ -1169,8 +1169,7 @@ ladder, one dispatch point — all kept).
 **Blocked by:** M11.5 (the unified regime it refines). **Blocks:** nothing
 new; M8 remains the only open milestone.
 
-### ✅ M17 — Post-M16 review fixes (lane union-merge, permutation proof,
-### cleanup)
+## ✅ M17 — Post-M16 review fixes (lane union-merge, permutation proof, #cleanup)
 
 Three findings from the M16 review, all minor — no behavior regression, one
 snapshot regenerated:
@@ -1246,7 +1245,7 @@ only `snapshots/sides.svg` changed (the fixed `api --> cache` route plus its
 downstream negotiation with the `api --> db` forced-top edge, which moved
 its descent corridor to stay clear of the new lane).
 
-### ✅ M18 — Multi-frame within-frame stubs avoid siblings (option 1)
+## ✅ M18 — Multi-frame within-frame stubs avoid siblings (option 1)
 
 Diagnosed on `dev-digital.dgmr` (kept out of the snapshot suite and
 permanent tests per its owner): the edges
@@ -1394,7 +1393,7 @@ interior rows beyond obstacle-edge ± [`TRACK_OFF`] when only one exists
 **Blocked by:** nothing (M17's escape bars are a constraint the fix must
 respect, not a blocker). **Blocks:** M19.
 
-### ✅ M19 — Stub routing unified into the one-regime dispatch (option 2)
+## ✅ M19 — Stub routing unified into the one-regime dispatch (option 2)
 
 The end-state refactor M18 deliberately defers: complete the M11.5 unifying
 move — "one obstacle world, one routing regime" — over the *stub* spans,
@@ -1414,7 +1413,7 @@ absorbs a's machinery, and c's coordination mechanism must operate on the
 final dispatch shape so it does not have to be re-proven after the
 refactor.
 
-#### ✅ S19a — Dispatch unify, minimal surface (refactor; expect byte-identical)
+### ✅ S19a — Dispatch unify, minimal surface (refactor; expect byte-identical)
 
 - [x] **Route any failing stub span at the dispatch.** When a candidate's
       straight [`build_stub`] output fails `world.clear()`, reroute the
@@ -1454,7 +1453,7 @@ refactor.
   failure boundary is unchanged at the same segment pair — no new defect
   class surfaced by the reroute gate)*.
 
-#### ✅ S19b — Absorb & retire, cover the last blind span (mostly refactor)
+### ✅ S19b — Absorb & retire, cover the last blind span (mostly refactor)
 
 - [x] **Absorb M18's machinery, then retire the special case.** The
       generalized [`force_stub_around_siblings`] and its chain-length gate
@@ -1496,7 +1495,7 @@ refactor.
   permutation invariance, escape-stub bars, pocket right-of-way, and the
   snapshot suite.
 
-#### ✅ S19c — M18 residue: corridor coordination (new geometry; output expected to change)
+### ✅ S19c — M18 residue: corridor coordination (new geometry; output expected to change)
 
 - [x] **Row-fan coordination** across simultaneously routed detours that
       share a corridor row: M18 established that no single-edge reroute
@@ -1572,3 +1571,103 @@ for every stub kind, including the ones M18 does not touch.
 **Blocked by:** M18 (proves the geometry it generalizes). **Blocks:**
 nothing; M8 remains the last open milestone.
 
+## ☐ M20 — Whole Path Maze Routing
+
+See ./plan-for-whole-path-maze-routing.md
+
+### ✅ M20.1 — Solid/ancestor classifier + track-graph region widening (foundation, no behavior change)
+
+The plan's foundation milestone, landed exactly as scoped: the per-edge
+frame world exists and is wired, and the track-graph machinery accepts a
+caller-chosen region — but no routing behavior changed. All twelve
+golden snapshots are byte-identical to the committed state (verified by
+the suite and by re-rendering the examples).
+
+- [x] **The classifier ([`FrameClass::of`])** — a pure function of the
+      containment tree and the two endpoint node indices. For edge `e`
+      with endpoints `s`, `t`:
+      - **ancestor frames** — every frame on the ancestor-or-self chains
+        of `s` and `t` (the chains [`chain_to_lca`] reads, unioned and
+        index-sorted). Perpendicular crossing legal (a search output
+        from M20.2 on), parallel riding on the band barred — the existing
+        border-band semantics without the rep-port / stub-crossing
+        decomposition.
+      - **solid frames** — every other group frame (siblings, unrelated
+        deep subtrees). Fully blocked, interior *and* border band:
+        `nothing may touch them`; a corridor *between* two solid frames
+        is open space and legal. This kills the
+        threading-through-an-unrelated-group problem by construction.
+      - **`chains_disjoint`** — true when neither endpoint's group is an
+        ancestor-or-self of the other's (the genuinely cross-boundary
+        shape); false for nesting endpoints and when either endpoint is
+        top-level (`None` contains every group, so no group-vs-group
+        disjointness applies there).
+      The LCA concept, rep crossings, stub/rep decomposition, and the
+      M14 coupled/decoupled duality all *survive untouched today* — the
+      current dispatch still routes through them. What changes is that
+      the containment information is now available per edge in the shape
+      the whole-path search consumes.
+- [x] **[`EdgeFrameWorld`]** — the classification plus the obstacle
+      fields built from it (ancestor bands via [`border_bands`], solid
+      raw rects), built once per edge in [`assemble`] and carried on
+      [`EdgeCtx`] (with a pure on-demand fallback for hand-built unit
+      fixtures). Its three predicates — [`EdgeFrameWorld::clear`] /
+      [`seg_clear`]/[`seg_clear`] segment form,
+      [`EdgeFrameWorld::cross_cost`], and [`EdgeFrameWorld::track_seeds`]
+      — are the whole-path search's (M20.2) scoring and vocabulary:
+      [`cross_cost`] charges [`FRAME_CROSS_PENALTY`] (300, tuned once:
+      ~25 bends' worth, so a whole-path search prefers one crossing per
+      ancestor frame over a cheap-looking double-cross) per *mid-segment*
+      perpendicular transversal of an ancestor band, keeping a segment
+      that *ends* on a centerline (a designated crossing) free — exactly
+      [`seg_clear_border`]'s exemption; [`track_seeds`] seeds ancestor
+      bands at edges ±[`TRACK_OFF`] *and* their centerlines (the
+      designated-crossing rows [`track_route`] already uses) and solid
+      frames at edges only (nothing may touch them).
+- [x] **The track graph accepts a caller-chosen region.** The Dijkstra
+      core was extracted into [`track_search`] (graph + start/goal +
+      world; the search itself unchanged, byte-identical behavior);
+      [`track_route`] now calls it with its own derived
+      ports-and-obstacles region, and the new
+      [`track_route_in_region`] calls it with a caller region. The
+      region a whole-path search uses is [`around_region`]: the frame
+      world's obstacle extents plus every node rect, pushed out by
+      [`AROUND_MARGIN`] (60) on every side, clamped to the canvas —
+      with the canvas clamp being the load-bearing half (the old derived
+      region can extend past the canvas and "detour" through undrawable
+      space; the widened one cannot).
+      [`whole_path_route`] is the M20.2 entry point that ties the pieces
+      together (still unused by the live pipeline).
+- [x] **Tests** (7 new + 2 mechanism tests):
+      - classification: root-level endpoints (unrelated frame solid),
+        both endpoints in one group, nested chain (both frames
+        ancestors), sibling groups (mutual ancestors, disjoint), an
+        unrelated nested subtree (solid), deep nesting with a sibling
+        wall, and a nesting endpoint pair (shared tail, sibling solid);
+      - [`EdgeFrameWorld`]: 4 bands per ancestor frame, the solid rect
+        raw, segment-clearance semantics (clear between frames, barred
+        parallel on a band, barred through a solid interior), and the
+        cross-cost ordering (one straight crossing < an out-and-back, a
+        designated crossing free);
+      - [`around_region`]: the margin shape and the canvas clamp;
+      - [`track_route_in_region`]: a solid wall flush to the canvas top
+        — the local derived region "detours" *above the canvas* (the
+        defect region widening closes), the widened region finds the
+        drawable corridor below the wall and stays inside the canvas;
+      - `whole_path_route`: exercised through its cost/region pieces
+        (the end-to-end adoption is M20.2's deliverable).
+- **Deliverable:** suite green (223 tests; snapshots byte-stable); no
+  routing behavior change — [`edge_world`] and the whole dispatch
+  ladder are untouched. The classification is precomputed and dead-read
+  today by design: M20.2 flips the direct-edge regime to
+  [`whole_path_route`] and the same tests re-pin its live behavior.
+
+**Blocked by:** nothing. **Blocks:** M20.2 (which consumes
+[`whole_path_route`] / [`EdgeFrameWorld`] directly).
+
+### [ ] M20.2 — Whole-path search for direct internal edges.
+(See ./plan-for-whole-path-maze-routing.md)
+### [ ] M20.3 — Whole-path search for cross-boundary edges; delete the rep model.
+### [ ] M20.4 — Frames bands, fans, pockets, repair loop re-grounded.
+### [ ] M20.5 — Labels re-tuned (M13 still holds its contract).
+### [ ] M20.6 — Deletion & doc pass.

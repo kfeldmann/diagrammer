@@ -45,48 +45,43 @@
 //! inner nodes' internal arrangement around — the Mermaid/dagre failure mode
 //! this tool exists to escape.
 //!
-//! ### Rendering rules (v0/M5)
+//! ### Edge routing (M20.3 — whole-path maze routing)
 //!
-//! - An edge whose two representatives are both **real nodes** (a direct
-//!   internal edge of its LCA level) is rendered with the flat engine's
-//!   waypoints, in absolute coordinates.
-//! - Any other edge (at least one representative is a compound box) is a
-//!   **cross-boundary** edge. It is routed through **connection points on the
-//!   group frames** it crosses, without disturbing the groups' internal
-//!   layout (the M5 headline guarantee — the failure mode this tool exists to
-//!   escape). The LCA-level segment connects the two representatives' *ports*:
-//!   each rep port sits at the **endpoint node's** cross-coordinate on its
-//!   frame's facing side (not the frame's center), so a within-frame stub runs
-//!   straight along the node's own axis and edges entering a group line up
-//!   with their target node rather than all converging on the frame's midpoint.
-//!   The frame's facing side is always the *implicit* one: a forced `from=` /
-//!   `to=` side (M11) binds the endpoint **node** only (M14), and a stub whose
-//!   node side faces away from the frame crossing bends into it (see
-//!   [`mismatched_stub`]).
-//!   When that point falls under the frame's (top-left) title the stub detours
-//!   just past the title and jogs below it; a stub that would pierce a sibling
-//!   (the target sits beyond other members along the frame's flow axis) routes
-//!   around the frame. Stub segments that traverse intermediate (nested)
-//!   frames are clipped at each frame's boundary so the path records where it
-//!   crosses.
+//! Every edge is routed by **one whole-path A\* search from source node port
+//! to target node port** over a track graph, against **one obstacle model**.
+//! Frame-crossing topology is a *search output*: the containment tree's only
+//! remaining routing role is the per-edge ancestor/solid classification
+//! ([`FrameClass`]) — the frames on the endpoints' ancestor chains are
+//! crossable (perpendicular crossings legal, parallel riding barred, a
+//! crossing penalty per transversal) and every other frame is fully solid.
+//! Group titles are solid obstacles too, so the search routes around them.
+//!
+//! The old piecewise machinery — the rep model (rep ports, the frame
+//! crossing fan, within-frame stubs, title detours, the around-target
+//! wrapper) and the M14 coupled/decoupled forced-side duality — is deleted.
+//! What survives of the earlier routing work is the shared infrastructure:
+//! the track graph ([`track_search`]), the M9 separation pre-passes (port
+//! fanning and lane assignment, which the search honors as row
+//! *preferences*), and M16's soft peer occupancy + bounded rip-up-and-repair
+//! loop (see [`route_edge`] / [`assemble`]).
+//!
+//! A forced `from=`/`to=` side still binds the endpoint node's port with M11
+//! semantics (the port lands on the requested side and escapes outward); a
+//! forced cross-boundary edge is routed by the escape-and-ladder fallback
+//! rather than the search, whose free-choice port model cannot honor the
+//! request (M20.4 re-grounds port selection on search outputs). Self-loops
+//! keep their dedicated generators. The M5 headline guarantee is unchanged:
+//! a group's internal arrangement never moves because an edge crosses its
+//! boundary.
 //!
 //! ## Orthogonal edge routing (M7)
 //!
-//! Every edge — direct or cross-boundary — is finally passed through
-//! [`ortho_chain`], which turns each diagonal segment into a right-angle "Z":
-//! along the edge's flow axis (the rank axis in page space — vertical for
-//! top-down / bottom-up, horizontal for left-right / right-left) to the
-//! segment's flow midpoint, across to the target's cross coordinate, then
-//! along the flow axis to the target. The perpendicular jog lands between the
-//! two waypoints' flow coordinates — in an inter-rank gap or a frame's
-//! padding — so it stays clear of node interiors and the M5 "stub does not
-//! cross a sibling" guarantee holds. Direct edges use the midpoint bias via
-//! [`orthogonalize`]; a cross-boundary within-frame stub that would cross a
-//! titled frame's TOP side instead enters past the title and jogs a fixed
-//! [`STUB_JOG_CLEARANCE`] above the node (in the clear padding below the
-//! title) — see [`title_detour`]. The arrowhead keeps its `orient="auto"`
-//! marker, which the now axis-aligned final segment orients along a clean
-//! cardinal direction.
+//! Every polyline is axis-aligned. The whole-path search emits orthogonal
+//! routes directly (it walks a track graph); the flat engine's waypoints for
+//! a direct edge are passed through [`ortho_chain`], which turns each
+//! diagonal segment into a right-angle "Z" at the segment's flow midpoint.
+//! The arrowhead keeps its `orient="auto"` marker, which the axis-aligned
+//! final segment orients along a clean cardinal direction.
 //!
 //! ## Edge labels (M13)
 //!
@@ -170,14 +165,21 @@ const FRAME_PAD_Y: f32 = 8.0;
 /// Height reserved at the top of a frame for the title, when present (one
 /// title line; multi-line titles grow the inset — see [`frame_insets`]).
 const FRAME_TITLE_H: f32 = 20.0;
+/// Extra top inset below a titled frame's title text (M20.3): one route's
+/// clearance, so a whole-path run can pass between the title and the frame's
+/// first rank. This is the band the deleted title detour hand-placed its jog
+/// in; the search routes around the title only if the strip exists. Sized
+/// above [`ROUTE_PAD`] plus a track gap so a track row fits between the title
+/// obstacle and the first node.
+const TITLE_BAND_PAD: f32 = 14.0;
 /// Inset of the title text from the frame's top-left corner, and the font
-/// size it is rendered at. Layout reads these only to detect when a
-/// cross-boundary within-frame stub would cross the title text (see
-/// [`title_detour_clear_x`]) so it can route around it. Keep in sync with
-/// the renderer's `FRAME_TITLE_X` / `FRAME_TITLE_SIZE` (both in
-/// `render/svg.rs`): the title text occupies roughly `x ∈ [frame.x +
-/// FRAME_TITLE_X, frame.x + FRAME_TITLE_X + title_width]` at the top of
-/// the frame.
+/// size it is rendered at. Layout reads these to build the title's routing
+/// obstacle ([`title_obstacle_rect`]) — the solid rect the whole-path search
+/// keeps clear (M20.3) — and the label placement engine keeps knockouts off
+/// the same box. Keep in sync with the renderer's `FRAME_TITLE_X` /
+/// `FRAME_TITLE_SIZE` (both in `render/svg.rs`): the title text occupies
+/// roughly `x ∈ [frame.x + FRAME_TITLE_X, frame.x + FRAME_TITLE_X +
+/// title_width]` at the top of the frame.
 const FRAME_TITLE_X: f32 = 10.0;
 const FRAME_TITLE_FONT_SIZE: f32 = 12.0;
 /// Top offset of the rendered title text inside the frame's title band (M13:
@@ -186,43 +188,10 @@ const FRAME_TITLE_FONT_SIZE: f32 = 12.0;
 /// title text occupies `y ∈ [frame.y + FRAME_TITLE_TOP, … + lines *
 /// line_height]`.
 const FRAME_TITLE_TOP: f32 = 4.0;
-/// Extra padding added to a group frame's top inset *and* bottom padding
-/// when a cross-boundary edge connects to one of the frame's *immediate*
-/// children (a direct-child node the edge reaches by crossing the frame).
-/// It grows the frame along the LCA-level flow axis so the edge's within-
-/// frame stub has room to jog: clear of the title text above the node and
-/// clear of the node's arrowhead below the jog (see [`STUB_JOG_CLEARANCE`]).
-/// One group-title font height each side — the title font is smaller than
-/// the node label font, so this is a modest growth; a group with no such
-/// edges keeps the default frame geometry. Keep this in sync with the
-/// renderer's group title font size (`FRAME_TITLE_SIZE` in
-/// `render/svg.rs`, 12 px): it is sized to one title-height of room. Its
-/// horizontal mirror — growing a title-sized frame's *width* so a title
-/// detour has an entry past the title — lives in [`layout_level`] (M10).
-const CROSS_FRAME_PAD: f32 = 12.0;
-/// Distance from a node's port at which a title-detour within-frame stub
-/// places its right-angle jog, along the flow axis toward the frame edge.
-/// Used only for stubs that cross a titled frame's TOP side (see
-/// [`title_detour`]): the jog lands in the clear padding just below the
-/// title instead of at the segment midpoint (which would sit on the title
-/// text).
-///
-/// This must exceed two things in `render/svg.rs`. First, the line-end
-/// shortening (`ARROW_BACKOFF`, 4 px) so the stub's final segment stays
-/// longer than the shortening and the arrowhead tip lands on the node
-/// boundary rather than poking into the node. Second, the arrowhead's own
-/// extent back from the tip (`markerHeight`, 10 px — the marker's base sits
-/// `markerHeight` short of the tip), so the jog clears the arrowhead body and
-/// the horizontal approach line does not cut into the arrowhead's side. With
-/// [`CROSS_FRAME_PAD`] growing the frame, this also leaves the jog clear of
-/// the title text above. It is a layout/render shared constant in the same
-/// spirit as [`FONT_SIZE`] and [`CYL_RY`]; keep it in sync if the renderer's
-/// marker or backoff changes.
-const STUB_JOG_CLEARANCE: f32 = 12.0;
-/// Base clearance between a title-detour entry and a group title's edge
-/// (see [`title_detour_clear_x`]). Applied to the title's **left** edge —
-/// which is anchored at [`FRAME_TITLE_X`] by the renderer and so cannot be
-/// widened by a viewer's font fallback — and, plus the fallback margins
+/// Base clearance a route keeps past a group title's edge (see
+/// [`title_obstacle_rect`]). Applied to the title's **left** edge — which is
+/// anchored at [`FRAME_TITLE_X`] by the renderer and so cannot be widened by
+/// a viewer's font fallback — and, plus the fallback margins
 /// ([`TITLE_FALLBACK_PAD`] / [`TITLE_FALLBACK_PER_W`]), to the title's
 /// **right** edge. The gap clears the 1.5 px frame stroke and a little
 /// breathing room.
@@ -243,12 +212,6 @@ const TITLE_FALLBACK_PAD: f32 = 12.0;
 /// font by a roughly proportional amount, so a longer title needs a
 /// proportionally larger margin.
 const TITLE_FALLBACK_PER_W: f32 = 0.10;
-/// Minimum inset of a left-side title-detour entry from the frame's left
-/// edge (see [`title_detour_clear_x`]). The entry sits in the
-/// [`FRAME_TITLE_X`] band between the frame's left edge and the title's
-/// first glyph; this keeps it clear of the frame border stroke (1.5 px,
-/// half inside) with room to spare.
-const TITLE_LEFT_ENTRY_MIN: f32 = 4.0;
 
 /// The clearance a title-detour entry keeps past a title's *right* edge: the
 /// base gap ([`TITLE_CLEAR_GAP`]) plus a fixed bump and a length-derived
@@ -467,14 +430,7 @@ fn layout_impl(diagram: &Diagram, phase1_only: bool, trace: Option<&dyn Fn(&str)
     if diagram.nodes.is_empty() {
         // Still produce frames for any (empty) groups, sized to their
         // padding, so they render as small labeled boxes rather than vanish.
-        let top = layout_level(
-            diagram,
-            None,
-            diagram.direction,
-            &[],
-            &Default::default(),
-            &Default::default(),
-        );
+        let top = layout_level(diagram, None, diagram.direction, &[]);
         return assemble(diagram, top, &[], phase1_only, trace);
     }
 
@@ -511,22 +467,7 @@ fn layout_impl(diagram: &Diagram, phase1_only: bool, trace: Option<&dyn Fn(&str)
         })
         .collect();
 
-    // Groups that host a cross-boundary stub's jog, and the child nodes the
-    // edges reach. The groups get extra frame padding ([`CROSS_FRAME_PAD`])
-    // so the edge's within-frame stub has room to jog clear of the title and
-    // the node's arrowhead; the node set feeds the M10 title-width growth
-    // pass in [`layout_level`]. See [`cross_boundary_reach`] for exactly
-    // which frames qualify.
-    let (cross_subs, cross_nodes) = cross_boundary_reach(diagram, &edge_infos, &id_index);
-
-    let top = layout_level(
-        diagram,
-        None,
-        diagram.direction,
-        &edge_infos,
-        &cross_subs,
-        &cross_nodes,
-    );
+    let top = layout_level(diagram, None, diagram.direction, &edge_infos);
     assemble(diagram, top, &edge_infos, phase1_only, trace)
 }
 
@@ -537,11 +478,6 @@ struct Geometry<'a> {
     id_index: std::collections::HashMap<&'a str, usize>,
     node_rect: std::collections::HashMap<usize, (f32, f32, f32, f32)>,
     frame_rect: std::collections::HashMap<usize, (f32, f32, f32, f32)>,
-    /// Immediate children (real-node rects + nested group frame rects, in
-    /// absolute coordinates) per group index — used by cross-boundary
-    /// routing to detect when a within-frame stub would pierce a sibling and
-    /// to route around the frame when it would.
-    frame_children: std::collections::HashMap<usize, Vec<(f32, f32, f32, f32)>>,
     direct_pts: std::collections::HashMap<usize, Vec<(f32, f32)>>,
     /// Per-level items (nodes + direct-child frames), in absolute
     /// coordinates — the lane-assignment obstacle field (M9): a lane band
@@ -564,30 +500,15 @@ impl<'a> Geometry<'a> {
             .unwrap_or((0.0, 0.0, 0.0, 0.0))
     }
 
-    /// A frame's immediate children (node rects + nested frame rects) — the
-    /// pierce-test field for within-frame stubs.
-    fn children(&self, s: usize) -> Vec<(f32, f32, f32, f32)> {
-        self.frame_children.get(&s).cloned().unwrap_or_default()
-    }
-
-    /// The rendered width of a group's title (`None` when untitled).
-    fn title_width(&self, s: usize) -> Option<f32> {
+    /// The title's routing obstacle rect (M20.3, see
+    /// [`title_obstacle_rect`]) — what [`edge_world`] pushes so the
+    /// whole-path search routes around the title.
+    fn title_obstacle_rect(&self, s: usize) -> Option<(f32, f32, f32, f32)> {
         self.diagram
             .groups
             .get(s)
             .and_then(|sg| sg.title.as_ref())
-            .map(|t| text::measure(t, FRAME_TITLE_FONT_SIZE).width)
-    }
-
-    /// The drawn title-text rect of a group's frame (`None` when untitled)
-    /// — the glyph box the title detour routes around and the stub reroute
-    /// treats as solid (S19b).
-    fn title_text_rect(&self, s: usize) -> Option<(f32, f32, f32, f32)> {
-        self.diagram
-            .groups
-            .get(s)
-            .and_then(|sg| sg.title.as_ref())
-            .map(|t| title_text_rect(self.frame(s), t))
+            .map(|t| title_obstacle_rect(title_text_rect(self.frame(s), t), t))
     }
 }
 
@@ -618,7 +539,6 @@ struct EdgeCtx {
     /// The LCA level that owns the edge (`None` = top level), its effective
     /// direction, and the flow axis that follows from it.
     lca: Option<usize>,
-    lca_dir: Direction,
     flow: FlowAxis,
     /// Forced page-space sides (`from=` / `to=`); `None` keeps the implicit
     /// choice (M11). The request applies to the endpoint **node** only
@@ -634,51 +554,23 @@ struct EdgeCtx {
     /// semantics): where the endpoint nodes' ports sit.
     from_side: Side,
     to_side: Side,
-    /// The sides the chain crossings and the LCA-level rep ports use (M14):
-    /// always the implicit side, except that a forced side with no clear
-    /// decoupled corridor falls back to the old coupled reading (the forced
-    /// side applied to the frames too — see [`mismatched_rep_cross`]).
-    from_frame_side: Side,
-    to_frame_side: Side,
-    /// Whether the endpoint's forced side differs from its frame side and a
-    /// clear decoupled corridor exists (M14): the within-frame stub bends
-    /// from the frame's natural crossing into the node's forced side
-    /// ([`mismatched_stub`]) instead of running the node's axis straight
-    /// through ([`build_stub`]).
-    from_mismatched: bool,
-    to_mismatched: bool,
-    /// The endpoints' representatives at the LCA level with their rects (a
-    /// rep frame's rect, or the endpoint node's own rect when the chain is
-    /// empty).
+    /// The endpoints' representatives at the LCA level. The rep *ports* are
+    /// gone (M20.3 — the search routes port to port), but the
+    /// representatives still identify an edge's lane group (which LCA-level
+    /// gap it crosses).
     rep_from: ItemRef,
     rep_to: ItemRef,
-    rep_from_rect: (f32, f32, f32, f32),
-    rep_to_rect: (f32, f32, f32, f32),
     /// The flat engine's waypoints (direct edges only; empty otherwise).
     raw: Vec<(f32, f32)>,
-    /// Around-target gate (M5 follow-up), decided once here on center
-    /// geometry — the same test the candidate generator runs — so the
-    /// port-separation exclusion below and the generator agree by
-    /// construction rather than by hand-maintained copies: the straight
-    /// within-frame target stub (at the target node's center cross) would
-    /// pierce a sibling of the target inside its frame. A forced `to` side
-    /// disables it (the forced side is honored literally, and the forced
-    /// stub's own sibling-avoidance ladder takes over).
-    around_target: bool,
     /// Filled after the separation pre-passes: the endpoint nodes'
-    /// (possibly fanned) ports and their cross-coordinates, the rep-frame
-    /// ports' cross-coordinates on the frame sides, and the cross-boundary
-    /// edge's assigned jog lane in its LCA gap.
+    /// (possibly fanned) ports and their cross-coordinates, plus the
+    /// cross-boundary edge's assigned jog lane in its LCA gap (the M9 lane
+    /// pre-pass's separation guarantee, which the search's cross-run
+    /// prefers — see [`Obstacles::lane_row`]).
     from_port: (f32, f32),
     to_port: (f32, f32),
     from_cross: f32,
     to_cross: f32,
-    /// The rep crossing's cross-coordinate on `*_frame_side`. Equal to the
-    /// node's `*_cross` when the sides agree (the node-aligned entry); for a
-    /// mismatched end the corridor-clamped crossing (M14, see
-    /// [`mismatched_rep_cross`]).
-    from_rep_cross: f32,
-    to_rep_cross: f32,
     lane: f32,
     /// The per-edge frame world (M20.1): solid/ancestor classification and
     /// its band/solid obstacle fields, built once in [`assemble`]. `None`
@@ -720,48 +612,27 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
     // implicit choice.
     let forced_from = e.from_side.map(side_of_edge);
     let forced_to = e.to_side.map(side_of_edge);
-    let (raw, from_chain, to_chain, implicit_from, implicit_to, rep_from_rect, rep_to_rect) =
-        if is_direct {
-            let raw = geom.direct_pts.get(&ei).cloned().unwrap_or_default();
-            let fs = raw
-                .first()
-                .map(|&p| side_of_port(from, p))
-                .unwrap_or(Side::Bottom);
-            let ts = raw
-                .last()
-                .map(|&p| side_of_port(to, p))
-                .unwrap_or(Side::Top);
-            (raw, Vec::new(), Vec::new(), fs, ts, from, to)
-        } else {
-            let from_chain = chain_to_lca(diagram.nodes[fi].group, lca, &diagram.groups);
-            let to_chain = chain_to_lca(diagram.nodes[ti].group, lca, &diagram.groups);
-            let rf = from_chain.last().map(|&s| geom.frame(s)).unwrap_or(from);
-            let rt = to_chain.last().map(|&s| geom.frame(s)).unwrap_or(to);
-            let (exit, entry) = sides_along(lca_dir, center(rf), center(rt));
-            (Vec::new(), from_chain, to_chain, exit, entry, rf, rt)
-        };
+    let (raw, from_chain, to_chain, implicit_from, implicit_to) = if is_direct {
+        let raw = geom.direct_pts.get(&ei).cloned().unwrap_or_default();
+        let fs = raw
+            .first()
+            .map(|&p| side_of_port(from, p))
+            .unwrap_or(Side::Bottom);
+        let ts = raw
+            .last()
+            .map(|&p| side_of_port(to, p))
+            .unwrap_or(Side::Top);
+        (raw, Vec::new(), Vec::new(), fs, ts)
+    } else {
+        let from_chain = chain_to_lca(diagram.nodes[fi].group, lca, &diagram.groups);
+        let to_chain = chain_to_lca(diagram.nodes[ti].group, lca, &diagram.groups);
+        let rf = from_chain.last().map(|&s| geom.frame(s)).unwrap_or(from);
+        let rt = to_chain.last().map(|&s| geom.frame(s)).unwrap_or(to);
+        let (exit, entry) = sides_along(lca_dir, center(rf), center(rt));
+        (Vec::new(), from_chain, to_chain, exit, entry)
+    };
     let from_side = forced_from.unwrap_or(implicit_from);
     let to_side = forced_to.unwrap_or(implicit_to);
-    // M14: a forced side that differs from the implicit one is "mismatched"
-    // — it applies to the node port only, and the within-frame stub bends
-    // from the frame's natural (implicit) crossing into it. The demotion to
-    // the coupled reading happens in `assemble`'s fill pass when no clear
-    // corridor exists.
-    let from_mismatched = !is_direct && forced_from.is_some() && forced_from != Some(implicit_from);
-    let to_mismatched = !is_direct && forced_to.is_some() && forced_to != Some(implicit_to);
-    let around_target =
-        forced_to.is_none() && !is_direct && to_chain.len() == 1 && from_chain.len() <= 1 && {
-            let sibs: Vec<(f32, f32, f32, f32)> = geom
-                .children(to_chain[0])
-                .into_iter()
-                .filter(|r| !rects_near(*r, to))
-                .collect();
-            let cc = cross_of(center(to), to_side);
-            let crp = port_at_cross(rep_to_rect, to_side, cc);
-            let ctp = port(to, to_side);
-            sibs.iter()
-                .any(|sib| segment_intersects_rect(crp, ctp, *sib))
-        };
     EdgeCtx {
         ei,
         from_id: e.from.clone(),
@@ -775,7 +646,6 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
         from_chain,
         to_chain,
         lca,
-        lca_dir,
         flow: FlowAxis::from_direction(lca_dir),
         forced_from,
         forced_to,
@@ -783,22 +653,13 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
         implicit_to,
         from_side,
         to_side,
-        from_frame_side: implicit_from,
-        to_frame_side: implicit_to,
-        from_mismatched,
-        to_mismatched,
         rep_from: info.map(|i| i.rep_from).unwrap_or(ItemRef::Node(fi)),
         rep_to: info.map(|i| i.rep_to).unwrap_or(ItemRef::Node(ti)),
-        rep_from_rect,
-        rep_to_rect,
         raw,
-        around_target,
         from_port: (0.0, 0.0),
         to_port: (0.0, 0.0),
         from_cross: 0.0,
         to_cross: 0.0,
-        from_rep_cross: 0.0,
-        to_rep_cross: 0.0,
         lane: 0.0,
         frame_world: None,
     }
@@ -840,24 +701,6 @@ fn assemble(
         .map(|(idx, x, y, w, h)| (*idx, (*x, *y, *w, *h)))
         .collect();
 
-    let mut frame_children: HashMap<usize, Vec<(f32, f32, f32, f32)>> = HashMap::new();
-    for (gi, nd) in diagram.nodes.iter().enumerate() {
-        if let Some(g) = nd.group {
-            frame_children
-                .entry(g)
-                .or_default()
-                .push(node_rect.get(&gi).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)));
-        }
-    }
-    for (si, sg) in diagram.groups.iter().enumerate() {
-        if let Some(p) = sg.parent {
-            frame_children
-                .entry(p)
-                .or_default()
-                .push(frame_rect.get(&si).copied().unwrap_or((0.0, 0.0, 0.0, 0.0)));
-        }
-    }
-
     let mut direct_pts: HashMap<usize, Vec<(f32, f32)>> = HashMap::new();
     for (ei, pts) in &top.edges {
         direct_pts.insert(*ei, pts.clone());
@@ -884,7 +727,6 @@ fn assemble(
         id_index,
         node_rect,
         frame_rect,
-        frame_children,
         direct_pts,
         level_items,
     };
@@ -1005,66 +847,6 @@ fn assemble(
         );
         ctx.from_cross = cross_of(ctx.from_port, ctx.from_side);
         ctx.to_cross = cross_of(ctx.to_port, ctx.to_side);
-        refresh_rep_crosses(ctx, &geom, None);
-    }
-
-    // ---- M16: frame rep-crossing fan -------------------------------------
-    // Cross-boundary edges whose chains are non-empty converge on their
-    // representative's frame crossing — desired at the member's own cross
-    // (node-aligned entry), but two edges hitting the same member (or two
-    // members placed level) would draw shared corridor legs on top of each
-    // other. Fan the crossing coordinates across the frame side, minimum
-    // [`FAN_SEP`] apart, like node sides. Matched ends only: a mismatched
-    // end's crossing is the corridor clamp (M14) — an around-target edge's
-    // crossing is unused by its own generator but still fanned, so its
-    // detoured fallback gets a crossing of its own. The desired crosses are
-    // the (now filled) node ports' crosses, so this runs after the fill.
-    let mut rep_ends: Vec<PortEnd> = Vec::new();
-    for ctx in &ctxs {
-        if ctx.is_direct {
-            continue;
-        }
-
-        if !ctx.from_mismatched
-            && let Some(&sf) = ctx.from_chain.last()
-        {
-            rep_ends.push(PortEnd {
-                edge: ctx.ei,
-                is_from: true,
-                node_idx: sf,
-                frame: true,
-                node_rect: ctx.rep_from_rect,
-                side: ctx.from_frame_side,
-                other_cross: ctx.from_cross,
-                cover: side_label_cover(ctx.from_frame_side, label_sizes[ctx.ei]),
-                from_id: ctx.from_id.clone(),
-                to_id: ctx.to_id.clone(),
-            });
-        }
-        if !ctx.to_mismatched
-            && let Some(&sf) = ctx.to_chain.last()
-        {
-            rep_ends.push(PortEnd {
-                edge: ctx.ei,
-                is_from: false,
-                node_idx: sf,
-                frame: true,
-                node_rect: ctx.rep_to_rect,
-                side: ctx.to_frame_side,
-                other_cross: ctx.to_cross,
-                cover: side_label_cover(ctx.to_frame_side, label_sizes[ctx.ei]),
-                from_id: ctx.from_id.clone(),
-                to_id: ctx.to_id.clone(),
-            });
-        }
-    }
-    let rep_fan = separate_ports(&rep_ends);
-
-    // Re-resolve the rep crossings with the fan: matched ends take their
-    // fanned crossing; mismatched ends recompute the same corridor clamp
-    // (they have no fan entry).
-    for ctx in ctxs.iter_mut() {
-        refresh_rep_crosses(ctx, &geom, Some(&rep_fan));
     }
 
     // ---- M9 pre-pass 2: lane separation ----------------------------------
@@ -1073,23 +855,12 @@ fn assemble(
         if ctx.is_direct {
             continue;
         }
-        // The cross-interval the LCA Z's runs span: the rep ports' crosses
-        // (M14 — for a mismatched end the corridor-clamped crossing, not
-        // the node's), with the historical fallback for un-fanned ends.
-        let from_cross = if ctx.from_mismatched {
-            ctx.from_rep_cross
-        } else {
-            sep.get(&(ctx.ei, true))
-                .copied()
-                .unwrap_or(cross_of(center(ctx.rep_from_rect), ctx.from_side))
-        };
-        let to_cross = if ctx.to_mismatched {
-            ctx.to_rep_cross
-        } else {
-            sep.get(&(ctx.ei, false))
-                .copied()
-                .unwrap_or(cross_of(center(ctx.rep_to_rect), ctx.to_side))
-        };
+        // The cross-interval the cross-runs span: the two node ports'
+        // separated crosses (M20.3 — the rep ports are gone; the search
+        // crosses each frame at the node's own cross, which is what the
+        // rep-port convention encoded geometrically).
+        let from_cross = ctx.from_cross;
+        let to_cross = ctx.to_cross;
         // Band obstacles for the lane group: the source's peers at the LCA
         // level (everything except the source rep). Targets sit at the gap's
         // far end, outside the gap, so they do not intrude on the lane band;
@@ -1106,12 +877,11 @@ fn assemble(
         lane_edges.push(LaneEdge {
             edge: ctx.ei,
             rep_from: ctx.rep_from,
-            from_side: ctx.from_frame_side,
+            from_side: ctx.from_side,
             rep_to: ctx.rep_to,
-            // Flow coordinates of the two rep ports — on the frame sides
-            // (M14), i.e. at the rep borders' own flow coordinates.
-            from_flow: port_flow(ctx.rep_from_rect, ctx.from_frame_side, from_cross, ctx.flow),
-            to_flow: port_flow(ctx.rep_to_rect, ctx.to_frame_side, to_cross, ctx.flow),
+            // Flow coordinates of the two node ports (the edge's real ends).
+            from_flow: cross_flow(ctx.from_port, ctx.flow).1,
+            to_flow: cross_flow(ctx.to_port, ctx.flow).1,
             from_cross,
             to_cross,
             axis: ctx.flow,
@@ -1128,18 +898,8 @@ fn assemble(
         if !ctx.is_direct {
             ctx.lane = lanes.get(&ctx.ei).copied().unwrap_or_else(|| {
                 jog_flow(
-                    port_flow(
-                        ctx.rep_from_rect,
-                        ctx.from_frame_side,
-                        ctx.from_rep_cross,
-                        ctx.flow,
-                    ),
-                    port_flow(
-                        ctx.rep_to_rect,
-                        ctx.to_frame_side,
-                        ctx.to_rep_cross,
-                        ctx.flow,
-                    ),
+                    cross_flow(ctx.from_port, ctx.flow).1,
+                    cross_flow(ctx.to_port, ctx.flow).1,
                 )
             });
         }
@@ -1237,7 +997,35 @@ fn assemble(
                     }
                 }
             }
-            paths[ei] = Some(attempt(&ctxs[ei], &world));
+            // Keep the better of the two routes: the repair pass exists to
+            // clear conflicts, not to trade a clean shape for a long detour.
+            // A reroute that is not strictly better on the world's own cost
+            // model (length + bends + soft occupancy, hard clearance first)
+            // leaves the current polyline in place — but only when the old
+            // route is itself *clean*: a route riding a peer's band is
+            // exactly what this pass was invoked to fix, so it never wins the
+            // comparison (otherwise two riders can each "keep" themselves
+            // against the other's reroute and the ride survives every pass).
+            let candidate = attempt(&ctxs[ei], &world);
+            let keep_old = match &paths[ei] {
+                Some(old_pts) if world.clear(old_pts) => {
+                    let (cand, old) = (
+                        route_score(&candidate, &world),
+                        route_score(old_pts, &world),
+                    );
+                    // Keep the current route when the reroute is no shorter
+                    // *and* no less conflicting — the pass is here to clear
+                    // conflicts, not to shuffle a legal route into a longer
+                    // one. A reroute that genuinely reduces soft occupancy
+                    // wins even when it costs length (that is the repair).
+                    cand >= old - 1e-3
+                        && world.soft_cost(&candidate) >= world.soft_cost(old_pts) - 1e-3
+                }
+                _ => false,
+            };
+            if !keep_old {
+                paths[ei] = Some(candidate);
+            }
         }
         // Freeze edges that could not be cleared this pass.
         let still = scan_violations(&paths, &ctxs, &geom, &pockets);
@@ -1282,7 +1070,6 @@ fn assemble(
     for (e, a) in edges_out.iter_mut().zip(anchors) {
         e.label_at = a;
     }
-
     let mut nodes_out = Vec::with_capacity(diagram.nodes.len());
     for (gi, n) in diagram.nodes.iter().enumerate() {
         let (x, y, w, h) = geom.node(gi);
@@ -1423,16 +1210,15 @@ fn assemble(
 // tree and the endpoint node indices — precomputed once per edge in
 // [`assemble`] and consumed from [`EdgeCtx::frame_world`].
 
-/// The per-edge *base* obstacle world (M11.5/M16): every node interior —
-/// including its own endpoints, which a route may touch only at a
-/// designated port (so it cannot cut back through either box) — and the
-/// frame outlines at its LCA level as thin bands (crossable only at
-/// designated waypoints: a rep port or a recorded stub crossing). The
-/// occupancy lists (hard/soft peer segments, other edges' reserved port
-/// corridors) are added by the routing phase in [`assemble`]. M20
-/// (whole-path maze routing) layers the solid/ancestor classification on
-/// top of this world: see the M20 section above for the classifier the
-/// whole-path search (M20.2 on) routes against.
+/// The per-edge *base* obstacle world (M20.3): every node interior —
+/// including its own endpoints, which a route may touch only at a designated
+/// port (so it cannot cut back through either box) — the edge's ancestor
+/// frames as thin border bands (crossable only at designated waypoints), its
+/// unrelated frames as fully-solid rects, and every group title's text rect.
+/// The occupancy lists (hard/soft peer segments, other edges' reserved port
+/// corridors) are added by the routing phase in [`assemble`]. The frame
+/// world ([`EdgeFrameWorld`]) is the only per-edge input, so every edge kind
+/// routes against the same model.
 //
 // ---- M20.1 constants ----
 //
@@ -1447,7 +1233,7 @@ fn assemble(
 const AROUND_MARGIN: f32 = 60.0;
 
 /// Routing cost of a perpendicular crossing of an ancestor frame's border
-/// band (M20.1, consumed from M20.2 on): the strong preference the cost
+/// band (M20.1, live for every edge since M20.3): the strong preference the cost
 /// model needs for crossing each ancestor frame as few times as possible.
 /// A few hundred — far above [`BEND_PENALTY`] and a typical detour's length
 /// delta, so a whole-path search does not exit a frame through the top and
@@ -1456,6 +1242,24 @@ const AROUND_MARGIN: f32 = 60.0;
 /// crossing of the edge's own ancestor frames is as bad as riding a
 /// peer's band.
 const FRAME_CROSS_PENALTY: f32 = 300.0;
+
+/// Cost per pixel of a cross-run's offset from the nearest seeded jog row
+/// (M20.3). Tiny — a tie-break, not a routing preference: a Z's length is
+/// row-invariant, so without it the row is decided by heap order; with it a
+/// 50 px drift over a 100 px run costs 1 (a twelfth of a bend), so the row
+/// the ladder's Z used wins every tie but a genuinely better shape still
+/// wins outright.
+const JOG_DRIFT_COST: f32 = 0.02;
+/// Cost per pixel of a cross-run's offset from the edge's *assigned* lane
+/// (M20.3). Far stronger than [`JOG_DRIFT_COST`] — the lane is the M9 lane
+/// pre-pass's separation guarantee, so the search must use it wherever the
+/// row is routable — but still a preference: a lane that is blocked (or that
+/// would force a long detour) loses to a clean alternative row.
+const LANE_DRIFT_COST: f32 = 2.0;
+/// How far outside the two ports' flow span a lane row may still be honored
+/// (M20.3): enough for a jog just past a port, not enough for a row that
+/// belongs to another gap.
+const LANE_ROW_SLACK: f32 = 24.0;
 
 /// The class of one group frame for one edge (M20.1), as
 /// [`FrameClass::of_frame`] reports it.
@@ -1472,25 +1276,19 @@ enum FrameClassKind {
 
 /// The per-edge frame classification (M20.1): a pure function of the
 /// containment tree and the two endpoint node indices. The containment
-/// tree's only remaining routing role in the whole-path regime (M20.2 on)
-/// is exactly this two-way split:
+/// tree's only remaining routing role in the whole-path regime (live for
+/// every edge since M20.3) is exactly this two-way split:
 ///
 /// - **ancestor frames** — the frames on the ancestor-or-self chains of
 ///   the two endpoints (the chains [`chain_to_lca`] reads). An edge may
 ///   cross such a frame's border band perpendicularly at any coordinate
-///   of its choosing, and may not ride parallel on the band: the existing
-///   border-band semantics, applied without the rep-port / stub-crossing
-///   decomposition.
+///   of its choosing, and may not ride parallel on the band.
 /// - **solid frames** — every group frame that is neither endpoint's
 ///   ancestor-or-self: sibling groups and unrelated deep subtrees. Fully
 ///   blocked — interior *and* border band.
 ///
-/// In the current (pre-M20.2) regime only [`FrameClass::ancestors`] is
-/// consulted — it reproduces today's LCA-level band field exactly, so
-/// [`edge_world`] keeps its behavior bit-for-bit. The solid list and
-/// [`FrameClassKind::Solid`] exist now so M20.2's whole-path search and
-/// the classification unit tests can exercise the full semantics before
-/// any routing behavior flips.
+/// [`FrameClass::of`] is what [`edge_world`] and [`EdgeFrameWorld::build`]
+/// consume; the classification tests pin every nesting shape.
 #[derive(Debug, Clone, Default)]
 struct FrameClass {
     /// Ancestor-or-self frames of either endpoint, sorted by index (the
@@ -1567,9 +1365,8 @@ impl FrameClass {
 }
 
 /// A per-edge frame world (M20.1): the classification plus the obstacle
-/// fields built from it, carried on [`EdgeCtx`] so the routing regime (and,
-/// from M20.2 on, the whole-path search) reads one struct instead of
-/// re-deriving the per-LCA-context frame list.
+/// fields built from it, carried on [`EdgeCtx`] so the routing regime reads
+/// one struct instead of re-deriving the per-LCA-context frame list.
 #[derive(Debug, Clone, Default)]
 struct EdgeFrameWorld {
     /// The classification the fields derive from.
@@ -1621,8 +1418,7 @@ impl EdgeFrameWorld {
     /// an ancestor band. A segment *ending* on a band's centerline is a
     /// designated crossing (a port or a recorded waypoint), not a mid-run
     /// transversal, and is free — matching [`seg_clear_border`]'s
-    /// designated-crossing exemption. (Consumed from M20.2 on; kept next
-    /// to the classifier it belongs to.)
+    /// designated-crossing exemption.
     fn cross_cost(&self, pts: &[(f32, f32)]) -> f32 {
         pts.windows(2)
             .map(|w| {
@@ -1697,6 +1493,14 @@ fn track_route_in_region(
         hts.push(y - TRACK_OFF);
         hts.push(y + h + TRACK_OFF);
     }
+    // Title text rects seed tracks just outside themselves, so a descent can
+    // pass beside a title and a cross-run can sit just below it.
+    for &(x, y, w, h) in obs.titles.iter() {
+        vts.push(x - TRACK_OFF);
+        vts.push(x + w + TRACK_OFF);
+        hts.push(y - TRACK_OFF);
+        hts.push(y + h + TRACK_OFF);
+    }
     for &(x, y, w, h) in obs.borders.iter() {
         vts.push(x - TRACK_OFF);
         vts.push(x + w + TRACK_OFF);
@@ -1729,6 +1533,10 @@ fn track_route_in_region(
     for &t in obs.jog_rows.iter() {
         vts.push(t);
         hts.push(t);
+    }
+    if let Some(l) = obs.lane_row {
+        vts.push(l);
+        hts.push(l);
     }
     vts.sort_by(f32::total_cmp);
     hts.sort_by(f32::total_cmp);
@@ -1764,7 +1572,8 @@ fn track_route_in_region(
     )
 }
 
-/// The whole-path search (M20.2): one A* from source port to target port
+/// The whole-path search (M20.2, live for every edge from M20.3): one A* from
+/// source port to target port
 /// over a track graph against the full obstacle model — the widened
 /// [`around_region`] box, the per-edge frame world's ancestor bands (as
 /// `borders`: parallel riding barred, perpendicular crossings at recorded
@@ -1780,12 +1589,12 @@ fn track_route_in_region(
 /// size. Returns the polyline, or an empty vec when no route exists in
 /// the region (the caller falls back — the bounded convention).
 ///
-/// This is the M20.2 router: [`route_edge`] pushes its result *first* for
-/// every unforced direct edge, so the search — not the piecewise ladder — is
-/// what those edges are drawn from. It re-derives the flat engine's shapes
-/// because the caller seeds the engine's own jog rows
-/// ([`Obstacles::jog_rows`]); the ladder's candidates remain behind it as the
-/// bounded fallback for a region where no route exists.
+/// This is the M20 router: [`route_edge`] pushes its result *first* for every
+/// unforced edge — direct (M20.2) and cross-boundary (M20.3) alike — so the
+/// search, not a piecewise ladder, is what those edges are drawn from. It
+/// re-derives the flat engine's shapes because the caller seeds the engine's
+/// own jog rows ([`Obstacles::jog_rows`]); the ladder's candidates remain
+/// behind it as the bounded fallback for a region where no route exists.
 fn whole_path_route(
     a: (f32, f32),
     b: (f32, f32),
@@ -1797,7 +1606,9 @@ fn whole_path_route(
 ) -> Vec<(f32, f32)> {
     // The world: what the caller's obstacle model knows plus the frame
     // world's ancestor bands (as borders + the crossing cost) and its
-    // solid frames (as node rects).
+    // solid frames (as node rects). The caller usually already built both
+    // ([`edge_world`]); pushing them again is idempotent for clearance and
+    // keeps a hand-built world (unit fixtures) correct.
     let mut world = obs.clone();
     world.port_graph = true;
     world.push_cross_bands(&fw.ancestor_bands);
@@ -1817,30 +1628,116 @@ fn whole_path_route(
     record_border_crossings(&pts, &fw.ancestor_bands)
 }
 
+/// The per-edge base obstacle world (M20): every node interior, the edge's
+/// ancestor-frame border bands (crossable at recorded waypoints, never
+/// ridden parallel), its unrelated frames as fully-solid rects, and every
+/// group title's text rect. The M20 model is the same for every edge kind —
+/// the frame world ([`EdgeFrameWorld`]) is the only per-edge input, so the
+/// dispatch no longer varies the world by edge kind (M20.3 retired the
+/// cross-boundary regime's LCA-level band field).
+/// One edge's whole-path search candidate (M20.2/M20.3), or `None` when the
+/// search found nothing that clears the hard world (the caller's ladder then
+/// wins — the bounded convention).
+///
+/// The search runs node-port to node-port for every edge — the plan's "one
+/// polyline from port to port". For a cross-boundary edge that means the
+/// search owns the whole span: the within-frame stubs, the chain frames'
+/// crossings, and the LCA-level run are all search outputs, and the
+/// containment tree's only remaining routing role is the ancestor/solid
+/// classification.
+fn whole_path_candidate(
+    ctx: &EdgeCtx,
+    geom: &Geometry,
+    world: &Obstacles,
+    canvas: (f32, f32),
+) -> Option<Vec<(f32, f32)>> {
+    let fw = ctx.frame_world(geom);
+    let nodes: Vec<(f32, f32, f32, f32)> = (0..geom.diagram.nodes.len())
+        .map(|gi| geom.node(gi))
+        .collect();
+    let a = ctx.from_port;
+    let b = ctx.to_port;
+    let esc = Escapes {
+        start: Some(Dir::of_side(ctx.from_side)),
+        end: Some(Dir::of_side(ctx.to_side)),
+    };
+    // The flat engine's jog rows (direct edges) and the assigned LCA lane
+    // (cross-boundary edges) seed the search's tracks, so it re-derives the
+    // shape the ladder drew instead of picking a track arbitrarily.
+    let mut wj = world.clone();
+    wj.jog_axis = ctx.flow;
+    // The M9 lane pre-pass's row is a *preference*, and only for a cross-run
+    // that actually lies between the edge's own ports: the lane was computed
+    // from the (now deleted) rep ports, so a stale row can sit past an
+    // endpoint and would otherwise pull the route into an out-and-back spike.
+    // Re-grounding the lane assignment on search outputs is M20.4's job; here
+    // the row is used only where it is geometrically meaningful.
+    let (fa, fb) = (cross_flow(a, ctx.flow).1, cross_flow(b, ctx.flow).1);
+    let (lo, hi) = (fa.min(fb) - LANE_ROW_SLACK, fa.max(fb) + LANE_ROW_SLACK);
+    wj.lane_row = (!ctx.is_direct && (lo..=hi).contains(&ctx.lane)).then_some(ctx.lane);
+    wj.jog_rows = if ctx.is_direct {
+        ctx.raw
+            .windows(2)
+            .map(|w| jog_flow(cross_flow(w[0], ctx.flow).1, cross_flow(w[1], ctx.flow).1))
+            .collect()
+    } else {
+        // A cross-boundary edge's natural rows are the ones the deleted
+        // ladder's Z's used: the flow midpoints between consecutive *gates*
+        // along the run — the node port, each chain frame's facing border,
+        // the rep ports, the other node port. Seeding them lets the search
+        // reproduce that shape where it is legal, while a blocked row still
+        // lets it choose another. The lane row carries its own much stronger
+        // weight ([`Obstacles::lane_row`]).
+        let flow = |p: (f32, f32)| cross_flow(p, ctx.flow).1;
+        let mut gates = vec![flow(a)];
+        for &g in &ctx.from_chain {
+            let f = geom.frame(g);
+            gates.push(match ctx.from_side {
+                Side::Top => f.1,
+                Side::Bottom => f.1 + f.3,
+                Side::Left => f.0,
+                Side::Right => f.0 + f.2,
+            });
+        }
+        for &g in &ctx.to_chain {
+            let f = geom.frame(g);
+            gates.push(match ctx.to_side {
+                Side::Top => f.1,
+                Side::Bottom => f.1 + f.3,
+                Side::Left => f.0,
+                Side::Right => f.0 + f.2,
+            });
+        }
+        gates.push(flow(b));
+        let mut rows: Vec<f32> = gates
+            .windows(2)
+            .map(|w| jog_flow(w[0].min(w[1]), w[0].max(w[1])))
+            .collect();
+        rows.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
+        rows
+    };
+    let search = whole_path_route(a, b, &fw, &wj, esc, &nodes, canvas);
+    if search.is_empty() || !world.clear(&search) {
+        return None;
+    }
+    Some(search)
+}
+
 fn edge_world(geom: &Geometry, ctx: &EdgeCtx) -> Obstacles {
     let mut obs = Obstacles::empty();
     for (gi, _) in geom.diagram.nodes.iter().enumerate() {
         obs.push_node(geom.node(gi));
     }
-    for &(idx, r) in geom.level_items.get(&ctx.lca).into_iter().flatten() {
-        if matches!(idx, ItemRef::Sub(_)) {
-            obs.push_frame(r);
+    let fw = ctx.frame_world(geom);
+    for &r in &fw.solid {
+        obs.nodes.push(r);
+    }
+    for s in 0..geom.diagram.groups.len() {
+        if let Some(t) = geom.title_obstacle_rect(s) {
+            obs.push_title(t);
         }
     }
-    // M20.2: a direct internal edge also carries the solid frames of its
-    // frame world (every group frame that is neither endpoint's
-    // ancestor-or-self) as fully-blocked rects — the M20 obstacle model's
-    // "unrelated frames may not be punctured" rule. Cross-boundary edges
-    // keep their world as-is until M20.3 repoints their regime (a
-    // cross-boundary edge's own chain frames still appear as ordinary
-    // LCA-level bands here, and its solid frames arrive with the
-    // whole-path search's adoption of the frame world).
-    if ctx.is_direct {
-        let fw = ctx.frame_world(geom);
-        for &r in &fw.solid {
-            obs.nodes.push(r);
-        }
-    }
+    obs.push_cross_bands(&fw.ancestor_bands);
     obs
 }
 
@@ -1859,6 +1756,19 @@ fn route_edge(
     canvas: (f32, f32),
 ) -> Vec<(f32, f32)> {
     let mut candidates: Vec<Vec<(f32, f32)>> = Vec::new();
+    // M20.3: the whole-path search is the router for every non-loop edge —
+    // direct (M20.2) and cross-boundary alike. It is pushed *first* (below,
+    // once the ladder's fallbacks are known), so its route wins whenever it
+    // clears the hard world; the ladder's candidates stay behind it as the
+    // bounded fallback for a region where no route exists.
+    //
+    // Scope: a *forced* direct edge keeps the M11 ladder as its router until
+    // M20.4 re-grounds port selection. A forced *cross-boundary* edge does
+    // search — the search simply starts/ends at the forced ports, which is
+    // the plan's "the forced port is where the search begins" model, and the
+    // escape bars keep the route from cutting back through either box.
+    let search_first = !ctx.is_self_loop;
+    let search_applies = !ctx.is_direct || (ctx.forced_from.is_none() && ctx.forced_to.is_none());
     if ctx.is_self_loop {
         // A self-loop: a forced side gets real loop routing (M11) — the
         // user's explicit shape request; an unforced loop keeps the flat
@@ -1917,71 +1827,40 @@ fn route_edge(
                 world,
             ));
         }
-        // M20.2: the whole-path search is the router for unforced direct
-        // edges. It is pushed *first*, so its route wins whenever it clears
-        // the hard world — and because it re-derives the flat engine's shapes
-        // (the jog rows are seeded, see [`Obstacles::jog_rows`]) the shapes
-        // the ladder drew survive, while a blocked or soft-conflicted edge now
-        // gets one coherent whole-path route against the full M20 obstacle
-        // model instead of a piecewise ladder: solid unrelated frames (which
-        // `edge_world` pushes for direct edges) are fully blocked, ancestor
-        // bands are crossable at a per-crossing penalty, and soft peers are
-        // negotiable. The ladder's candidates stay behind it as the bounded
-        // fallback (a search that finds nothing leaves them to win).
-        //
-        // Scope: unforced edges only. A forced `from=`/`to=` side binds the
-        // node port with M11/M14 semantics — the port lands on the requested
-        // side and escapes it by [`SIDE_ESCAPE`], and a contradicting request
-        // routes around — which the search's free-choice port model has no
-        // way to honor. Forced edges keep their ladder until M20.4 re-grounds
-        // port selection.
-        if ctx.raw.len() >= 2 && ctx.forced_from.is_none() && ctx.forced_to.is_none() {
-            let fw = ctx.frame_world(geom);
-            let esc = Escapes {
-                start: Some(Dir::of_side(ctx.from_side)),
-                end: Some(Dir::of_side(ctx.to_side)),
-            };
-            let nodes: Vec<(f32, f32, f32, f32)> = (0..geom.diagram.nodes.len())
-                .map(|gi| geom.node(gi))
-                .collect();
-            let mut wj = world.clone();
-            wj.jog_rows = ctx
-                .raw
-                .windows(2)
-                .map(|w| jog_flow(cross_flow(w[0], ctx.flow).1, cross_flow(w[1], ctx.flow).1))
-                .collect();
-            let search =
-                whole_path_route(ctx.from_port, ctx.to_port, &fw, &wj, esc, &nodes, canvas);
-            if !search.is_empty() && world.clear(&search) {
-                candidates.insert(0, search);
-            }
-        }
     } else {
-        // Cross-boundary: the around-target-frame candidate first (it
-        // checks siblings and the obstacle world inside its generator),
-        // then the frame-aware pieces. When a forced side mismatches its
-        // frame's implicit side (M14), the decoupled pieces (the forced
-        // side at the node only) come first and the old coupled reading
-        // (the forced side dragging every frame crossing with it) stays as
-        // the terminal fallback, so routing always succeeds.
-        if let Some(route) = around_target_candidate(ctx, geom, world) {
-            candidates.push(route);
-        }
-        // S19c: the decoupled reading (M14 — forced sides bind the node
-        // only) is the primary candidate for *every* cross-boundary edge,
-        // not only the mismatched ones. Its rep crossings are the M16
-        // frame rep-crossing fan's coordinates ([`EdgeCtx::to_rep_cross`]
-        // et al.), which separate edges converging on one frame side onto
-        // distinct crossings; the coupled reading reads the raw node-port
-        // crosses instead, so before S19c an unforced edge never consulted
-        // the fan at all — two edges into the same frame parked their LCA
-        // approaches on one shared column and overlapped (the dense-stress
-        // row-fan defect). For a mismatched end the decoupled corridor is
-        // the whole point; for a matched end the two readings differ only
-        // in the fanned crossing. The coupled reading stays the terminal
-        // fallback (routing always succeeds).
-        candidates.push(cross_pieces_candidate(ctx, geom, world, false));
-        candidates.push(cross_pieces_candidate(ctx, geom, world, true));
+        // Cross-boundary (M20.3): one whole-path search from node port to
+        // node port (pushed below), with the frame-crossing topology as a
+        // search output. The rep model — rep ports, frame-crossing fans,
+        // within-frame stubs, title detours, the around-target wrapper, and
+        // the M14 coupled/decoupled duality — is deleted: the containment
+        // tree's only routing role is the ancestor/solid classification.
+        //
+        // The escape-and-ladder route is the terminal fallback: it always
+        // returns something that keeps the ports, so routing never fails even
+        // when no whole-path route exists in the region (the bounded-ladder
+        // convention). For a forced edge it is also the *only* router — a
+        // forced side binds the node port with M11 semantics, which the
+        // search's free-choice port model cannot honor until M20.4 re-grounds
+        // port selection on search outputs.
+        candidates.push(forced_cross_boundary_path(ctx, world));
+    }
+    // The whole-path search (M20.2 direct, M20.3 cross-boundary): pushed
+    // *first*, so its route wins whenever it clears the hard world. It
+    // re-derives the shapes the ladder drew (the flat engine's jog rows are
+    // seeded, see [`Obstacles::jog_rows`]) and is the *only* router with a
+    // whole-path view of the M20 obstacle model: solid unrelated frames are
+    // fully blocked, ancestor bands are crossable at a per-crossing penalty,
+    // titles are solid, and soft peers are negotiable.
+    //
+    // Scope: `search_applies` above — every unforced edge, plus a forced
+    // cross-boundary edge (whose forced ports are where the search starts and
+    // ends). A forced *direct* edge keeps the M11 ladder until M20.4
+    // re-grounds port selection.
+    if search_first
+        && search_applies
+        && let Some(search) = whole_path_candidate(ctx, geom, world, canvas)
+    {
+        candidates.insert(0, search);
     }
     // Accept (M16): the first candidate that clears the hard world *and*
     // carries no soft conflict; otherwise the least-conflicting hard-clear
@@ -2071,7 +1950,7 @@ fn direct_chain_route(raw: &[(f32, f32)], axis: FlowAxis, obs: &Obstacles) -> Ve
 // node port" in the eventual global routing pass; this is the cheap local
 // version of that guarantee. Like the fan ([`separate_ports`]), it only
 // moves a lone side's port — a shared side's ports are the fan's to place —
-// and it never moves a self-loop's or an around-target entry's port.
+// and it never moves a self-loop's port.
 
 /// Candidate cross-coordinates for one edge end that may slide along its
 /// side: the current one first (a lone side's centre), then the two
@@ -2114,9 +1993,13 @@ fn port_alternates(
 /// rewritten only when it lies on the effective side itself: under a
 /// contradictory forced side (M11) the router reads the port points, not
 /// the raw waypoints, and the raw port's side may even carry the other
-/// cross axis. The M14 rep crossings follow the moved ports
-/// ([`refresh_rep_crosses`]).
-fn ctx_with_crosses(ctx: &EdgeCtx, geom: &Geometry, from: Option<f32>, to: Option<f32>) -> EdgeCtx {
+/// cross axis.
+fn ctx_with_crosses(
+    ctx: &EdgeCtx,
+    _geom: &Geometry,
+    from: Option<f32>,
+    to: Option<f32>,
+) -> EdgeCtx {
     let mut v = ctx.clone();
     if let Some(c) = from {
         v.from_port = port_at_cross(v.from_rect, v.from_side, c);
@@ -2139,109 +2022,7 @@ fn ctx_with_crosses(ctx: &EdgeCtx, geom: &Geometry, from: Option<f32>, to: Optio
             v.raw[n - 1] = set_cross(p, v.to_side, v.to_cross);
         }
     }
-    refresh_rep_crosses(&mut v, geom, None);
     v
-}
-
-/// Fill one edge's rep-crossing fields (M14) from its (already separated)
-/// node ports: a matched end keeps the node-aligned crossing — overridden
-/// by the M16 frame fan's crossing when the end has one — a mismatched end
-/// gets the corridor-clamped crossing of [`mismatched_rep_cross`] —
-/// demoting to the coupled reading (its forced side applied to the frames
-/// too, `frame_side = node_side`, `mismatched = false`) when no clear
-/// corridor exists.
-fn refresh_rep_crosses(
-    v: &mut EdgeCtx,
-    geom: &Geometry,
-    rep_fan: Option<&std::collections::HashMap<(usize, bool), f32>>,
-) {
-    // M18: an around-target edge whose target port slid (the sealed-port
-    // fallback) re-decides its gate on the moved port — the pierce test's
-    // geometry is the port-to-crossing straight line, which moved with the
-    // port; when the slid port is on a *different* side than the frame
-    // crossing's side the straight stub is not the shape it would draw at
-    // all (the stub builder reads `port` and `rep_cross` directly), so the
-    // around-route (which reads the node geometry, not the port) is
-    // pointless. Demote it: the fallback path draws the mismatched bend
-    // instead. (The initial gate stays decided in [`edge_context`].)
-    if v.around_target && v.to_side != v.to_frame_side {
-        v.around_target = false;
-    }
-    #[allow(clippy::too_many_arguments)]
-    fn resolve_end(
-        geom: &Geometry,
-        axis: FlowAxis,
-        node: (f32, f32, f32, f32),
-        node_side: Side,
-        port: (f32, f32),
-        cross: f32,
-        other_port: (f32, f32),
-        chain: &[usize],
-        frame_side: Side,
-        mismatched: bool,
-        fan_cross: Option<f32>,
-    ) -> (Side, f32, bool) {
-        if !mismatched {
-            return (frame_side, fan_cross.unwrap_or(cross), false);
-        }
-        let Some(&s) = chain.last() else {
-            return (node_side, cross, false);
-        };
-        let title_rect = |s: usize| {
-            geom.diagram.groups[s]
-                .title
-                .as_deref()
-                .map(|t| title_text_rect(geom.frame(s), t))
-        };
-        match mismatched_rep_cross(
-            node,
-            node_side,
-            port,
-            other_port,
-            geom.frame(s),
-            frame_side,
-            chain,
-            axis,
-            &|s| geom.frame(s),
-            &|s| geom.children(s),
-            &title_rect,
-        ) {
-            Some(c) => (frame_side, c, true),
-            None => (node_side, cross, false),
-        }
-    }
-    let (fs, fc, fm) = resolve_end(
-        geom,
-        v.flow,
-        v.from_rect,
-        v.from_side,
-        v.from_port,
-        v.from_cross,
-        v.to_port,
-        &v.from_chain,
-        v.from_frame_side,
-        v.from_mismatched,
-        rep_fan.and_then(|f| f.get(&(v.ei, true)).copied()),
-    );
-    v.from_frame_side = fs;
-    v.from_rep_cross = fc;
-    v.from_mismatched = fm;
-    let (ts, tc, tm) = resolve_end(
-        geom,
-        v.flow,
-        v.to_rect,
-        v.to_side,
-        v.to_port,
-        v.to_cross,
-        v.from_port,
-        &v.to_chain,
-        v.to_frame_side,
-        v.to_mismatched,
-        rep_fan.and_then(|f| f.get(&(v.ei, false)).copied()),
-    );
-    v.to_frame_side = ts;
-    v.to_rep_cross = tc;
-    v.to_mismatched = tm;
 }
 
 /// The sealed-port fallback route: when [`route_edge`] leaves `ctx`'s edge
@@ -2249,9 +2030,8 @@ fn refresh_rep_crosses(
 /// found — see the section note), retry the edge with its free ends slid
 /// along their sides ([`port_alternates`]) and return the first alternative
 /// whose route clears. A free end is one this fallback may move: not a
-/// self-loop's, not an around-target entry (its real entry is perpendicular
-/// and its own generator routes it), and not a side shared with other edges
-/// ([`separate_ports`] already placed those). Alternatives are tried one
+/// self-loop's, and not a side shared with other edges ([`separate_ports`]
+/// already placed those). Alternatives are tried one
 /// end at a time before both together (minimal deviation first, target end
 /// before source within a count — a fixed order, so the fallback stays
 /// deterministic). `None` — no end may move, or no alternative routes
@@ -2269,7 +2049,7 @@ fn port_fallback_route(
         return None;
     }
     let from_free = !shared_sides.contains(&(ctx.fi, ctx.from_side));
-    let to_free = !ctx.around_target && !shared_sides.contains(&(ctx.ti, ctx.to_side));
+    let to_free = !shared_sides.contains(&(ctx.ti, ctx.to_side));
     if !from_free && !to_free {
         return None;
     }
@@ -2317,189 +2097,6 @@ fn port_fallback_route(
     None
 }
 
-/// The around-target-frame candidate (M5 follow-up, hoisted to the
-/// dispatch): applies when the context's `around_target` gate fired — the
-/// straight within-frame target stub would pierce a sibling — and yields
-/// the first of the two perpendicular sides whose route clears both the
-/// siblings and the obstacle world. `None` falls back to the frame-aware
-/// pieces (the straight stub).
-fn around_target_candidate(
-    ctx: &EdgeCtx,
-    geom: &Geometry,
-    world: &Obstacles,
-) -> Option<Vec<(f32, f32)>> {
-    if !ctx.around_target {
-        return None;
-    }
-    let sibs: Vec<(f32, f32, f32, f32)> = geom
-        .children(ctx.to_chain[0])
-        .into_iter()
-        .filter(|r| !rects_near(*r, ctx.to_rect))
-        .collect();
-    try_around_target_route(
-        ctx.from_rect,
-        ctx.to_rect,
-        ctx.rep_to_rect,
-        &ctx.from_chain,
-        ctx.flow,
-        ctx.from_frame_side,
-        ctx.to_frame_side,
-        &sibs,
-        &|s| geom.frame(s),
-        ctx.from_port,
-        ctx.lane,
-        world,
-    )
-}
-
-/// The frame-aware pieces candidate (M5/M7/M10/M11/M14 logic): within-frame
-/// stubs (title detours, forced-stub sibling avoidance, mismatched forced
-/// bends, nested frame crossings) plus the LCA segment routed through the
-/// same ladder ([`route_lca`]).
-///
-/// `coupled_forced_sides` selects the old M11 reading for the fallback
-/// ladder: a forced side applied to the frame crossings too. The M14
-/// reading — forced sides apply to the endpoint node only; the frames keep
-/// their implicit sides — is the default and, for edges with no mismatched
-/// end, identical to the coupled one.
-fn cross_pieces_candidate(
-    ctx: &EdgeCtx,
-    geom: &Geometry,
-    world: &Obstacles,
-    coupled_forced_sides: bool,
-) -> Vec<(f32, f32)> {
-    let (from_frame_side, to_frame_side, from_rep_cross, to_rep_cross, from_mis, to_mis) =
-        if coupled_forced_sides {
-            (
-                ctx.from_side,
-                ctx.to_side,
-                ctx.from_cross,
-                ctx.to_cross,
-                false,
-                false,
-            )
-        } else {
-            (
-                ctx.from_frame_side,
-                ctx.to_frame_side,
-                ctx.from_rep_cross,
-                ctx.to_rep_cross,
-                ctx.from_mismatched,
-                ctx.to_mismatched,
-            )
-        };
-    let from_end = StubEnd {
-        node: ctx.from_rect,
-        chain: &ctx.from_chain,
-        port: ctx.from_port,
-        cross: ctx.from_cross,
-        node_side: ctx.from_side,
-        frame_side: from_frame_side,
-        rep_cross: from_rep_cross,
-        mismatched: from_mis,
-    };
-    let to_end = StubEnd {
-        node: ctx.to_rect,
-        chain: &ctx.to_chain,
-        port: ctx.to_port,
-        cross: ctx.to_cross,
-        node_side: ctx.to_side,
-        frame_side: to_frame_side,
-        rep_cross: to_rep_cross,
-        mismatched: to_mis,
-    };
-    let cp = cross_boundary_path(
-        &from_end,
-        &to_end,
-        ctx.lca_dir,
-        &|s| geom.frame(s),
-        &|s| geom.title_width(s),
-        &|s| geom.children(s),
-        &|s| geom.title_text_rect(s),
-        world,
-    );
-    let CrossPieces {
-        src_stub,
-        lca,
-        tgt_stub,
-    } = cp;
-    let mut pts = Vec::new();
-    pts.extend(ortho_chain(&src_stub, ctx.flow));
-    pts.extend(lca_segment(
-        lca[0],
-        from_end.frame_side,
-        lca[1],
-        to_end.frame_side,
-        ctx.flow,
-        ctx.lane,
-        world,
-    ));
-    pts.extend(ortho_chain(&tgt_stub, ctx.flow));
-    dedup_consecutive(&mut pts);
-    pts
-}
-
-/// Is `side` perpendicular to the flow axis (a frame's side border under a
-/// vertical flow, or its top/bottom under a horizontal one)? Only a forced
-/// side can be — the implicit choice always lies along the flow axis.
-fn side_perpendicular(side: Side, axis: FlowAxis) -> bool {
-    match axis {
-        FlowAxis::Vertical => matches!(side, Side::Left | Side::Right),
-        FlowAxis::Horizontal => matches!(side, Side::Top | Side::Bottom),
-    }
-}
-
-/// The LCA-level segment between the two rep-frame ports, routed through
-/// the ladder. A forced side perpendicular to the flow axis puts the port
-/// on a frame's side border, where a flow-axis first leg would ride along
-/// the outline — such a port escapes outward first ([`SIDE_ESCAPE`], the
-/// M11 escape convention) and the port legs are attached around the routed
-/// part. An implicit side always lies along the flow axis, so its port
-/// needs no escape (its first leg already leaves the frame perpendicular).
-fn lca_segment(
-    a: (f32, f32),
-    a_side: Side,
-    b: (f32, f32),
-    b_side: Side,
-    axis: FlowAxis,
-    lane: f32,
-    obs: &Obstacles,
-) -> Vec<(f32, f32)> {
-    let a_perp = side_perpendicular(a_side, axis);
-    let b_perp = side_perpendicular(b_side, axis);
-    let a_out = if a_perp {
-        escape_point(a, a_side, SIDE_ESCAPE)
-    } else {
-        a
-    };
-    let b_out = if b_perp {
-        escape_point(b, b_side, SIDE_ESCAPE)
-    } else {
-        b
-    };
-    let mut pts = route_lca(
-        a_out,
-        b_out,
-        axis,
-        lane,
-        obs,
-        Escapes {
-            start: a_perp.then(|| Dir::of_side(a_side)),
-            end: b_perp.then(|| Dir::of_side(b_side)),
-        },
-    );
-    if a_perp {
-        pts.insert(0, a_out);
-        pts.insert(0, a);
-    }
-    if b_perp {
-        pts.push(b_out);
-        pts.push(b);
-    }
-    dedup_consecutive(&mut pts);
-    pts
-}
-
 /// Lay out one level (the top level `None`, or a group index) and all of
 /// its descendants. Returns the level's contents in its local coordinate
 /// system.
@@ -2508,8 +2105,6 @@ fn layout_level(
     level: Option<usize>,
     dir: Direction,
     edge_infos: &[EdgeInfo],
-    cross_subs: &std::collections::HashSet<usize>,
-    cross_nodes: &std::collections::HashSet<usize>,
 ) -> LevelOut {
     // Direct-child groups of this level.
     let child_subs: Vec<usize> = diagram
@@ -2525,15 +2120,8 @@ fn layout_level(
         std::collections::HashMap::new();
     for &cs in &child_subs {
         let child_dir = diagram.groups[cs].direction.unwrap_or(dir);
-        let out = layout_level(
-            diagram,
-            Some(cs),
-            child_dir,
-            edge_infos,
-            cross_subs,
-            cross_nodes,
-        );
-        let (top_inset, _bot_pad) = frame_insets(&diagram.groups[cs], cross_subs.contains(&cs));
+        let out = layout_level(diagram, Some(cs), child_dir, edge_infos);
+        let (top_inset, _bot_pad) = frame_insets(&diagram.groups[cs]);
         let inner_ox = FRAME_PAD_X;
         let inner_oy = top_inset;
         child_outs.insert(
@@ -2563,7 +2151,7 @@ fn layout_level(
     }
     for &cs in &child_subs {
         let child = child_outs.get(&cs).expect("child out just inserted");
-        let (top_inset, bot_pad) = frame_insets(&diagram.groups[cs], cross_subs.contains(&cs));
+        let (top_inset, bot_pad) = frame_insets(&diagram.groups[cs]);
         // The frame is at least wide enough for its contents plus side
         // padding, but no narrower than its title: the title starts at
         // [`FRAME_TITLE_X`] (the renderer anchors it there, so its left
@@ -2577,37 +2165,16 @@ fn layout_level(
             .as_ref()
             .map(|t| text::measure(t, FRAME_TITLE_FONT_SIZE).width)
             .unwrap_or(0.0);
-        let mut frame_w = (child.out.w + 2.0 * FRAME_PAD_X)
-            .max(FRAME_TITLE_X + title_w + title_clear_gap(title_w));
-        // M10: when the title determines the frame width, the margin past the
-        // title's right edge is only [`FRAME_TITLE_X`] — smaller than
-        // [`FRAME_PAD_X`] — so a title detour's entry would clamp *inside*
-        // the title and the detour gives up (the stub crosses the title).
-        // Mirror the [`CROSS_FRAME_PAD`] trick horizontally: when a
-        // cross-boundary edge reaches an immediate child that sits under the
-        // title's right half (where the detour enters — one under the left
-        // half uses the left-side entry, which needs no extra room), grow the
-        // frame's width so the clear band past the title exists. Growing
-        // sideways keeps the children anchored at the left/top insets, so
-        // the group's internal arrangement is untouched (the M5 guarantee).
-        // Like [`CROSS_FRAME_PAD`] this over-approximates: the growth does
-        // not know which side the edge will enter on, so a frame may widen
-        // for a detour that never arises.
-        if diagram.groups[cs].title.is_some() {
-            let right_gap = title_clear_gap(title_w);
-            let title_x1 = FRAME_TITLE_X + title_w;
-            let need = title_x1 + right_gap + FRAME_PAD_X;
-            let title_mid = FRAME_TITLE_X + title_w / 2.0;
-            let under_right_half = child.out.nodes.iter().any(|&(gi, nx, _, nw, _)| {
-                // Node center x in frame-local coordinates: the child's
-                // contents are offset into the frame by `inner_ox`.
-                let ncx = FRAME_PAD_X + nx + nw / 2.0;
-                cross_nodes.contains(&gi) && ncx >= title_mid && ncx <= title_x1 + right_gap
-            });
-            if under_right_half && frame_w < need {
-                frame_w = need;
-            }
-        }
+        // A titled frame is also wide enough to pass a route beside its
+        // title: the title's routing obstacle (M20.3) extends
+        // [`title_clear_gap`] past the measured text, so without the extra
+        // [`FRAME_PAD_X`] the obstacle would reach the frame's right border
+        // and no within-frame corridor would exist beside the title — every
+        // cross-boundary descent would be forced around the outside of the
+        // frame. Growing the width keeps the children anchored at the left
+        // inset, so the group's internal arrangement is untouched.
+        let frame_w = (child.out.w + 2.0 * FRAME_PAD_X)
+            .max(FRAME_TITLE_X + title_w + title_clear_gap(title_w) + FRAME_PAD_X);
         let frame_h = child.out.h + top_inset + bot_pad;
         item_of.insert(ItemRef::Sub(cs), items.len());
         item_refs.push(ItemRef::Sub(cs));
@@ -2772,87 +2339,29 @@ fn effective_direction(level: Option<usize>, diagram: &Diagram) -> Direction {
     }
 }
 
-/// The groups that host a cross-boundary within-frame stub's jog — and the
-/// set of child nodes those edges reach. Such frames get extra padding
-/// ([`CROSS_FRAME_PAD`]) so the stub has room to jog clear of the title and
-/// the node's arrowhead, and (M10) the frame-growth pass in [`layout_level`]
-/// widens a title-sized frame so a title detour has an entry.
-///
-/// A frame qualifies when a cross-boundary edge reaches one of its
-/// *immediate* children (the innermost frame always hosts the final jog),
-/// and — so a nested title detour ([`title_detours`]) has its jog band —
-/// when it is a *titled* frame anywhere in the edge's chain under a
-/// top-down LCA. Deeper untitled frames never host a jog (the detour's
-/// entry coordinate is carried straight past them), and horizontal stubs
-/// never detour.
-///
-/// `id_index` maps node ids to their index in `diagram.nodes`. An endpoint
-/// qualifies a group `S` when the endpoint is a direct child of `S`
-/// (`node.group == Some(S)`) and the edge's LCA is a strict ancestor of `S`
-/// (`lca != Some(S)`) — i.e. the edge leaves `S` to reach the rest of the
-/// graph, rather than staying internal to `S`.
-#[allow(clippy::type_complexity)]
-fn cross_boundary_reach(
-    diagram: &Diagram,
-    edge_infos: &[EdgeInfo],
-    id_index: &std::collections::HashMap<&str, usize>,
-) -> (
-    std::collections::HashSet<usize>,
-    std::collections::HashSet<usize>,
-) {
-    let mut subs = std::collections::HashSet::new();
-    let mut nodes = std::collections::HashSet::new();
-    for (ei, e) in diagram.edges.iter().enumerate() {
-        let Some(info) = edge_infos.get(ei) else {
-            continue;
-        };
-        for nid in [e.from.as_str(), e.to.as_str()].map(|id| id_index[id]) {
-            if let Some(group) = diagram.nodes[nid].group
-                && info.lca != Some(group)
-            {
-                subs.insert(group);
-                nodes.insert(nid);
-                // Titled frames further out in the chain grow too when
-                // the stub runs vertically (top-down LCA): the stub may
-                // detour around their titles and each jog lives in the
-                // grown band below its title.
-                if matches!(effective_direction(info.lca, diagram), Direction::TopDown) {
-                    for &g in &chain_to_lca(diagram.nodes[nid].group, info.lca, &diagram.groups) {
-                        if diagram.groups[g].title.is_some() {
-                            subs.insert(g);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    (subs, nodes)
-}
-
-/// `(top_inset, bottom_padding)` for a child group's frame, adding the
-/// cross-boundary extra padding ([`CROSS_FRAME_PAD`]) to both when `cross`
-/// is true (the group hosts a cross-boundary stub's jog — see
-/// [`cross_boundary_reach`]).
-/// Both insets grow along the LCA-level flow axis, where the within-frame
-/// stubs jog, so the extra room clears the title (above the node) and the
-/// node's arrowhead (below the jog).
+/// `(top_inset, bottom_padding)` for a child group's frame.
 ///
 /// The top inset is a one-line title band ([`FRAME_TITLE_H`]) plus one
-/// [`text::line_height`] per *additional* title line, so a multi-line
+/// [`text::line_height`] per *additional* title line, plus
+/// [`TITLE_BAND_PAD`] — the strip below the title a whole-path route can pass
+/// through (M20.3), so the search never has to cross a title. The bottom
+/// inset is the plain frame padding.
 /// title's stacked lines stay inside the band.
-fn frame_insets(sg: &Group, cross: bool) -> (f32, f32) {
+fn frame_insets(sg: &Group) -> (f32, f32) {
     let top = match &sg.title {
         Some(t) => {
             FRAME_TITLE_H
                 + (text::line_count(t) - 1) as f32 * text::line_height(FRAME_TITLE_FONT_SIZE)
+                // M20.3: the title band keeps a route-width strip below the
+                // text, so a within-frame run can pass *under* the title
+                // instead of being forced through it. The deleted title
+                // detour hand-built a jog in exactly this strip; the search
+                // needs the room to exist, then finds it on its own.
+                + TITLE_BAND_PAD
         }
         None => FRAME_PAD_Y,
     };
-    if cross {
-        (top + CROSS_FRAME_PAD, FRAME_PAD_Y + CROSS_FRAME_PAD)
-    } else {
-        (top, FRAME_PAD_Y)
-    }
+    (top, FRAME_PAD_Y)
 }
 
 // ============ Cross-boundary edge routing (M5) ============
@@ -2871,28 +2380,12 @@ fn center(r: (f32, f32, f32, f32)) -> (f32, f32) {
     (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0)
 }
 
-/// The port on `rect`'s `side`, at the rect's own center.
-fn port(rect: (f32, f32, f32, f32), side: Side) -> (f32, f32) {
-    let (x, y, w, h) = rect;
-    let cx = x + w / 2.0;
-    let cy = y + h / 2.0;
-    match side {
-        Side::Top => (cx, y),
-        Side::Bottom => (cx, y + h),
-        Side::Left => (x, cy),
-        Side::Right => (x + w, cy),
-    }
-}
-
 /// The point on `rect`'s `side` at the given cross-axis coordinate
 /// (clamped to that side's span), rather than at the rect's center. For a
 /// vertical flow (top-down / bottom-up) the cross axis is `x` and the sides
 /// are [`Side::Top`] / [`Side::Bottom`]; for a horizontal flow it is `y` and
-/// the sides are [`Side::Left`] / [`Side::Right`]. Used by [`cross_boundary_path`]
-/// to place a group frame's connection point at the *endpoint node's*
-/// cross-coordinate (not the frame center), so a within-frame stub runs
-/// straight along the node's own axis and edges entering a group line up
-/// with their target node rather than all converging on the frame's midpoint.
+/// the sides are [`Side::Left`] / [`Side::Right`]. The M9 port fan and the
+/// sealed-port fallback place ports with it.
 fn port_at_cross(rect: (f32, f32, f32, f32), side: Side, cross: f32) -> (f32, f32) {
     let (x, y, w, h) = rect;
     match side {
@@ -2901,71 +2394,6 @@ fn port_at_cross(rect: (f32, f32, f32, f32), side: Side, cross: f32) -> (f32, f3
         Side::Left => (x, cross.clamp(y, y + h)),
         Side::Right => (x + w, cross.clamp(y, y + h)),
     }
-}
-
-/// The `x` at which a title-detour should enter a titled frame's top edge so
-/// the entry clears the title text, or `None` if no detour is needed.
-///
-/// A cross-boundary within-frame stub now runs straight at the endpoint
-/// node's `x` ([`port_at_cross`]). When that `x` falls under the frame's
-/// title text the stub would cross the title; this returns an entry `x` in
-/// the clear part of the top band so the stub can dive in there and jog
-/// across to the node below the title. Two entries exist:
-///
-/// * just past the title's **right** edge, at
-///   `title_x1 + title_clear_gap(title_width)` — the clearance includes the
-///   fixed + proportional fallback margins ([`title_clear_gap`]) because the
-///   drawn title can extend past its measured right edge in a viewer whose
-///   font stack falls back to a wider face;
-/// * just **left** of the title's first glyph, at
-///   `title_x0 - TITLE_CLEAR_GAP` — the title's left edge is anchored at
-///   [`FRAME_TITLE_X`] by the renderer, so no font fallback can widen it
-///   leftward and the small base gap is safe there.
-///
-/// The entry nearer the node (shorter jog) wins among the usable ones: a
-/// node under the title's left half enters left of the title, one under its
-/// right half past the right edge. `None` is returned — meaning "stay
-/// straight, no detour" — when the node's `x` is already clear of the title,
-/// or when neither entry fits (no room past the title and no room left of
-/// it): the frame-growth pass in [`layout_level`] should have widened the
-/// frame to make the right entry fit for any cross-boundary endpoint that
-/// gets here, so `None` is a last-resort fallback (the stub then crosses the
-/// title, no worse than the previous frame-center design which crossed it at
-/// the center).
-fn title_detour_clear_x(
-    rep: (f32, f32, f32, f32),
-    node_cross: f32,
-    title_width: f32,
-) -> Option<f32> {
-    let (rx, _ry, rw, _rh) = rep;
-    let title_x0 = rx + FRAME_TITLE_X;
-    let title_x1 = rx + FRAME_TITLE_X + title_width;
-    let right_gap = title_clear_gap(title_width);
-    // Node already clear of the title text (to either side)? Stay straight.
-    if node_cross < title_x0 - TITLE_CLEAR_GAP || node_cross > title_x1 + right_gap {
-        return None;
-    }
-    let right_x = title_x1 + right_gap;
-    let left_x = title_x0 - TITLE_CLEAR_GAP;
-    // A candidate is usable when it lands inside the frame: the right entry
-    // keeps [`FRAME_PAD_X`] of side padding (which the frame-growth pass
-    // guarantees by growing the width when the title determines it), the
-    // left entry keeps [`TITLE_LEFT_ENTRY_MIN`] inside the border.
-    let right_ok = right_x <= rx + rw - FRAME_PAD_X + 1e-3;
-    let left_ok = left_x >= rx + TITLE_LEFT_ENTRY_MIN;
-    // Prefer the nearer side: a node under the title's left half jogs less
-    // from a left entry, one under the right half from a right entry.
-    let prefer_left = node_cross < (title_x0 + title_x1) / 2.0;
-    for (x, ok) in if prefer_left {
-        [(left_x, left_ok), (right_x, right_ok)]
-    } else {
-        [(right_x, right_ok), (left_x, left_ok)]
-    } {
-        if ok {
-            return Some(x);
-        }
-    }
-    None
 }
 
 /// The exit/entry sides for a cross-boundary edge at a level laid out under
@@ -2994,51 +2422,6 @@ fn sides_along(dir: Direction, rep_from_c: (f32, f32), rep_to_c: (f32, f32)) -> 
                 (Side::Left, Side::Right)
             }
         }
-    }
-}
-
-/// The point where the segment from `a` to `b` first crosses the boundary of
-/// `r` (the smallest `t > 0` with `a + t·(b − a)` on `r`'s perimeter), or
-/// `None` if it never does.
-///
-/// When `a` is inside `r` and `b` outside, this is the *exit* point; when `a`
-/// is outside and `b` inside, it is the *entry* point. Used to insert
-/// connection points where a cross-boundary stub crosses an intermediate
-/// (nested) group frame.
-fn line_rect_exit(a: (f32, f32), b: (f32, f32), r: (f32, f32, f32, f32)) -> Option<(f32, f32)> {
-    let (rx, ry, rw, rh) = r;
-    let (ax, ay) = a;
-    let dx = b.0 - ax;
-    let dy = b.1 - ay;
-    let mut best_t = f32::INFINITY;
-    // Vertical walls (left at rx, right at rx+rw).
-    if dx.abs() > 1e-9 {
-        for wall_x in [rx, rx + rw] {
-            let t = (wall_x - ax) / dx;
-            if t > 1e-6 && t < best_t {
-                let y = ay + t * dy;
-                if y >= ry - 1e-4 && y <= ry + rh + 1e-4 {
-                    best_t = t;
-                }
-            }
-        }
-    }
-    // Horizontal walls (top at ry, bottom at ry+rh).
-    if dy.abs() > 1e-9 {
-        for wall_y in [ry, ry + rh] {
-            let t = (wall_y - ay) / dy;
-            if t > 1e-6 && t < best_t {
-                let x = ax + t * dx;
-                if x >= rx - 1e-4 && x <= rx + rw + 1e-4 {
-                    best_t = t;
-                }
-            }
-        }
-    }
-    if best_t.is_finite() {
-        Some((ax + best_t * dx, ay + best_t * dy))
-    } else {
-        None
     }
 }
 
@@ -3157,16 +2540,6 @@ fn with_flow(cross: f32, flow: f32, axis: FlowAxis) -> (f32, f32) {
     }
 }
 
-/// The `(low, high)` cross-axis span of a rect along `axis` (the axis
-/// perpendicular to the flow): the x-span for a vertical flow, the y-span for
-/// a horizontal flow.
-fn cross_range(r: (f32, f32, f32, f32), axis: FlowAxis) -> (f32, f32) {
-    match axis {
-        FlowAxis::Vertical => (r.0, r.0 + r.2),
-        FlowAxis::Horizontal => (r.1, r.1 + r.3),
-    }
-}
-
 /// The `(low, high)` flow-axis span of a rect along `axis`: the y-span for a
 /// vertical flow, the x-span for a horizontal flow.
 fn flow_range(r: (f32, f32, f32, f32), axis: FlowAxis) -> (f32, f32) {
@@ -3188,10 +2561,9 @@ fn rects_near(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
 /// The flow-coordinate at which to jog the segment `p0`→`p1` (in `(cross,
 /// flow)` form): at the segment midpoint, where the perpendicular jog of an
 /// orthogonalized "Z" lands in an inter-rank gap or a frame's padding (clear
-/// of node interiors and titles). A cross-boundary within-frame stub that
-/// would cross a titled frame's TOP side instead places its jog itself (via
-/// [`title_detour`], a fixed [`STUB_JOG_CLEARANCE`] above the node) before
-/// orthogonalization, so the midpoint here never lands on a title.
+/// of node interiors and titles). The whole-path search seeds this row as a
+/// track preference (M20.3), so the shapes the flat engine's Z's drew
+/// survive wherever they are legal.
 fn jog_flow(f0: f32, f1: f32) -> f32 {
     (f0 + f1) / 2.0
 }
@@ -3228,13 +2600,6 @@ fn ortho_chain(points: &[(f32, f32)], axis: FlowAxis) -> Vec<(f32, f32)> {
     }
     dedup_consecutive(&mut out);
     out
-}
-
-/// Orthogonalize along the segment midpoints — the default for direct edges,
-/// whose jogs land in inter-rank gaps (clear of nodes and titles), and for the
-/// pre-aligned (already axis-aligned) detour stubs of cross-boundary edges.
-fn orthogonalize(points: &[(f32, f32)], axis: FlowAxis) -> Vec<(f32, f32)> {
-    ortho_chain(points, axis)
 }
 
 // ============ M9 — edge separation & obstacle-aware LCA routing ============
@@ -3289,8 +2654,7 @@ const LANE_INSET: f32 = 5.0;
 const BEND_PENALTY: f32 = 12.0;
 /// Shortest terminal leg (port stub) the whole-path search prefers (M20.2):
 /// it must exceed the arrowhead's back-extent (`render`'s `markerHeight`, 10)
-/// or the final approach line cuts into the arrowhead's side. Matches the
-/// figure [`STUB_JOG_CLEARANCE`] promises the renderer.
+/// or the final approach line cuts into the arrowhead's side.
 const MIN_TERMINAL_STUB: f32 = 12.0;
 /// Cost per pixel a terminal leg falls short of [`MIN_TERMINAL_STUB`]
 /// (M20.2) — a *preference*, never a bar. A Z's length is jog-row-invariant,
@@ -3306,12 +2670,6 @@ const STUB_SHORTFALL_COST: f32 = 25.0;
 /// [`assemble`] grows the canvas around it (keeping [`MARGIN`] clear) instead
 /// of silently clipping.
 const SIDE_ESCAPE: f32 = 24.0;
-/// Shortest approach leg into a mismatched forced-side port (M14): the leg
-/// must contain the arrowhead that lands at the port, so at least the
-/// arrowhead's back-extent (`markerHeight`, 10 — same figure [`SIDE_ESCAPE`]
-/// is sized against). A frame leaving less room than this beside the node
-/// demotes the end to the coupled reading.
-const APPROACH_MIN: f32 = 10.0;
 /// How far a forced self-loop's excursion runs beyond the node's sides
 /// (M11), before wrapping around to the entry side.
 const LOOP_OUT: f32 = 18.0;
@@ -3365,14 +2723,14 @@ const SEGMENT_OBSTACLE_PAD: f32 = 8.0;
 // routed obstacle-aware against node rects only, and forced edges alone
 // saw already-routed peer edges as obstacles. The special-case gates
 // (around-target, title-detour, forced stubs) were scattered as booleans
-// across `assemble` and `cross_boundary_path`, and the per-edge context
-// was derived twice. M11.5 restructures this into ONE regime: the same
+// across `assemble` and the stub builder, and the per-edge context was
+// derived twice. M11.5 restructures this into ONE regime: the same
 // [`Obstacles`] world and the same [`route_lca`] ladder for every edge,
 // with edge-type knowledge confined to which obstacles and candidate
 // routes each edge feeds it (the candidate generators + one dispatch
-// point, [`route_edge`]). Everything that worked stays: the compound/LCA
-// decomposition, the `(cross, flow)` vocabulary, the ladder, and all
-// existing invariants.
+// point, [`route_edge`]). M20.3 later replaced the candidate generators with
+// the one whole-path search (see the module docs); the world, the
+// `(cross, flow)` vocabulary, and the bounded-fallback convention survive.
 
 /// Half-thickness of the thin band that stands for a group frame's drawn
 /// outline: the renderer strokes the frame with 1.5 px centered on the
@@ -3385,10 +2743,12 @@ const BORDER_HALF: f32 = 0.75;
 /// outline — while still barring the collinear outline-riding the absorbed
 /// M12 sets out to eliminate.
 const BORDER_PAD: f32 = 2.0;
-/// How far outside a frame's outline the around-target route runs, so it
-/// neither rides on the outline nor hugs it inside [`BORDER_PAD`]'s
-/// clearance (absorbed M12: edges avoid frame outlines).
-const AROUND_CLEAR: f32 = 5.0;
+/// Clearance a route keeps around a group title's text rect (M20.3): titles
+/// are solid obstacles for the whole-path search, so the search routes around
+/// them where the deleted title-detour geometry used to jog. Small — a couple
+/// of pixels of stroke plus breathing room — so a descent beside the title
+/// stays tight to it.
+const TITLE_OBSTACLE_PAD: f32 = 1.0;
 
 /// How far outward a node port's reserved approach corridor runs (M16): the
 /// swept rect of `port → escape_point(port, side, PORT_RIGHT_OF_WAY)` — the
@@ -3482,12 +2842,31 @@ struct Obstacles {
     /// ladder's cost model (and every snapshot it re-derives) is
     /// untouched.
     cross_bands: Vec<(f32, f32, f32, f32)>,
+    /// Group title text rects (M20.3): solid obstacles, so the whole-path
+    /// search routes *around* a title instead of relying on the deleted
+    /// title-detour geometry. A title sits inside its frame's top band, so
+    /// this is the M20 obstacle model's title entry — the search discovers
+    /// the detour the old hand-built one encoded.
+    titles: Vec<(f32, f32, f32, f32)>,
     /// The whole-path search's port-stub freedom (M20.2). False for every
     /// other caller, so no other route's graph or cost model changes.
     port_graph: bool,
     /// The flat engine's own jog rows (flow midpoints of its waypoint pairs),
-    /// seeded as extra tracks by the whole-path search only (M20.2).
+    /// seeded as extra tracks by the whole-path search only (M20.2). The
+    /// assigned LCA lane joins them for a cross-boundary edge (M20.3), so
+    /// the search's cross-run lands on the same row the ladder's Z used.
     jog_rows: Vec<f32>,
+    /// Which axis the jog rows run across (M20.3): a vertical flow's jog rows
+    /// are `y` values its cross-runs sit on, a horizontal flow's are `x`
+    /// values. Only the jog-row preference term reads it.
+    jog_axis: FlowAxis,
+    /// The edge's *assigned* jog row (M20.3, cross-boundary edges only): the
+    /// lane the M9 lane-separation pre-pass gave it. It carries a much
+    /// stronger preference than the [`Obstacles::jog_rows`] hints
+    /// ([`LANE_DRIFT_COST`]) because it is what keeps parallel edges through
+    /// one gap apart — the search must land on it whenever the row is
+    /// routable.
+    lane_row: Option<f32>,
 }
 
 impl Obstacles {
@@ -3499,8 +2878,11 @@ impl Obstacles {
             corridors: Vec::new(),
             borders: Vec::new(),
             cross_bands: Vec::new(),
+            titles: Vec::new(),
             port_graph: false,
             jog_rows: Vec::new(),
+            jog_axis: FlowAxis::Vertical,
+            lane_row: None,
         }
     }
 
@@ -3511,6 +2893,7 @@ impl Obstacles {
             && self.corridors.is_empty()
             && self.borders.is_empty()
             && self.cross_bands.is_empty()
+            && self.titles.is_empty()
             && !self.port_graph
             && self.jog_rows.is_empty()
     }
@@ -3518,11 +2901,6 @@ impl Obstacles {
     fn push_node(&mut self, r: (f32, f32, f32, f32)) {
         self.nodes.push(r);
     }
-
-    fn push_frame(&mut self, r: (f32, f32, f32, f32)) {
-        self.borders.extend(border_bands(r));
-    }
-
     /// Push the ancestor-frame bands of one edge's frame world (M20.2):
     /// `cross_bands` for the whole-path search's crossing cost, and the
     /// same bands as `borders` — the ancestor band's parallel-riding bar
@@ -3533,11 +2911,10 @@ impl Obstacles {
         self.borders.extend_from_slice(bands);
     }
 
-    fn push_segment(&mut self, s0: (f32, f32), s1: (f32, f32)) {
-        self.segments
-            .push(segment_rect(s0, s1, SEGMENT_OBSTACLE_PAD));
+    /// Push a group title's text rect as a solid obstacle (M20.3).
+    fn push_title(&mut self, r: (f32, f32, f32, f32)) {
+        self.titles.push(r);
     }
-
     fn push_soft_segment(&mut self, s0: (f32, f32), s1: (f32, f32)) {
         self.soft.push(segment_rect(s0, s1, SEGMENT_OBSTACLE_PAD));
     }
@@ -3563,6 +2940,48 @@ impl Obstacles {
             .sum()
     }
 
+    /// The preference for *starting* a cross-run on one of the seeded jog
+    /// rows (M20.3): [`JOG_DRIFT_COST`] per pixel of distance from the
+    /// nearest jog row, plus [`LANE_DRIFT_COST`] per pixel from the edge's
+    /// assigned lane ([`Obstacles::lane_row`]).
+    ///
+    /// Charged once per cross-run (at the bend that starts it), not per
+    /// track hop: a run is split into one graph hop per intervening track, so
+    /// a per-hop charge would scale with how many tracks happen to lie along
+    /// the run rather than with the shape. A Z's total length is
+    /// row-invariant, so without this term every row ties and the row is
+    /// decided by heap order; with it the search lands on the row the
+    /// deleted ladder's Z used (the flat engine's jog row, or the edge's
+    /// assigned lane) — the row the M13 label anchors were tuned against.
+    /// `dir` is the travel direction of the run being started (a
+    /// [`Dir::code`]); only a cross-axis run has a row.
+    fn row_drift_cost(&self, dir: usize, p: (f32, f32)) -> f32 {
+        if self.jog_rows.is_empty() && self.lane_row.is_none() {
+            return 0.0;
+        }
+        let cross_axis_dir = match self.jog_axis {
+            FlowAxis::Vertical => dir == Dir::PosX.code() || dir == Dir::NegX.code(),
+            FlowAxis::Horizontal => dir == Dir::PosY.code() || dir == Dir::NegY.code(),
+        };
+        if !cross_axis_dir {
+            return 0.0;
+        }
+        let row = cross_flow(p, self.jog_axis).1;
+        let mut cost = 0.0;
+        if !self.jog_rows.is_empty() {
+            let nearest = self
+                .jog_rows
+                .iter()
+                .map(|&r| (row - r).abs())
+                .fold(f32::INFINITY, f32::min);
+            cost += JOG_DRIFT_COST * nearest;
+        }
+        if let Some(lane) = self.lane_row {
+            cost += LANE_DRIFT_COST * (row - lane).abs();
+        }
+        cost
+    }
+
     /// Is the polyline clear of the whole hard world (nodes, hard segments,
     /// corridors, borders)?
     fn clear(&self, pts: &[(f32, f32)]) -> bool {
@@ -3573,6 +2992,7 @@ impl Obstacles {
     /// rule every router (and [`track_route`]'s internal check) uses.
     fn seg_clear(&self, p0: (f32, f32), p1: (f32, f32)) -> bool {
         self.nodes.iter().all(|&r| seg_clear_solid(p0, p1, r))
+            && self.titles.iter().all(|&r| seg_clear_title(p0, p1, r))
             && self.segments.iter().all(|&r| seg_clear_padded(p0, p1, r))
             && self.corridors.iter().all(|&r| seg_clear_padded(p0, p1, r))
             && self.borders.iter().all(|&b| seg_clear_border(p0, p1, b))
@@ -3663,6 +3083,25 @@ fn pocket_rects(pts: &[(f32, f32)]) -> Vec<(f32, f32, f32, f32)> {
     ]
 }
 
+/// A route's total cost in one obstacle world (M20.3's repair-loop
+/// keep-best rule): hard clearance first (a route that does not clear is
+/// infinitely worse), then length + [`BEND_PENALTY`] per bend + soft peer
+/// occupancy. Pure and deterministic.
+fn route_score(pts: &[(f32, f32)], world: &Obstacles) -> f32 {
+    if pts.len() < 2 {
+        return f32::INFINITY;
+    }
+    if !world.clear(pts) {
+        return f32::INFINITY;
+    }
+    let len: f32 = pts
+        .windows(2)
+        .map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs())
+        .sum();
+    let bends = pts.windows(3).count() as f32 * BEND_PENALTY;
+    len + bends + world.soft_cost(pts)
+}
+
 /// The hard violations of a routed set (M16's repair scan): the edge indices
 /// that must move. Two checks, in the one obstacle world's vocabulary:
 ///
@@ -3748,6 +3187,25 @@ fn border_bands(r: (f32, f32, f32, f32)) -> Vec<(f32, f32, f32, f32)> {
         (x - h2, y, t, h),
         (x + w - h2, y, t, h),
     ]
+}
+
+/// Is the axis-aligned segment `p0`→`p1` clear of a group title's text rect
+/// (M20.3)? Titles are solid: no port-touch exemption (a route never *ends*
+/// on a title), and a small [`TITLE_OBSTACLE_PAD`] keeps the stroke off the
+/// glyphs.
+fn seg_clear_title(p0: (f32, f32), p1: (f32, f32), r: (f32, f32, f32, f32)) -> bool {
+    segment_rect_interval(p0, p1, inflate(r, TITLE_OBSTACLE_PAD)).is_none()
+}
+
+/// The solid rect a group title reserves for routing (M20.3): its measured
+/// text rect grown by [`TITLE_OBSTACLE_PAD`] and, on the right, by the
+/// fallback margin a viewer's wider face can add ([`title_clear_gap`] minus
+/// its base gap) — the guarantee the deleted title detour encoded, now
+/// expressed as an obstacle so the search inherits it.
+fn title_obstacle_rect(r: (f32, f32, f32, f32), title: &str) -> (f32, f32, f32, f32) {
+    let w = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
+    let extra = title_clear_gap(w) - TITLE_CLEAR_GAP;
+    (r.0, r.1, r.2 + extra, r.3)
 }
 
 /// Is the axis-aligned segment `p0`→`p1` clear of a *solid* rect `r` (a
@@ -3970,18 +3428,6 @@ fn side_cross_span(node: (f32, f32, f32, f32), side: Side) -> (f32, f32) {
     }
 }
 
-/// The flow-coordinate of a node's `side` (the side's position along the
-/// flow axis): y for Top/Bottom, x for Left/Right.
-fn side_flow_coord(node: (f32, f32, f32, f32), side: Side) -> f32 {
-    let (x, y, _w, h) = node;
-    match side {
-        Side::Top => y,
-        Side::Bottom => y + h,
-        Side::Left => x,
-        Side::Right => x + node.2,
-    }
-}
-
 /// The page-space [`Side`] an edge's `from=` / `to=` attribute requests
 /// (M11). Sides are page-space in both the attribute and the assembled
 /// geometry, so this is the identity mapping.
@@ -4100,17 +3546,6 @@ impl Escapes {
         }
         false
     }
-}
-
-/// The flow-coordinate of the port on `rect`'s `side` at cross-axis
-/// coordinate `cross`, along `axis`. Unlike [`side_flow_coord`] — which
-/// assumes the side lies along the flow axis (the implicit choice always
-/// does) — this works for a forced side perpendicular to the flow too
-/// (e.g. `from="right"` on a vertical-flow edge: the flow coordinate is
-/// the port's y, not the frame's x). For an aligned side it equals
-/// [`side_flow_coord`].
-fn port_flow(rect: (f32, f32, f32, f32), side: Side, cross: f32, axis: FlowAxis) -> f32 {
-    cross_flow(port_at_cross(rect, side, cross), axis).1
 }
 
 /// Which side of `node` the port point `p` lies on (the nearest edge).
@@ -4668,6 +4103,12 @@ fn track_route(a: (f32, f32), b: (f32, f32), obs: &Obstacles, esc: Escapes) -> V
         hts.push(y - TRACK_OFF);
         hts.push(y + h + TRACK_OFF);
     }
+    for &(x, y, w, h) in obs.titles.iter() {
+        vts.push(x - TRACK_OFF);
+        vts.push(x + w + TRACK_OFF);
+        hts.push(y - TRACK_OFF);
+        hts.push(y + h + TRACK_OFF);
+    }
     for &(x, y, w, h) in obs.borders.iter() {
         vts.push(x - TRACK_OFF);
         vts.push(x + w + TRACK_OFF);
@@ -4878,9 +4319,21 @@ fn track_search(
                 continue;
             }
             let v = ni * nh + nj;
+            // Both terminal legs get the stub preference: the goal's because
+            // the arrowhead's back-extent must fit under it, the source's
+            // because a cross-run jammed against its port reads as a kink in
+            // the box rather than an edge. (Without the source term a jog row
+            // a few pixels from the port wins on the lane preference alone.)
             let terminal = obs.port_graph && (node == start || v == goal);
             let cost = len
                 + soft
+                + if d_in != d_out {
+                    // Starting a run: charge the row preference once, at the
+                    // bend (a run is many track hops but one shape choice).
+                    obs.row_drift_cost(d_out, (vts[ni], hts[nj]))
+                } else {
+                    0.0
+                }
                 + if d_in != 4 && d_in != d_out {
                     BEND_PENALTY
                 } else {
@@ -5088,9 +4541,9 @@ fn route_lca(
 // ---- M11 — forced edge sides (`from=` / `to=`) ----
 //
 // An edge may request the page-space side of each node it connects to.
-// The request binds the endpoint **node** only (M14) — the group frames an
-// edge crosses keep their natural sides (see [`mismatched_stub`] /
-// [`mismatched_rep_cross`]). It is honored **literally**: the port lands
+// The request binds the endpoint **node** only (M14): the frames an edge
+// crosses are the search's business (M20.3), so a forced side never drags a
+// frame crossing with it. It is honored **literally**: the port lands
 // on the requested side, with no automatic reversion to the algorithm's
 // choice (silently second-guessing it would leave the user unable to tell
 // whether it did anything). A side that contradicts the approach direction is routed
@@ -5098,6 +4551,26 @@ fn route_lca(
 // drop the attribute — but it stays orthogonal, never passes through a node
 // interior (the `route_lca` ladder's bounded last resort excepted), and
 // ports sharing a forced side are still fanned apart (M9 port separation).
+
+/// The terminal fallback for a *forced* cross-boundary edge (M20.3): the
+/// same escape-and-ladder shape [`forced_direct_path`] gives a forced direct
+/// edge — each node port escapes outward along its requested side by
+/// [`SIDE_ESCAPE`], then the [`route_lca`] ladder routes between the escaped
+/// points against the M20 world. The rep model is gone, so there is no
+/// frame-crossing decomposition left to honor: the frame crossings are the
+/// ladder's business (its `borders` are the edge's ancestor bands), and the
+/// only guarantee this route owes the user is the literal port placement
+/// plus orthogonality.
+fn forced_cross_boundary_path(ctx: &EdgeCtx, world: &Obstacles) -> Vec<(f32, f32)> {
+    forced_direct_path(
+        ctx.from_port,
+        ctx.from_side,
+        ctx.to_port,
+        ctx.to_side,
+        ctx.flow,
+        world,
+    )
+}
 
 /// Route a direct edge honoring forced sides (M11): each port escapes
 /// outward along its side's normal by [`SIDE_ESCAPE`], then the
@@ -5245,1267 +4718,6 @@ fn segment_rect(s0: (f32, f32), s1: (f32, f32), t: f32) -> (f32, f32, f32, f32) 
         (s1.0 - s0.0).abs() + 2.0 * t,
         (s1.1 - s0.1).abs() + 2.0 * t,
     )
-}
-
-/// The escape point for a stub detour's Dijkstra seed (M18): the plain
-/// [`escape_point`] walk, clamped so the seed is not born inside (or just
-/// ahead of) an obstacle. The escape line (port → the escape point and, if
-/// still clear, further outward on the same ray) is cut at the last clear
-/// position before it first runs into a *barrier of the escape line's own
-/// orientation*: a node an [`ROUTE_PAD`]-inflated clearance check would
-/// pierce, a reserved port pocket or hard peer band the line would ride
-/// parallel inside, or a border band it would cross without a designated
-/// end-on-centerline. (Barrier kinds with the opposite orientation — a
-/// perpendicular crossing — are not barriers here: the detour the seed
-/// begins is legal through them, and [`track_route`] treats their edges as
-/// tracks.)
-///
-/// The seed sits just short of the cut, so the track graph's start is in
-/// free space and the tracks seeded from the blocking obstacle's own edges
-/// (± [`TRACK_OFF`]) provide the jog around it. The plain escape point is
-/// kept when nothing blocks the ray, and again when even the port itself is
-/// enclosed: the Dijkstra then fails and the caller keeps the straight stub
-/// (the bounded-ladder convention).
-#[allow(clippy::too_many_arguments)]
-fn clamped_escape(
-    port: (f32, f32),
-    side: Side,
-    d: f32,
-    obs: &Obstacles,
-    world: &Obstacles,
-) -> (f32, f32) {
-    let target = escape_point(port, side, d);
-    let (dx, dy) = match side {
-        Side::Top => (0.0, -1.0),
-        Side::Bottom => (0.0, 1.0),
-        Side::Left => (-1.0, 0.0),
-        Side::Right => (1.0, 0.0),
-    };
-    // Distance along the escape line of the first barrier (None = clear):
-    // each blocker kind reports the parameter t where the escape line
-    // first runs into it, considering only entries from outside the
-    // blocker's inflated extent (a port inside one cannot be dodged; the
-    // bail-out below keeps the plain escape).
-    let mut best: Option<f32> = None;
-    let mut consider = |t: Option<f32>| {
-        if let Some(t) = t
-            && t > 1e-3
-            && best.map(|b| t < b - 1e-6).unwrap_or(true)
-        {
-            best = Some(t);
-        }
-    };
-    // Node interiors (ready-padded by the clearance rule's own inflations):
-    // the entry parameter of the ray into the inflated rect, only when the
-    // ray starts strictly outside it on the escape face.
-    let node_block = |r: (f32, f32, f32, f32)| {
-        let (rx, ry, rw, rh) = inflate(r, ROUTE_PAD);
-        let t_enter = match side {
-            Side::Top => i32::from(port.1 >= ry + rh) as f32 * (port.1 - (ry + rh)),
-            Side::Bottom => i32::from(port.1 <= ry) as f32 * (ry - port.1),
-            Side::Left => i32::from(port.0 >= rx + rw) as f32 * (port.0 - (rx + rw)),
-            Side::Right => i32::from(port.0 <= rx) as f32 * (rx - port.0),
-        };
-        if t_enter <= 0.0 || (side == Side::Top || side == Side::Bottom) && t_enter.is_infinite() {
-            return None;
-        }
-        // The entry point must lie within the rect's other span.
-        let px = port.0 + dx * t_enter;
-        let py = port.1 + dy * t_enter;
-        let on = match side {
-            Side::Top | Side::Bottom => px >= rx - 1e-2 && px <= rx + rw + 1e-2,
-            Side::Left | Side::Right => py >= ry - 1e-2 && py <= ry + rh + 1e-2,
-        };
-        on.then_some(t_enter)
-    };
-    // Only blockers the escape line's own orientation bars.
-    let vertical_escape = dx.abs() < 1e-6;
-    for &r in obs.nodes.iter().chain(world.nodes.iter()) {
-        consider(node_block(r));
-    }
-    for &r in obs.corridors.iter() {
-        if vertical_escape == (r.3 > r.2) {
-            consider(into_param(port, dx, dy, r));
-        }
-    }
-    for &r in obs.segments.iter() {
-        if vertical_escape == (r.3 > r.2) {
-            consider(into_param(port, dx, dy, r));
-        }
-    }
-    // S19c row-fan coordination: soft peer bands are barriers to the
-    // *seed*, not to the route — orientation-agnostic, unlike the hard
-    // kinds above (a hard parallel band bars the escape leg itself; a
-    // soft band only poisons a seed born inside it, whose own approach
-    // leg then rides the peer's centerline exactly and no later
-    // negotiation can clear: the phase-2 retry pins the ridden band as a
-    // border, and the Dijkstra — starting inside that pinned obstacle —
-    // finds no route, so the exact ride survives every repair pass: the
-    // dense-stress corridor defect). Seeding short of the band instead
-    // parks the seed in a free row, and the track rows the band's own
-    // edges seed give the simultaneously rerouted detours distinct
-    // corridor rows to fan onto, in repair order (phase 2), which is
-    // deterministic.
-    for &r in obs.soft.iter() {
-        consider(into_param(port, dx, dy, r));
-    }
-    for &b in obs.borders.iter() {
-        // A border band is run into when the line rides it parallel; a
-        // perpendicular transversal is legal *with a waypoint*, which the
-        // seed's closing leg would not carry either — both bar. The cut
-        // uses the band's [`BORDER_PAD`]-inflated rect (the extent
-        // [`seg_clear_border`] actually bars): clamping against the raw
-        // band could park the seed inside the barred zone, and the
-        // appended approach leg would then be falsely rejected — the
-        // reroute would decline a detour that is in fact clear.
-        consider(into_param(port, dx, dy, inflate(b, BORDER_PAD)));
-    }
-    match best {
-        Some(t) => (
-            port.0 + dx * (t - 1.0).max(0.0),
-            port.1 + dy * (t - 1.0).max(0.0),
-        ),
-        None => target,
-    }
-}
-
-/// The parameter at which the ray `port + t·(dx, dy)` first enters the
-/// rect `r`, or `None` when it never does (or starts inside it, which
-/// cannot be dodged along the ray).
-fn into_param(port: (f32, f32), dx: f32, dy: f32, r: (f32, f32, f32, f32)) -> Option<f32> {
-    let (rx, ry, rw, rh) = r;
-    if (rx..rx + rw).contains(&port.0) && (ry..ry + rh).contains(&port.1) {
-        return None;
-    }
-    // Axis-aligned ray: at most one face can be entered.
-    let t_axis = |p: f32, lo: f32, hi: f32, d: f32| -> Option<f32> {
-        if d.abs() < 1e-9 {
-            return None;
-        }
-        let t = if d > 0.0 { (lo - p) / d } else { (hi - p) / d };
-        (t > 1e-3).then_some(t)
-    };
-    [
-        t_axis(port.0, rx, rx + rw, dx),
-        t_axis(port.1, ry, ry + rh, dy),
-    ]
-    .into_iter()
-    .flatten()
-    .find(|&t| {
-        // The other coordinate must put the entry point on the rect.
-        let px = port.0 + dx * t;
-        let py = port.1 + dy * t;
-        px >= rx - 1e-2 && px <= rx + rw + 1e-2 && py >= ry - 1e-2 && py <= ry + rh + 1e-2
-    })
-}
-
-/// Record the chain frames' border crossings along a stub polyline (M18):
-/// one waypoint wherever a leg crosses a chain frame's outline (the bands'
-/// centerlines) transversally mid-segment. The straight stub builder
-/// records its crossings via `line_rect_exit` clipping; the generalized
-/// (track-routed) sibling-avoidance detour crosses its chain frames
-/// elsewhere, and those crossings must be explicit waypoints for the
-/// same clearance convention. The crossing band of each frame is resolved
-/// per leg (the same `band_crossing` test the routing ladder's
-/// re-recording applies), so a leg that merely touches a band's boundary
-/// without transversing it stays unmarked.
-fn record_chain_crossings(
-    pts: Vec<(f32, f32)>,
-    chain_frames: &[(f32, f32, f32, f32)],
-    axis: FlowAxis,
-) -> Vec<(f32, f32)> {
-    let _ = axis;
-    let mut bands: Vec<(f32, f32, f32, f32)> = Vec::new();
-    for &f in chain_frames {
-        bands.extend(border_bands(f));
-    }
-    if bands.is_empty() || pts.len() < 2 {
-        return pts;
-    }
-    record_border_crossings(&pts, &bands)
-}
-
-/// Build the chain-local obstacle world a [track-routed](`track_route`)
-/// stub detour negotiates against (M18's construction, hoisted to one
-/// helper so every stub kind shares it): the siblings of the endpoint under
-/// its innermost frame are solid nodes — a stub must not cross a sibling of
-/// any kind (nodes and nested frames alike) — the innermost frame's and
-/// every intermediate chain frame's border bands are hard (the detour
-/// stays inside the frames and never rides an outline — it may leave a
-/// crossing only perpendicular), and peer occupancy carries over from the
-/// shared routing world (M16): parked peer segments are soft cost, so two
-/// edges' detours around the same sibling negotiate into distinct
-/// corridors instead of piling up. Every chain frame's title text is solid
-/// too (S19b): the straight stub's title detour is the M5-followup answer
-/// to a blocked descent, so the reroute must not trade it for a route
-/// that crosses a title instead.
-#[allow(clippy::too_many_arguments)]
-fn stub_world(
-    end: &StubEnd,
-    chain_frames: &[(f32, f32, f32, f32)],
-    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
-    frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
-    frame_title: &dyn Fn(usize) -> Option<(f32, f32, f32, f32)>,
-    world: &Obstacles,
-) -> Obstacles {
-    let mut obs = Obstacles::empty();
-    let siblings: Vec<(f32, f32, f32, f32)> = frame_children(end.chain[0])
-        .into_iter()
-        .filter(|r| !rects_near(*r, end.node))
-        .collect();
-    for &s in &siblings {
-        obs.push_node(s);
-    }
-    // The chain frames' title texts are solid (S19b): a rerouted leg must
-    // cross a title the straight span's detour would have avoided. The
-    // checked rect is the drawn glyphs plus the same fallback margins the
-    // detour's entry keeps ([`title_clear_gap`] past the right edge,
-    // [`TITLE_CLEAR_GAP`] before the left) — the detour clears a viewer's
-    // wider fallback font, and the reroute must not regress it. Measured
-    // title height ([`text::line_count`] lines): the drawn glyphs, no
-    // band growth (the jog band already clears the drawn text; only the
-    // glyphs themselves are the defect the reroute must not cross).
-    for &s in end.chain {
-        if let Some((tx, ty, tw, th)) = frame_title(s) {
-            obs.push_node((
-                tx - TITLE_CLEAR_GAP,
-                ty,
-                tw + title_clear_gap(tw) + TITLE_CLEAR_GAP,
-                th,
-            ));
-        }
-    }
-    obs.borders = border_bands(frame_rect(end.chain[0]));
-    for &f in chain_frames.iter().skip(1) {
-        obs.borders.extend(border_bands(f));
-    }
-    obs.soft = world.soft.clone();
-    obs.segments = world.segments.clone();
-    obs.corridors = world.corridors.clone();
-    obs.cross_bands = world.cross_bands.clone();
-    obs.port_graph = world.port_graph;
-    obs.jog_rows = world.jog_rows.clone();
-    obs
-}
-
-/// The dispatch reroute for a failing straight stub span (M18's geometry,
-/// generalized at the dispatch — S19b absorbs [`stub_for`]'s former
-/// sibling-avoidance special case into this one path): route the
-/// node-port → rep-port span through [`track_route`] against a stub-local
-/// world and return the route with its ends attached when it clears that
-/// world. The chain bands are hard (the detour stays inside the frames and
-/// only crosses an outline perpendicular, at a recorded waypoint), peer
-/// occupancy carries over from the shared world as soft cost, and the
-/// escape seed is clamped so the Dijkstra starts in free space. `None` —
-/// no clear route — leaves the caller on the kept-unconditional straight
-/// stub (the bounded-ladder convention). The detour's own transversals of
-/// the chain frames are recorded as explicit waypoints
-/// ([`record_chain_crossings`]).
-fn reroute_stub_span(
-    end: &StubEnd,
-    rep_port: (f32, f32),
-    obs: &Obstacles,
-    chain_frames: &[(f32, f32, f32, f32)],
-    world: &Obstacles,
-    axis: FlowAxis,
-    inward: bool,
-) -> Option<Vec<(f32, f32)>> {
-    // The seed lives just short of the first barrier on the port's escape
-    // line, so the Dijkstra starts in free space even in a tight sibling
-    // band (M18's clamped escape — the geometry carries over).
-    let side = end.node_side;
-    let a = clamped_escape(end.port, side, SIDE_ESCAPE, obs, world);
-    // The stub's fixed legs hang off the node port's escape on one side of
-    // the routed span: bar the leg that would double back over the escape —
-    // toward the node port when routing outward, outward into the escape
-    // point when routing inward.
-    let esc = if inward {
-        Escapes {
-            start: None,
-            end: Some(Dir::of_side(side)),
-        }
-    } else {
-        Escapes {
-            start: Some(Dir::of_side(side)),
-            end: None,
-        }
-    };
-    let routed = if inward {
-        track_route_negotiated(rep_port, a, obs, esc)
-    } else {
-        track_route_negotiated(a, rep_port, obs, esc)
-    };
-    if routed.is_empty() || !obs.clear(&routed) || esc.defective(&routed) {
-        return None;
-    }
-    let mut stub = if inward {
-        let mut s = routed;
-        s.push(end.port);
-        s
-    } else {
-        let mut s = vec![end.port];
-        s.extend(routed);
-        s
-    };
-    // Record the detour's own chain-frame transversals, then verify the
-    // recorded stub clears the world: a mid-segment transversal without a
-    // waypoint would be barred by the clearance rule, so the recording
-    // must happen before the check clears it (M18's convention).
-    stub = record_chain_crossings(stub, chain_frames, axis);
-    if obs.clear(&stub) { Some(stub) } else { None }
-}
-
-/// One endpoint's stub geometry for [`cross_boundary_path`] (M14).
-struct StubEnd<'a> {
-    /// The endpoint node's rect.
-    node: (f32, f32, f32, f32),
-    /// Frames crossed on this side, innermost first, ending with the
-    /// representative at the LCA level (empty = the node is its own rep).
-    chain: &'a [usize],
-    /// The node's (possibly fanned) port point and its cross-coordinate.
-    port: (f32, f32),
-    cross: f32,
-    /// The side the node's port sits on (forced or implicit).
-    node_side: Side,
-    /// The side the chain crossings and the rep port use — normally the
-    /// implicit side (M14: a forced side never drags frame crossings), the
-    /// forced side only in the coupled fallback reading.
-    frame_side: Side,
-    /// The rep crossing's cross-coordinate on `frame_side` (the node's
-    /// `cross` when the sides agree; the corridor-clamped crossing when
-    /// they don't).
-    rep_cross: f32,
-    /// The forced node side differs from `frame_side`: the stub bends from
-    /// the frame's natural crossing into the node's forced side
-    /// ([`mismatched_stub`]).
-    mismatched: bool,
-}
-
-/// The blockage kinds beyond the title a straight (or title-detoured)
-/// span suffers (S19b): a sibling node pierced (solid — the M11/M18 gate),
-/// a reserved port-corridor band the span rides parallel inside (hard —
-/// pocket right-of-way), or a chain-frame outline band grazed without
-/// touching its centerline at the bar (the designated-crossing
-/// convention). Deliberately narrower than [`Obstacles::clear`] for
-/// title-detoured ends — whose title-side band transversal is its own
-/// answer — so the detour is not displaced by the very blockage it was
-/// built to answer.
-fn blocked_beyond_title(end: &StubEnd, rep_port: (f32, f32), world: &Obstacles) -> bool {
-    // Node pierced (solid — the M11/M18 pierce gate, unforced ends
-    // included).
-    for &r in &world.nodes {
-        if segment_intersects_rect(end.port, rep_port, r) {
-            return true;
-        }
-    }
-    // Port-corridor band ridden parallel inside.
-    for &c in &world.corridors {
-        if !seg_clear_padded(end.port, rep_port, c) {
-            return true;
-        }
-    }
-    // A band grazed (parallel ride or mid-segment transversal without an
-    // end-on-centerline waypoint — the whole chain's bands, as the chain
-    // frames may carry intermediate crossed the S19a world carried).
-    for &b in &world.borders {
-        if !seg_clear_border(end.port, rep_port, b) {
-            return true;
-        }
-    }
-    // Node-blockage shared with routed segments: hard peer segments parked
-    // on the span (the refresh_rep_crosses fan keeps LANES distinct, but
-    // a heavy multi-fan's parallel runs can still collide).
-    for &s in &world.segments {
-        if !seg_clear_padded(end.port, rep_port, s) {
-            return true;
-        }
-    }
-    false
-}
-
-/// The within-frame stub for one endpoint: empty for a direct child of the
-/// LCA, [`mismatched_stub`] for a mismatched forced side (M14), else the
-/// node-aligned straight stub ([`build_stub`]) — clearance-checked at this
-/// one dispatch point (S19b: the former M18 sibling-avoidance special case
-/// (`force_stub_around_siblings`) is absorbed into the dispatch reroute
-/// [`reroute_stub_span`; retired): when the straight node-to-rep span
-/// fails the shared obstacle world it is rerouted through the track router
-/// against a stub-local world that carries the chain frames' bands — the
-/// shared world only has the LCA-level frames' ([`edge_world`]), so
-/// without the chain bands a rerouted leg could graze a nested frame
-/// outline unchecked — and the straight span remains the
-/// kept-unconditional fallback when no clear route exists (the
-/// bounded-ladder convention).
-#[allow(clippy::too_many_arguments)]
-fn stub_for(
-    end: &StubEnd,
-    rep_port: (f32, f32),
-    detours: &[TitleDetour],
-    axis: FlowAxis,
-    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
-    frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
-    frame_title: &dyn Fn(usize) -> Option<(f32, f32, f32, f32)>,
-    world: &Obstacles,
-    inward: bool,
-) -> Vec<(f32, f32)> {
-    if end.chain.is_empty() {
-        return Vec::new();
-    }
-    if end.mismatched {
-        // S19b: cover the last blind span. The mismatched stub is purely
-        // geometric (M14): its corridor ([`mismatched_rep_cross`]) is
-        // clamped clear of the node's siblings at every chain level and
-        // the chain frames' titles — but that construction knows nothing
-        // about the rest of the shared world (a peer's parked segment, a
-        // foreign node the descent pierces, a sibling frame's outline
-        // band), so for a multi-frame chain its span was blind. The same
-        // regime the straight span got (S19a): a blocked stub is rerouted
-        // through the track router against the chain-local world
-        // ([`stub_world`]); no clear route leaves the mismatched geometry
-        // standing as the kept-unconditional fallback (the bounded-ladder
-        // convention — the forced port is honored either way). A
-        // single-frame chain keeps the prior geometry unconditionally:
-        // its world is exactly the sibling/corridor facts the mismatched
-        // corridor already cleared, so checking it against the shared
-        // world adds nothing and flipping accepted geometry here would
-        // leave the M14-pinned unit expectations unreviewable.
-        let stub = mismatched_stub(end, rep_port, axis, frame_rect, inward);
-        if end.chain.len() == 1 || world.clear(&stub) {
-            return stub;
-        }
-        let chain_frames: Vec<(f32, f32, f32, f32)> =
-            end.chain.iter().map(|&s| frame_rect(s)).collect();
-        let stub_obs = stub_world(
-            end,
-            &chain_frames,
-            frame_rect,
-            frame_children,
-            frame_title,
-            world,
-        );
-        return match reroute_stub_span(end, rep_port, &stub_obs, &chain_frames, world, axis, inward)
-        {
-            Some(r) => r,
-            None => stub,
-        };
-    }
-    // S19b: the absorption. The straight node-to-rep span's trigger fires
-    // when the span is blocked anything-wise — the sibling pierce (M11's
-    // narrow gate, unforced ends included: port separation may clamp a
-    // port cross to the side-span edge with a sibling straight beyond it)
-    // or, for the S19a multi-frame case, the whole-world clearance (the
-    // chain crossings make intermediate outlines real obstacles). A fired
-    // span is rerouted through the track router against the chain-local
-    // world ([`stub_world`] — M18's geometry, one construction for every
-    // stub kind); no clear route leaves the straight span standing as the
-    // kept-unconditional terminal (the bounded-ladder convention).
-    let straight = [end.port, rep_port];
-    let sibs: Vec<(f32, f32, f32, f32)> = frame_children(end.chain[0])
-        .into_iter()
-        .filter(|r| !rects_near(*r, end.node))
-        .collect();
-    let pierces = sibs
-        .iter()
-        .any(|&s| segment_intersects_rect(end.port, rep_port, s));
-    // A detoured end's jog already answers a title-blocked descent: the
-    // detour must not trip the whole-world check (its crossing band
-    // deliberately lacks a recorded end-on-centerline). Blockage for a
-    // detoured end is what the detour cannot answer: a sibling pierced, a
-    // port corridor ridden along, or an intermediate chain outline
-    // grazing (bars that are not the title's).
-    let fired = if detours.is_empty() {
-        // Untitled end: the S19a whole-world trigger — the straight span
-        // must clear everything the shared routing world knows about.
-        pierces || !world.clear(&straight)
-    } else {
-        // Title-detoured end: the detour's jog already answers the
-        // title-blocked descent, and its top-crossing waypoint sits on the
-        // frame's outline without an end-on-centerline leg (the crossing
-        // is confined to the middle of the descent), so the whole-world
-        // check trips on the very blockage the detour was built to
-        // answer. The trigger is what the detour cannot answer
-        // ([`blocked_beyond_title`]): a sibling pierced, a port corridor
-        // or peer segment ridden parallel along, or an outline band
-        // grazed without its designated perpendicular crossing.
-        pierces || blocked_beyond_title(end, rep_port, world)
-    };
-    if !fired {
-        return build_stub(
-            end.port, rep_port, end.cross, end.chain, detours, axis, frame_rect, inward,
-        );
-    }
-    let chain_frames: Vec<(f32, f32, f32, f32)> =
-        end.chain.iter().map(|&s| frame_rect(s)).collect();
-    let stub_obs = stub_world(
-        end,
-        &chain_frames,
-        frame_rect,
-        frame_children,
-        frame_title,
-        world,
-    );
-    match reroute_stub_span(end, rep_port, &stub_obs, &chain_frames, world, axis, inward) {
-        Some(r) => r,
-        // No clear detour: the bounded-ladder fallback is the straight
-        // stub *as its kind builds it* — title-detoured ends keep the
-        // detour geometry (the detour is the M5-followup answer to a
-        // blocked descent); untitled ends are the bare node-aligned span.
-        None => build_stub(
-            end.port, rep_port, end.cross, end.chain, detours, axis, frame_rect, inward,
-        ),
-    }
-}
-
-/// The bend geometry of a mismatched stub (M14): the cross-axis direction
-/// the node's forced side faces (`out`; `None` when the side's outward
-/// normal lies along the flow axis) and the flow-coordinate of the run that
-/// turns toward the port (`turn_flow`).
-///
-/// A side perpendicular to the flow (e.g. `to="right"` under a top-down
-/// LCA) faces along the cross axis: the run turns at the port's own flow
-/// coordinate and hooks into the port along its outward line. A
-/// flow-parallel side facing away from the rep (e.g. `to="bottom"` with the
-/// frame above) approaches along the flow axis: the run turns at the port's
-/// [`SIDE_ESCAPE`] row and the final leg runs outward-line into the port —
-/// clamped to stay inside the node's innermost frame (`inner_far`, the
-/// frame's far border on the port's outward side, less [`AROUND_CLEAR`]),
-/// so the stub never escapes a frame it would have to re-enter. `None`
-/// (caller demotes the end) when that leaves no room for the
-/// [`APPROACH_MIN`] approach leg.
-struct MismatchBend {
-    out: Option<i32>,
-    turn_flow: f32,
-}
-
-fn mismatched_bend(
-    port: (f32, f32),
-    node_side: Side,
-    axis: FlowAxis,
-    inner_far: Option<f32>,
-) -> Option<MismatchBend> {
-    let e = escape_point(port, node_side, 1.0);
-    let (dc, df) = {
-        let (c0, f0) = cross_flow(port, axis);
-        let (c1, f1) = cross_flow(e, axis);
-        (c1 - c0, f1 - f0)
-    };
-    if dc.abs() > 0.5 {
-        return Some(MismatchBend {
-            out: Some(if dc > 0.0 { 1 } else { -1 }),
-            turn_flow: cross_flow(port, axis).1,
-        });
-    }
-    // Flow-parallel, facing away: the run turns at the escape row, clamped
-    // inside the innermost frame.
-    let (_pc, pf) = cross_flow(port, axis);
-    let fout = if df > 0.0 { 1.0 } else { -1.0 };
-    let want = pf + fout * SIDE_ESCAPE;
-    let turn_flow = match inner_far {
-        Some(ff) => {
-            let limited = ff - fout * AROUND_CLEAR;
-            // Keep the nearer of the two: never past the frame's border.
-            if fout * (limited - pf) < fout * (want - pf) {
-                limited
-            } else {
-                want
-            }
-        }
-        None => want,
-    };
-    if fout * (turn_flow - pf) < APPROACH_MIN {
-        return None;
-    }
-    Some(MismatchBend {
-        out: None,
-        turn_flow,
-    })
-}
-
-/// Subtract the exclusion `e` from the (sorted, disjoint) interval list
-/// `ivs` on the cross axis.
-fn sub_intervals(ivs: Vec<(f32, f32)>, e: (f32, f32)) -> Vec<(f32, f32)> {
-    let mut out = Vec::new();
-    for (a, b) in ivs {
-        if e.1 <= a || e.0 >= b {
-            out.push((a, b));
-            continue;
-        }
-        if e.0 > a {
-            out.push((a, e.0));
-        }
-        if e.1 < b {
-            out.push((e.1, b));
-        }
-    }
-    out
-}
-
-/// The innermost chain frame's far border flow-coordinate on `node_side`'s
-/// outward side (the room the case-b wrap of [`mismatched_bend`] may use).
-fn inner_far(
-    chain: &[usize],
-    node_side: Side,
-    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
-) -> Option<f32> {
-    chain
-        .first()
-        .map(|&s| side_flow_coord(frame_rect(s), node_side))
-}
-
-/// The rep-frame crossing coordinate for a mismatched end (M14): the
-/// endpoint's descent beside the node runs in the clear corridor that keeps
-/// the node's forced approach leg straight, clear of the node's siblings
-/// (at every chain level) and the chain frames' title texts, and on the
-/// side the other endpoint's port leans to. Returns the corridor coordinate
-/// nearest the other endpoint's cross-coordinate, or `None` when no clear
-/// corridor exists (the caller demotes the end to the coupled reading).
-///
-/// The corridor is clamped into the rep frame's crossing-side span too, so
-/// the crossing always lands on a real border segment.
-#[allow(clippy::too_many_arguments)]
-fn mismatched_rep_cross(
-    node: (f32, f32, f32, f32),
-    node_side: Side,
-    port: (f32, f32),
-    other_port: (f32, f32),
-    rep: (f32, f32, f32, f32),
-    frame_side: Side,
-    chain: &[usize],
-    axis: FlowAxis,
-    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
-    frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
-    frame_title_rect: &dyn Fn(usize) -> Option<(f32, f32, f32, f32)>,
-) -> Option<f32> {
-    let bend = mismatched_bend(
-        port,
-        node_side,
-        axis,
-        inner_far(chain, node_side, frame_rect),
-    )?;
-    let (pc, _pf) = cross_flow(port, axis);
-    let turn_flow = bend.turn_flow;
-    // The descent's flow span: the rep border down (or up) to the turn row.
-    let f_rep = side_flow_coord(rep, frame_side);
-    let (d_lo, d_hi) = (f_rep.min(turn_flow), f_rep.max(turn_flow));
-    // Obstacles: the node's siblings at every chain level (the path's own
-    // chain child is crossed legitimately) and the chain frames' titles.
-    let mut obs: Vec<(f32, f32, f32, f32)> = Vec::new();
-    for (i, &s) in chain.iter().enumerate() {
-        let inner = if i == 0 {
-            node
-        } else {
-            frame_rect(chain[i - 1])
-        };
-        obs.extend(
-            frame_children(s)
-                .into_iter()
-                .filter(|r| !rects_near(*r, inner)),
-        );
-        obs.extend(frame_title_rect(s));
-    }
-    // Base corridors on the cross axis (which side(s) of the node the
-    // descent may run on), clamped into the rep frame's crossing-side span.
-    let (nc_lo, nc_hi) = cross_range(node, axis);
-    let (rs_lo, rs_hi) = side_cross_span(rep, frame_side);
-    let mut bases: Vec<((f32, f32), i32)> = Vec::new();
-    match bend.out {
-        Some(s) if s > 0 => bases.push(((nc_hi + TRACK_OFF, rs_hi), 1)),
-        Some(_) => bases.push(((rs_lo, nc_lo - TRACK_OFF), -1)),
-        None => {
-            bases.push(((rs_lo, nc_lo - TRACK_OFF), -1));
-            bases.push(((nc_hi + TRACK_OFF, rs_hi), 1));
-        }
-    }
-    let pref = cross_flow(other_port, axis).0;
-    let mut best: Option<f32> = None;
-    for (base, dir) in bases {
-        if base.0 > base.1 {
-            continue;
-        }
-        let mut ivs = vec![base];
-        for o in &obs {
-            let (ocl, och) = cross_range(*o, axis);
-            let (ofl, ofh) = flow_range(*o, axis);
-            // A descent blocker: its flow span reaches the descent run.
-            if ofl <= d_hi && ofh >= d_lo {
-                ivs = sub_intervals(ivs, (ocl - TRACK_OFF, och + TRACK_OFF));
-            }
-            // A turn-row blocker: its flow span contains the turn row, so
-            // the run toward the port would cross it.
-            if ofl <= turn_flow && ofh >= turn_flow {
-                if ocl - TRACK_OFF <= pc && och + TRACK_OFF >= pc {
-                    // Straddles the port: no run on this side reaches it.
-                    ivs.clear();
-                } else if (dir > 0 && ocl - TRACK_OFF > pc) || (dir < 0 && och + TRACK_OFF < pc) {
-                    let e = if dir > 0 {
-                        (ocl - TRACK_OFF, f32::MAX / 2.0)
-                    } else {
-                        (-f32::MAX / 2.0, och + TRACK_OFF)
-                    };
-                    ivs = sub_intervals(ivs, e);
-                }
-            }
-        }
-        if bend.out.is_none() {
-            // The final leg runs along the port's outward line into it; it
-            // must not cross a sibling either.
-            let leg_ok = obs.iter().all(|o| {
-                !segment_intersects_rect(
-                    with_flow(pc, turn_flow, axis),
-                    port,
-                    inflate(*o, ROUTE_PAD),
-                )
-            });
-            if !leg_ok {
-                continue;
-            }
-        }
-        for &(a, b) in &ivs {
-            let cand = pref.clamp(a, b);
-            if best.is_none_or(|v: f32| (cand - pref).abs() < (v - pref).abs()) {
-                best = Some(cand);
-            }
-        }
-    }
-    best
-}
-
-/// The within-frame stub for a mismatched end (M14): the rep crossing →
-/// the run beside the node → the node's forced-side port (the pieces
-/// reversed for a source stub), clipped at intermediate (nested) frame
-/// boundaries so every group crossing is an explicit connection point. The
-/// corridor chosen by [`mismatched_rep_cross`] keeps the run and the
-/// approach leg clear of the node's siblings and the chain frames' titles.
-fn mismatched_stub(
-    end: &StubEnd,
-    rep_port: (f32, f32),
-    axis: FlowAxis,
-    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
-    inward: bool,
-) -> Vec<(f32, f32)> {
-    let bend = mismatched_bend(
-        end.port,
-        end.node_side,
-        axis,
-        inner_far(end.chain, end.node_side, frame_rect),
-    )
-    .expect("mismatched end admitted only with a clear bend");
-    let (pc, _) = cross_flow(end.port, axis);
-    let (c, _) = cross_flow(rep_port, axis);
-    let mut raw = vec![rep_port, with_flow(c, bend.turn_flow, axis)];
-    if bend.out.is_none() {
-        raw.push(with_flow(pc, bend.turn_flow, axis));
-    }
-    raw.push(end.port);
-    if !inward {
-        raw.reverse();
-    }
-    let mut out = Vec::new();
-    for w in raw.windows(2) {
-        out.push(w[0]);
-        // Clip at the intermediate frames' boundaries — but only crossings
-        // that lie on this leg: `line_rect_exit` follows the extended line,
-        // which for a leg running inside one frame would otherwise emit a
-        // phantom point on that frame's far border.
-        let on_leg = |p: (f32, f32)| {
-            p.0 >= w[0].0.min(w[1].0) - 1e-3
-                && p.0 <= w[0].0.max(w[1].0) + 1e-3
-                && p.1 >= w[0].1.min(w[1].1) - 1e-3
-                && p.1 <= w[0].1.max(w[1].1) + 1e-3
-        };
-        let mut xs: Vec<(f32, f32)> = end.chain[..end.chain.len() - 1]
-            .iter()
-            .filter_map(|&s| line_rect_exit(w[0], w[1], frame_rect(s)))
-            .filter(|&p| on_leg(p))
-            .collect();
-        xs.sort_by(|p, q| {
-            let dp = (p.0 - w[0].0).abs() + (p.1 - w[0].1).abs();
-            let dq = (q.0 - w[0].0).abs() + (q.1 - w[0].1).abs();
-            dp.total_cmp(&dq)
-        });
-        out.extend(xs);
-    }
-    out.push(*raw.last().expect("raw has at least two points"));
-    dedup_consecutive(&mut out);
-    out
-}
-
-/// The structured routing of one cross-boundary edge: the within-frame stubs
-/// plus the two rep-frame ports for the caller to route through the ladder
-/// (M11.5: the around-target-frame special case is its own candidate
-/// generator, decided at the single dispatch point, so this returns pieces
-/// only).
-struct CrossPieces {
-    /// `src_stub` runs from the source node port to its rep frame port (raw,
-    /// pre-orthogonal); `lca` is the two rep-frame ports to be routed;
-    /// `tgt_stub` runs from the target rep frame port to the target node port.
-    src_stub: Vec<(f32, f32)>,
-    lca: [(f32, f32); 2],
-    tgt_stub: Vec<(f32, f32)>,
-}
-
-/// A clean "around the target frame" route for a cross-boundary edge whose
-/// straight within-frame target stub would pierce the target frame's internal
-/// content — the target node sits beyond other members along the frame's
-/// internal flow axis (e.g. a top-down Storage group entered from the top
-/// to reach its bottom-most Database node, with Cache in between). The
-/// straight stub would run straight through Cache and then exactly overlap
-/// the Cache→Database edge.
-///
-/// Instead the edge routes from the source node, around the *outside* of the
-/// target frame, and into the target node from a side perpendicular to the
-/// flow axis, so it clears the frame's other members and stays distinct from
-/// any internal edge it would otherwise have overlapped. The groups' internal
-/// layouts are untouched (the M5 headline guarantee — the failure mode this
-/// tool exists to escape).
-///
-/// Returns the full path (source node port → around the frame → target node
-/// port), already axis-aligned, or `None` if no clean route is available —
-/// a sibling blocks the perpendicular entry on both sides, or the obstacle
-/// world blocks both — in which case the caller falls back to the straight
-/// stub. Only the single-target-frame, single-or-zero-source-frame case is
-/// handled; deeper nesting falls back too.
-#[allow(clippy::too_many_arguments)]
-fn try_around_target_route(
-    _from: (f32, f32, f32, f32),
-    to: (f32, f32, f32, f32),
-    fb: (f32, f32, f32, f32),
-    from_chain: &[usize],
-    axis: FlowAxis,
-    exit: Side,
-    entry: Side,
-    siblings: &[(f32, f32, f32, f32)],
-    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
-    from_port: (f32, f32),
-    lane: f32,
-    obs: &Obstacles,
-) -> Option<Vec<(f32, f32)>> {
-    let (from_cc, from_ff) = cross_flow(from_port, axis);
-    let (fb_clo, fb_chi) = cross_range(fb, axis);
-    let (to_clo, to_chi) = cross_range(to, axis);
-    let to_fc = {
-        let (lo, hi) = flow_range(to, axis);
-        (lo + hi) / 2.0
-    };
-    let fb_cc = (fb_clo + fb_chi) / 2.0;
-
-    // Every border this route may legitimately transversally cross is
-    // recorded as a designated waypoint: the target frame's and the source's
-    // rep frame's bands, plus any other frame's bands the descent happens to
-    // pass through (a sibling frame's outline — the world's bands, so the
-    // builder and the clearance check agree by construction).
-    let cross_bands: Vec<(f32, f32, f32, f32)> = obs.borders.clone();
-
-    // Build the around-route for a given perpendicular side. `around_hi` is
-    // the high-cross side — Right for a vertical flow, Bottom for a horizontal
-    // flow. The route is built in `(cross, flow)` space and mapped back to
-    // `(x, y)` at the end.
-    let build = |around_hi: bool, offset: usize| -> Vec<(f32, f32)> {
-        // The side run keeps [`AROUND_CLEAR`] off the frame outline (edges
-        // avoid frame outlines — absorbed M12) — plus whole [`FAN_SEP`]
-        // steps outward when the nearest corridor is occupied (M16); the
-        // border transversals it then crosses to reach the target are
-        // recorded as designated waypoints.
-        let out = if around_hi { 1.0 } else { -1.0 };
-        let ac = if around_hi {
-            fb_chi + AROUND_CLEAR
-        } else {
-            fb_clo - AROUND_CLEAR
-        } + out * (offset as f32) * FAN_SEP;
-        let node_ac = if around_hi { to_chi } else { to_clo };
-        // Is the source node already clear of the frame on this side (its
-        // cross-coordinate lies outside the frame's cross-span)? If so the
-        // route can run straight along the flow axis to the target's flow-
-        // coordinate then across into the frame — a clean L. Otherwise the
-        // source sits above the frame within its cross-span: drop into the
-        // gap between the source and target frames, cross to the around-
-        // side, then run down it to the target's flow-coordinate.
-        let outside = if around_hi {
-            from_cc > fb_chi
-        } else {
-            from_cc < fb_clo
-        };
-        let descend_to = if outside {
-            to_fc
-        } else {
-            let src_exit_flow = if from_chain.is_empty() {
-                from_ff
-            } else {
-                cross_flow(port(frame_rect(*from_chain.last().unwrap()), exit), axis).1
-            };
-            let fb_entry_flow = cross_flow(port(fb, entry), axis).1;
-            let lo = src_exit_flow.min(fb_entry_flow);
-            let hi = src_exit_flow.max(fb_entry_flow);
-            lane.clamp(lo, hi)
-        };
-        // The initial descent (source port → the gap/target row) runs
-        // straight when clear of the world; otherwise it jogs around whatever
-        // blocks the column — a member node of an intermediate frame the
-        // descent passes through, most often — via the track graph (whose
-        // band-centerline tracks let it cross frame borders legally). The
-        // rest of the shape starts at the descent's actual end cross.
-        let straight = [(from_cc, from_ff), (from_cc, descend_to)];
-        let (descent, desc_cc) = {
-            let s: Vec<(f32, f32)> = straight
-                .iter()
-                .map(|&(c, f)| with_flow(c, f, axis))
-                .collect();
-            if obs.clear(&s) {
-                (s, from_cc)
-            } else {
-                let goal = with_flow(from_cc, descend_to, axis);
-                let tr = track_route(s[0], goal, obs, Escapes::default());
-                if !tr.is_empty() && obs.clear(&tr) {
-                    let end_cc = cross_flow(*tr.last().unwrap(), axis).0;
-                    (tr, end_cc)
-                } else {
-                    (s, from_cc)
-                }
-            }
-        };
-        let mut cf: Vec<(f32, f32)> = vec![(desc_cc, descend_to)];
-        if outside {
-            // The lane waypoint (`ac`) is the around-run outside the frame.
-            // When the descent column already ends on the target's side of
-            // it — between the frame border and the lane, most often —
-            // touching the lane first would ride out to it and reverse
-            // straight back through the crossing: an out-and-back spike
-            // over the descent's own tail. The lane detour is for a descent
-            // that ends on the frame's side of the lane, where running
-            // along it keeps [`AROUND_CLEAR`] off the outline up to the
-            // crossing row; past it, cross into the frame directly.
-            let past_lane = (desc_cc < ac) == (node_ac < ac);
-            if !past_lane {
-                cf.push((ac, to_fc));
-            }
-            cf.push((node_ac, to_fc));
-        } else {
-            cf.push((ac, descend_to));
-            cf.push((ac, to_fc));
-        }
-        cf.push((node_ac, to_fc));
-        let mut raw: Vec<(f32, f32)> = descent;
-        raw.extend(cf.into_iter().map(|(c, f)| with_flow(c, f, axis)));
-        record_border_crossings(&raw, &cross_bands)
-    };
-
-    // Prefer the around-side toward the source (shorter, no backtracking);
-    // fall back to the far side if the near one is blocked — by a sibling
-    // crossing or by the obstacle world (an earlier-routed edge or a peer
-    // node already in the corridor). Within a side, the side-run's offset
-    // forms a ladder: when the nearest offset is occupied (a peer edge's
-    // parked segment — a soft conflict, M16), the next offset outward is
-    // tried, so two edges around the same frame side fan into distinct
-    // corridors. The first hard-clear, soft-clean shape wins; none — every
-    // offset blocked or conflicting — yields `None` (the caller falls back
-    // to the frame-aware pieces).
-    let near_hi = from_cc >= fb_cc;
-    const AROUND_OFFSETS: usize = 6;
-    let mut best: Option<(Vec<(f32, f32)>, f32)> = None;
-    for around_hi in [near_hi, !near_hi] {
-        for offset in 0..AROUND_OFFSETS {
-            let route = build(around_hi, offset);
-            let blocked = route.windows(2).any(|w| {
-                siblings
-                    .iter()
-                    .any(|&sib| segment_intersects_rect(w[0], w[1], sib))
-            });
-            if blocked || !obs.clear(&route) {
-                continue;
-            }
-            let c = obs.soft_cost(&route);
-            if best.as_ref().is_none_or(|(_, bc)| c < bc - 1e-6) {
-                best = Some((route, c));
-            }
-        }
-    }
-    best.map(|(route, _)| route)
-}
-
-/// Frame-aware path for a cross-boundary edge from `from` to `to` (absolute
-/// node rects).
-///
-/// `from_chain` / `to_chain` list the group frames containing each endpoint,
-/// innermost first, ending with the representative at the LCA level (the
-/// outermost frame the edge crosses on that side). An empty chain means the
-/// endpoint is a direct child of the LCA, so the endpoint node *is* its own
-/// representative. `frame_rect(i)` returns the absolute frame rect;
-/// `frame_title_width(i)` returns the rendered width of that group's title
-/// (or `None` if it has none).
-///
-/// The path runs:
-/// `from`-port → [intermediate source frame crossings] → source-rep port →
-/// target-rep port → [intermediate target frame crossings] → `to`-port.
-/// The middle (rep-port → rep-port) is the LCA-level segment between the two
-/// representatives' ports. Each rep port sits at the **endpoint node's**
-/// cross-coordinate on its frame's facing side ([`port_at_cross`]) — not the
-/// frame's center — so a within-frame stub runs straight along the node's own
-/// axis and edges entering a group line up with their target node instead
-/// of all converging on the frame's midpoint (which read as every edge
-/// reaching every member). The facing side is the implicit one
-/// ([`StubEnd::frame_side`], M14): a forced node side that faces away from
-/// the crossing bends into it via [`mismatched_stub`]. Intermediate nested
-/// frames are clipped at their boundaries.
-///
-/// Title avoidance: a straight stub at the node's cross-coordinate would
-/// cross a chain frame's title text when the node sits under the (top-left)
-/// title. Under top-down, the stub instead crosses each such frame's top
-/// beside the title (past its right edge, or left of its first glyph when
-/// that is nearer — [`title_detour_clear_x`]) and jogs across below that
-/// frame's title ([`STUB_JOG_CLEARANCE`] above the next inner frame, or the
-/// node) to the next descent coordinate — one jog per titled frame in the
-/// chain ([`title_detours`]). Each jog lives in the clear band the frame's
-/// growth ([`CROSS_FRAME_PAD`]) reserves below the title; a frame whose
-/// title is already clear of the descent coordinate (or untitled) just
-/// carries the coordinate straight through. When a title-sized frame leaves
-/// no room for either entry, [`layout_level`] grows the frame's width so
-/// the entry past the title exists (M10); when neither entry fits even
-/// then, the stub keeps the straight descent (crossing the title, no worse
-/// than the prior frame-center design). The returned (possibly diagonal)
-/// segments are turned into right-angle bends by [`ortho_chain`] (M7).
-#[allow(clippy::too_many_arguments)]
-fn cross_boundary_path(
-    from: &StubEnd,
-    to: &StubEnd,
-    lca_dir: Direction,
-    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
-    frame_title_width: &dyn Fn(usize) -> Option<f32>,
-    frame_children: &dyn Fn(usize) -> Vec<(f32, f32, f32, f32)>,
-    frame_title: &dyn Fn(usize) -> Option<(f32, f32, f32, f32)>,
-    world: &Obstacles,
-) -> CrossPieces {
-    let axis = FlowAxis::from_direction(lca_dir);
-    let rep_from = from
-        .chain
-        .last()
-        .map(|&s| frame_rect(s))
-        .unwrap_or(from.node);
-    let rep_to = to.chain.last().map(|&s| frame_rect(s)).unwrap_or(to.node);
-    // Rep ports at the (separated) endpoint node's cross-coordinate on its
-    // rep frame's facing side (M14: `frame_side` — the implicit side, so a
-    // forced node side never drags the frame crossing). For a mismatched
-    // end `rep_cross` is the corridor-clamped crossing instead. When the
-    // chain is empty the endpoint is its own rep, so this is the node's own
-    // (separated) port.
-    let rep_from_port_aligned = port_at_cross(rep_from, from.frame_side, from.rep_cross);
-    let rep_to_port_aligned = port_at_cross(rep_to, to.frame_side, to.rep_cross);
-
-    // Title detours: under top-down, a Top-side stub whose descent would
-    // cross a chain frame's title enters beside the title and jogs across
-    // below it ([`title_detours`]). The rep port moves to the outermost
-    // crossing coordinate (the chain's last entry) and the stub holds it
-    // until the first jog. An empty list keeps the straight, node-aligned
-    // stub. A mismatched end needs none: its corridor is clamped clear of
-    // the titles.
-    let from_detours = if from.mismatched {
-        Vec::new()
-    } else {
-        title_detours(
-            from.node,
-            from.cross,
-            from.chain,
-            from.frame_side,
-            lca_dir,
-            frame_rect,
-            frame_title_width,
-        )
-    };
-    let to_detours = if to.mismatched {
-        Vec::new()
-    } else {
-        title_detours(
-            to.node,
-            to.cross,
-            to.chain,
-            to.frame_side,
-            lca_dir,
-            frame_rect,
-            frame_title_width,
-        )
-    };
-    let rep_from_port = match from_detours.last() {
-        Some(&d) => port_at_cross(rep_from, from.frame_side, d.clear_cross),
-        None => rep_from_port_aligned,
-    };
-    let rep_to_port = match to_detours.last() {
-        Some(&d) => port_at_cross(rep_to, to.frame_side, d.clear_cross),
-        None => rep_to_port_aligned,
-    };
-
-    // Source stub: the endpoint node's port -> its representative's frame
-    // port (raw, pre-orthogonal), clipping at any intermediate (nested)
-    // source frame boundaries. Empty when the endpoint is its own rep.
-    let src_stub = stub_for(
-        from,
-        rep_from_port,
-        &from_detours,
-        axis,
-        frame_rect,
-        frame_children,
-        frame_title,
-        world,
-        /* inward */ false,
-    );
-
-    // Target stub: symmetric to the source stub.
-    let tgt_stub = stub_for(
-        to,
-        rep_to_port,
-        &to_detours,
-        axis,
-        frame_rect,
-        frame_children,
-        frame_title,
-        world,
-        /* inward */ true,
-    );
-
-    CrossPieces {
-        src_stub,
-        lca: [rep_from_port, rep_to_port],
-        tgt_stub,
-    }
-}
-
-/// One chain frame's title detour on a within-frame stub: the cross-
-/// coordinate at which the stub crosses that frame's top (past the title
-/// text) and the flow-coordinate of the below-title jog where the descent
-/// shifts to the next inner crossing coordinate. Both are in the page-space
-/// axis convention of [`cross_boundary_path`] (cross = `x`, flow = `y` for
-/// the top-down / Top-side case that is the only one a detour arises for).
-#[derive(Clone, Copy)]
-struct TitleDetour {
-    clear_cross: f32,
-    jog_flow: f32,
-}
-
-/// The title detours of a within-frame stub — one entry per chain frame, in
-/// chain order (innermost first). Each entry is the cross-coordinate at
-/// which the stub crosses that frame's top (beside the title text when the
-/// straight descent would cross it) and the flow-coordinate of the
-/// below-title jog where the descent shifts to the next inner crossing
-/// coordinate (or the node's port). See [`title_detour_clear_x`] for the
-/// geometry.
-///
-/// A detour only arises on the Top side (where the title lives), under
-/// top-down. Every frame in the chain is considered: the jog for a nested
-/// frame's title lives in that frame's own grown band ([`CROSS_FRAME_PAD`]
-/// grows the titled frames of a cross-boundary chain), and a frame whose
-/// title is already clear of the descent coordinate (or untitled) simply
-/// carries the descent coordinate straight through — so an untitled frame
-/// between two detoured ones costs no jog. The result is empty when no
-/// frame's title is in the way: the straight, node-aligned stub.
-fn title_detours(
-    node: (f32, f32, f32, f32),
-    node_cross: f32,
-    chain: &[usize],
-    side: Side,
-    lca_dir: Direction,
-    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
-    frame_title_width: &dyn Fn(usize) -> Option<f32>,
-) -> Vec<TitleDetour> {
-    if side != Side::Top || lca_dir != Direction::TopDown {
-        return Vec::new();
-    }
-    let mut out = Vec::new();
-    let mut x = node_cross;
-    let mut below_flow = side_flow_coord(node, Side::Top);
-    let mut any_jog = false;
-    for &s in chain {
-        let f = frame_rect(s);
-        let mut clear = x;
-        if let Some(title_w) = frame_title_width(s)
-            && let Some(c) = title_detour_clear_x(f, x, title_w)
-        {
-            clear = c;
-        }
-        any_jog |= (clear - x).abs() > 1e-6;
-        out.push(TitleDetour {
-            clear_cross: clear,
-            jog_flow: below_flow - STUB_JOG_CLEARANCE,
-        });
-        x = clear;
-        below_flow = side_flow_coord(f, Side::Top);
-    }
-    if any_jog { out } else { Vec::new() }
-}
-
-/// Build a within-frame stub between `node_port` and `rep_port`, clipping at
-/// intermediate (nested) frame boundaries, with the per-frame title detours
-/// applied when `detours` is non-empty (one entry per chain frame, innermost
-/// first — see [`title_detours`]). `inward` is `true` for a target stub (rep
-/// port → node port) and `false` for a source stub (node port → rep port);
-/// the crossings and the jogs are ordered accordingly. Chain frames nest
-/// directly, so their top crossings are the only frame boundaries on the
-/// way — detours and crossings compose freely.
-#[allow(clippy::too_many_arguments)]
-fn build_stub(
-    node_port: (f32, f32),
-    rep_port: (f32, f32),
-    node_cross: f32,
-    chain: &[usize],
-    detours: &[TitleDetour],
-    axis: FlowAxis,
-    frame_rect: &dyn Fn(usize) -> (f32, f32, f32, f32),
-    inward: bool,
-) -> Vec<(f32, f32)> {
-    if detours.is_empty() {
-        // No detour: node-aligned straight stub (both ends at the node's
-        // cross-coordinate), clipping at each intermediate frame boundary.
-        let mut stub = Vec::new();
-        if inward {
-            stub.push(rep_port);
-            for &s in chain[..chain.len() - 1].iter().rev() {
-                if let Some(p) = line_rect_exit(rep_port, node_port, frame_rect(s)) {
-                    stub.push(p);
-                }
-            }
-            stub.push(node_port);
-        } else {
-            stub.push(node_port);
-            for &s in &chain[..chain.len() - 1] {
-                if let Some(p) = line_rect_exit(node_port, rep_port, frame_rect(s)) {
-                    stub.push(p);
-                }
-            }
-            stub.push(rep_port);
-        }
-        return stub;
-    }
-    // Title detours: cross each chain frame's top at its clear cross-
-    // coordinate (past that frame's title text), and wherever the descent
-    // coordinate changes, jog at `jog_flow` (below the title) to the next
-    // inner frame's crossing coordinate. Each frame crossing is an explicit
-    // waypoint (the border-crossing convention). Built rep → node and
-    // reversed for a source stub.
-    let mut pts: Vec<(f32, f32)> = Vec::new();
-    pts.push(rep_port);
-    for k in (0..chain.len()).rev() {
-        let d = detours[k];
-        if k + 1 < chain.len() {
-            // This frame's top crossing (the rep frame's own crossing is
-            // `rep_port` itself).
-            pts.push(with_flow(
-                d.clear_cross,
-                side_flow_coord(frame_rect(chain[k]), Side::Top),
-                axis,
-            ));
-        }
-        let below_cross = if k == 0 {
-            node_cross
-        } else {
-            detours[k - 1].clear_cross
-        };
-        if (d.clear_cross - below_cross).abs() > 1e-6 {
-            pts.push(with_flow(d.clear_cross, d.jog_flow, axis));
-            pts.push(with_flow(below_cross, d.jog_flow, axis));
-        }
-    }
-    pts.push(node_port);
-    if !inward {
-        pts.reverse();
-    }
-    pts
 }
 
 // ============ The flat engine ============
@@ -7300,6 +5512,12 @@ fn title_text_rect(frame: (f32, f32, f32, f32), title: &str) -> (f32, f32, f32, 
     let n = text::line_count(title);
     let lh = text::line_height(FRAME_TITLE_FONT_SIZE);
     let w = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
+    // M20.3: the title's obstacle rect is the drawn glyph box *plus* the
+    // title band's remaining height, so the clearance the deleted title
+    // detour encoded (the stub jogged in the band below the text) is
+    // preserved: a within-frame descent may not thread the narrow strip
+    // between the title's baseline and the first rank either, because the
+    // search has no way to know that strip is meant to stay clear.
     (
         frame.0 + FRAME_TITLE_X,
         frame.1 + FRAME_TITLE_TOP,
@@ -8602,99 +6820,6 @@ mod tests {
     fn sub_rect_of(s: &GroupRect) -> (f32, f32, f32, f32) {
         (s.x, s.y, s.w, s.h)
     }
-
-    #[test]
-    fn cross_boundary_edge_routes_through_frame_connection_point() {
-        // lb (top-level) -> api (inside S): a cross-boundary edge. It must
-        // route through a connection point on S's frame rather than piercing
-        // it. With lb above S (top-down), the connection point is on S's top
-        // edge, at S's center-x (the representative's port).
-        let (_d, l) = lay_final(
-            r#"diagram top-down
-lb
-group "S"
-api
-end
-lb --> api
-"#,
-        );
-        let e = edge_path(&l, "lb", "api");
-        assert_eq!(
-            e.points.len(),
-            3,
-            "lb->api should be [lb port, S port, api port], got {:?}",
-            e.points
-        );
-        let lb = node_rect(&l, "lb");
-        let api = node_rect(&l, "api");
-        let s = sub_rect(&l, 0);
-        // First point: lb's bottom-center (exit side, facing S below).
-        assert!(
-            (e.points[0].1 - (lb.y + lb.h)).abs() < 1e-2,
-            "start not on lb's bottom"
-        );
-        assert!((e.points[0].0 - (lb.x + lb.w / 2.0)).abs() < 1e-2);
-        // Middle point: a connection point on S's top edge at S's center-x.
-        assert!(
-            on_boundary(sub_rect_of(s), e.points[1]),
-            "connection point {:?} not on S's frame {:?}",
-            e.points[1],
-            s
-        );
-        assert!(
-            (e.points[1].1 - s.y).abs() < 1e-2,
-            "connection point not on S's top edge"
-        );
-        assert!(
-            (e.points[1].0 - (s.x + s.w / 2.0)).abs() < 1e-2,
-            "connection point not at S's center-x"
-        );
-        // Last point: api's top-center (entry side).
-        assert!((e.points[2].1 - api.y).abs() < 1e-2, "end not on api's top");
-        assert!((e.points[2].0 - (api.x + api.w / 2.0)).abs() < 1e-2);
-    }
-
-    #[test]
-    fn cross_boundary_edge_connects_two_frames() {
-        // a (in A) -> b (in B): both endpoints are inside frames. The path
-        // runs a port -> A port -> B port -> b port, with a connection point
-        // on each frame.
-        let (_d, l) = lay_final(
-            r#"diagram top-down
-group "A"
-a
-end
-group "B"
-b
-end
-a --> b
-"#,
-        );
-        let e = edge_path(&l, "a", "b");
-        assert_eq!(
-            e.points.len(),
-            4,
-            "a->b should be [a port, A port, B port, b port], got {:?}",
-            e.points
-        );
-        let a_frame = sub_rect(&l, 0);
-        let b_frame = sub_rect(&l, 1);
-        // A's connection point: on A's bottom edge (A is above B), at A's center-x.
-        assert!(
-            (e.points[1].1 - (a_frame.y + a_frame.h)).abs() < 1e-2,
-            "A port not on A's bottom"
-        );
-        assert!((e.points[1].0 - (a_frame.x + a_frame.w / 2.0)).abs() < 1e-2);
-        // B's connection point: on B's top edge, at B's center-x.
-        assert!(
-            (e.points[2].1 - b_frame.y).abs() < 1e-2,
-            "B port not on B's top"
-        );
-        assert!((e.points[2].0 - (b_frame.x + b_frame.w / 2.0)).abs() < 1e-2);
-        assert!(on_boundary(sub_rect_of(a_frame), e.points[1]));
-        assert!(on_boundary(sub_rect_of(b_frame), e.points[2]));
-    }
-
     #[test]
     fn cross_boundary_frame_points_preserve_group_direction() {
         // The headline M5 guarantee: a group's own direction is kept even
@@ -8739,176 +6864,6 @@ c --> sink
         assert_all_finite(&l);
         assert_no_overlaps(&l);
     }
-
-    #[test]
-    fn cross_boundary_stub_does_not_cross_sibling() {
-        // The within-frame stub connects the endpoint node to its rep frame at
-        // the *node's* cross-coordinate (not the frame center), so it runs
-        // straight out along the node's own axis. With two members in a frame
-        // and an edge from the right member to a node below-left, that straight
-        // stub stays on the right member's side and must not cut across the
-        // left member. This is the Mermaid/dagre failure mode this tool exists
-        // to escape.
-        //
-        // Since M7 the stub is a right-angle Z (it jogs in the frame's bottom
-        // padding, below the nodes), so the whole stub — every segment from
-        // api2's port up to the K8s frame's connection point — is checked,
-        // not just the first segment. The frame connection point itself is
-        // found by value (it is no longer at a fixed index after the Z).
-        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
-        let api1 = node_rect(&l, "api1");
-        let api2 = node_rect(&l, "api2");
-        let k8s = sub_rect(&l, 0);
-        let e = edge_path(&l, "api2", "db");
-        assert!(
-            e.points.len() >= 3,
-            "api2->db should route through K8s's frame"
-        );
-        // The K8s frame connection point: on K8s's bottom edge, aligned with
-        // api2 (within its x-span — the rep port lines up with the node, not
-        // the frame center; M9 may fan it off the exact centre when api2 has
-        // several outgoing edges).
-        let k8s_bot_y = k8s.y + k8s.h;
-        let cp_idx = e
-            .points
-            .iter()
-            .position(|&p| (p.1 - k8s_bot_y).abs() < 1e-2)
-            .expect("no K8s bottom connection point on api2->db");
-        let cp = e.points[cp_idx];
-        assert!(
-            cp_idx >= 1,
-            "connection point should not be the first waypoint"
-        );
-        assert!(
-            cp.0 >= api2.x - 1e-2 && cp.0 <= api2.x + api2.w + 1e-2,
-            "connection point {cp:?} not aligned with api2 {api2:?}"
-        );
-        // Every segment of the stub (api2 port -> ... -> K8s connection point)
-        // must miss api1.
-        for seg in e.points[..=cp_idx].windows(2) {
-            assert!(
-                !segment_intersects_rect(seg[0], seg[1], rect_of(api1)),
-                "api2->db stub segment {:?}->{:?} crosses api1 {:?}",
-                seg[0],
-                seg[1],
-                api1
-            );
-        }
-        // The stub starts on api2's own bottom port (the exit side toward db).
-        assert!((e.points[0].1 - (api2.y + api2.h)).abs() < 1e-2);
-    }
-
-    #[test]
-    fn cross_boundary_edge_routes_around_frame_when_target_is_deep() {
-        // Orders (in the left-right Services group) -> Database (the
-        // *bottom* of the top-down Storage group, with Cache above it).
-        // The straight within-frame stub would run straight through Cache and
-        // then exactly overlap the Cache->Database edge (both at Storage's
-        // center-x). Instead the edge routes around the Storage frame and
-        // enters Database from the side, so it clears Cache and stays
-        // distinct from the Cache->Database edge.
-        let (_d, l) = lay_final(include_str!("../examples/subdirection.dgmr"));
-        let cache = node_rect(&l, "cache");
-        let db = node_rect(&l, "db");
-        let e = edge_path(&l, "orders", "db");
-
-        // No segment of orders->db crosses the Cache node.
-        for w in e.points.windows(2) {
-            assert!(
-                !segment_intersects_rect(w[0], w[1], rect_of(cache)),
-                "orders->db segment {:?}->{:?} crosses Cache {:?}",
-                w[0],
-                w[1],
-                cache
-            );
-        }
-        // orders->db enters Database from a side perpendicular to the flow
-        // axis: its final segment is horizontal (the LCA is top-down) and its
-        // last waypoint sits on Database's right edge at Database's center-y
-        // — not on Database's top, which is where the overlapping stub would
-        // have arrived.
-        let (lp0, lp1) = (e.points[e.points.len() - 2], *e.points.last().unwrap());
-        assert!(
-            (lp0.1 - lp1.1).abs() < 1e-2,
-            "orders->db last segment should be horizontal (side entry), got {:?}->{:?}",
-            lp0,
-            lp1
-        );
-        assert!(
-            (lp1.0 - (db.x + db.w)).abs() < 1e-2,
-            "orders->db should enter Database's right edge (x={:.2}), got x={:.2}",
-            db.x + db.w,
-            lp1.0
-        );
-        assert!(
-            (lp1.1 - (db.y + db.h / 2.0)).abs() < 1e-2,
-            "orders->db should enter at Database's center-y ({:.2}), got y={:.2}",
-            db.y + db.h / 2.0,
-            lp1.1
-        );
-        // The Cache->Database edge is vertical along Storage's center-x; the
-        // two edges no longer coincide (orders->db arrives off that x).
-        let cache_db = edge_path(&l, "cache", "db");
-        assert!(
-            (cache_db.points[0].0 - cache_db.points[cache_db.points.len() - 1].0).abs() < 1e-2,
-            "cache->db should be vertical"
-        );
-        assert!(
-            (lp1.0 - cache_db.points[0].0).abs() > 1e-2,
-            "orders->db and cache->db arrive at the same x (would overlap)"
-        );
-        assert!(is_orthogonal(&e.points));
-        assert_all_finite(&l);
-    }
-
-    #[test]
-    fn cross_boundary_edge_routes_around_frame_when_source_is_above_frame() {
-        // src (top-level, centered above a top-down group) -> b (the
-        // *bottom* of the group, with a above it). The straight within-
-        // frame stub would run straight through a. The around-route drops
-        // into the gap above the frame, runs down the frame's side, and
-        // enters b from the side — the case where the source node is NOT
-        // already clear of the frame on one side (it sits above the frame
-        // within the frame's cross-span), so the route takes a gap jog first.
-        let (_d, l) = lay_final(
-            r#"diagram top-down
-src
-group top-down "S"
-a --> b
-end
-src --> b
-"#,
-        );
-        let a = node_rect(&l, "a");
-        let b = node_rect(&l, "b");
-        let e = edge_path(&l, "src", "b");
-        for w in e.points.windows(2) {
-            assert!(
-                !segment_intersects_rect(w[0], w[1], rect_of(a)),
-                "src->b segment {:?}->{:?} crosses a {:?}",
-                w[0],
-                w[1],
-                a
-            );
-        }
-        // Enters b from a side (last segment horizontal in a top-down
-        // diagram), on b's left or right edge at b's center-y.
-        let (lp0, lp1) = (e.points[e.points.len() - 2], *e.points.last().unwrap());
-        assert!(
-            (lp0.1 - lp1.1).abs() < 1e-2,
-            "src->b last segment should be horizontal (side entry), got {:?}->{:?}",
-            lp0,
-            lp1
-        );
-        assert!(
-            (lp1.0 - (b.x + b.w)).abs() < 1e-2 || (lp1.0 - b.x).abs() < 1e-2,
-            "src->b should enter b's left or right edge, got x={:.2}",
-            lp1.0
-        );
-        assert!(is_orthogonal(&e.points));
-        assert_all_finite(&l);
-    }
-
     #[test]
     fn cross_boundary_edge_crosses_each_nested_frame() {
         // ext (top-level) -> inner (inside Inner inside Outer): a cross-
@@ -8979,53 +6934,6 @@ ext --> inner
             overlaps(h.0.0, h.1.0, cross, cross) && overlaps(v.0.1, v.1.1, row, row)
         }
     }
-
-    #[test]
-    fn nested_title_detour_clears_both_frame_titles() {
-        // ext --> lb crosses two nested frames (Outer > Application), with
-        // lb sitting under both titles' spans. The stub must enter each
-        // frame beside its title and jog below it — no edge segment may
-        // touch either title text (the cluster.dgmr user --> lb shape).
-        let (_d, l) = lay_final(
-            r#"diagram top-down
-ext
-group "Outer"
-group "Application"
-lb
-end
-end
-ext --> lb
-"#,
-        );
-        let e = edge_path(&l, "ext", "lb");
-        let outer = sub_rect(&l, 0);
-        let app = sub_rect(&l, 1);
-        let titles = [title_rect(outer, "Outer"), title_rect(app, "Application")];
-        for w in e.points.windows(2) {
-            for tr in titles {
-                assert!(
-                    !segment_intersects_rect(w[0], w[1], tr),
-                    "ext->lb segment {:?}->{:?} crosses the title rect {tr:?}",
-                    w[0],
-                    w[1]
-                );
-            }
-        }
-        // Both frames still record their border crossings.
-        for (name, r) in [
-            ("Outer", sub_rect_of(outer)),
-            ("Application", sub_rect_of(app)),
-        ] {
-            assert!(
-                e.points.iter().any(|&p| on_boundary(r, p)),
-                "no waypoint on {name}'s frame: {:?}",
-                e.points
-            );
-        }
-        assert!(is_orthogonal(&e.points));
-        assert_all_finite(&l);
-    }
-
     #[test]
     fn sibling_fan_edges_never_cross_or_ride() {
         // Three edges fanning from one node's side into a nested stack of
@@ -9082,191 +6990,6 @@ n3 -- dotted --> n2 -- dotted --> n1
         }
         assert_all_finite(&l);
     }
-
-    #[test]
-    fn cross_boundary_group_grows_around_immediate_child() {
-        // A group that a cross-boundary edge reaches through (to an
-        // *immediate* child) grows by [`CROSS_FRAME_PAD`] on top and bottom
-        // so the edge's within-frame stub has room to jog clear of the title
-        // text and the node's arrowhead. A group with no such edge keeps
-        // the default frame geometry. Both diagrams here hold the *same*
-        // single-node content inside "S", so the only difference is the extra
-        // padding.
-        let with = lay_final(
-            r#"diagram top-down
-src
-group "S"
-a
-end
-src --> a
-"#,
-        );
-        let without = lay_final(
-            r#"diagram top-down
-group "S"
-a
-end
-"#,
-        );
-        let f_with = sub_rect(&with.1, 0);
-        let f_without = sub_rect(&without.1, 0);
-        // The cross-boundary group is exactly 2*CROSS_FRAME_PAD taller
-        // (one font-height on top, one on bottom).
-        assert_eq!(
-            f_with.h - f_without.h,
-            2.0 * CROSS_FRAME_PAD,
-            "cross-boundary frame should grow by 2*CROSS_FRAME_PAD: with.h={} without.h={}",
-            f_with.h,
-            f_without.h
-        );
-        // The top inset grew by CROSS_FRAME_PAD (the node sits that much
-        // lower *relative to its frame*); the bottom padding grew by the
-        // same. Compare the relative inset, not absolute y — the two frames
-        // occupy different ranks, so their absolute y differs by far more.
-        let a_with = node_rect(&with.1, "a");
-        let a_without = node_rect(&without.1, "a");
-        assert_eq!(
-            a_with.y - f_with.y,
-            FRAME_TITLE_H + CROSS_FRAME_PAD,
-            "grown frame's top inset should be FRAME_TITLE_H + CROSS_FRAME_PAD"
-        );
-        assert_eq!(
-            a_without.y - f_without.y,
-            FRAME_TITLE_H,
-            "untouched group keeps the default top inset"
-        );
-        assert_eq!(
-            (f_with.y + f_with.h) - (a_with.y + a_with.h),
-            FRAME_PAD_Y + CROSS_FRAME_PAD,
-            "grown frame's bottom padding should be FRAME_PAD_Y + CROSS_FRAME_PAD"
-        );
-    }
-
-    #[test]
-    fn cross_boundary_multiline_title_grows_top_inset_further() {
-        // Same growth check as `cross_boundary_group_grows_around_immediate_child`
-        // but with a two-line title: the title band itself grows by one title
-        // line height *before* the cross-boundary padding, so the stub's jog
-        // still lands below the whole title.
-        let one_line = lay_final(
-            r#"diagram top-down
-src
-group "Kubernetes Cluster"
-a
-end
-src --> a
-"#,
-        );
-        let two_lines = lay_final(
-            r#"diagram top-down
-src
-group "Kubernetes\nCluster"
-a
-end
-src --> a
-"#,
-        );
-        let f1 = sub_rect(&one_line.1, 0);
-        let f2 = sub_rect(&two_lines.1, 0);
-        let extra = text::line_height(FRAME_TITLE_FONT_SIZE);
-        assert!(
-            (f2.h - f1.h - extra).abs() < 1e-2,
-            "two-line title frame should be one title line height taller: {} vs {}",
-            f2.h,
-            f1.h
-        );
-        let _a1 = node_rect(&one_line.1, "a");
-        let a2 = node_rect(&two_lines.1, "a");
-        assert!(
-            (a2.y - f2.y - (FRAME_TITLE_H + extra + CROSS_FRAME_PAD)).abs() < 1e-2,
-            "top inset should be the two-line title band plus cross padding"
-        );
-        // The jog (STUB_JOG_CLEARANCE above the node's top) stays clear of
-        // the whole title: layout reserves a title band of FRAME_TITLE_H +
-        // one line height per extra line at the frame top, and the jog lands
-        // exactly at that band's bottom edge.
-        let e = edge_path(&two_lines.1, "src", "a");
-        let band_bottom = f2.y + FRAME_TITLE_H + extra;
-        // The stub's final horizontal approach (the jog) is the second-to-
-        // last point: last is a's top port.
-        let jog_y = e.points[e.points.len() - 2].1;
-        assert!(
-            (jog_y - (a2.y - STUB_JOG_CLEARANCE)).abs() < 1e-2,
-            "stub should jog STUB_JOG_CLEARANCE above the node: jog {jog_y} node top {}",
-            a2.y
-        );
-        assert!(
-            jog_y >= band_bottom - 1e-2,
-            "jog ({jog_y}) must clear the two-line title band (bottom {band_bottom})"
-        );
-        assert!(is_orthogonal(&e.points));
-        assert_all_finite(&two_lines.1);
-    }
-
-    #[test]
-    fn cross_boundary_stub_jog_clears_title_region_and_arrowhead() {
-        // The within-frame horizontal jog of a titled-top cross-boundary stub
-        // must land in the clear padding *below* the frame's reserved title
-        // space (so it does not touch the title text) and far enough *above*
-        // the node that the arrowhead's body fits below it. Here src -> a
-        // enters the titled frame from the top; a is the left end of a
-        // left-right chain (a --> b) and sits under the (wide) title text, so
-        // the stub detours past the title and jogs across to the node below it.
-        // (A node already clear of the title would route straight, with no jog
-        // to check.)
-        let (_d, l) = lay_final(
-            r#"diagram top-down
-src
-group left-right "Services"
-a --> b
-end
-src --> a
-"#,
-        );
-        let a = node_rect(&l, "a");
-        let s = sub_rect(&l, 0);
-        let e = edge_path(&l, "src", "a");
-        // Find the within-frame horizontal jog (a same-y pair strictly between
-        // the frame top and the node top).
-        let mut jog_y: Option<f32> = None;
-        for w in e.points.windows(2) {
-            if (w[0].1 - w[1].1).abs() < 1e-2
-                && (w[0].0 - w[1].0).abs() > 1e-2
-                && w[0].1 > s.y
-                && w[0].1 < a.y
-            {
-                jog_y = Some(w[0].1);
-                break;
-            }
-        }
-        let jog_y = jog_y.expect("no within-frame horizontal jog on src->a");
-
-        // The jog is exactly STUB_JOG_CLEARANCE above the node.
-        assert!((jog_y - (a.y - STUB_JOG_CLEARANCE)).abs() < 1e-2);
-        // STUB_JOG_CLEARANCE exceeds the arrowhead's back-extent (the render
-        // marker is 10 px tall), so the jog clears the arrowhead body.
-        const {
-            assert!(
-                STUB_JOG_CLEARANCE > 10.0,
-                "STUB_JOG_CLEARANCE must exceed the arrowhead height so the jog clears it"
-            );
-        }
-        // The jog lands at or below the frame's reserved title space
-        // (frame.y + FRAME_TITLE_H), i.e. clear of the title text, which the
-        // renderer draws within that reserved band. With the grown frame this
-        // is the bottom of the band; the title glyphs occupy only its top.
-        assert!(
-            jog_y >= s.y + FRAME_TITLE_H - 1e-2,
-            "jog {jog_y:.2} inside the title-inset band (should be at or below {:.2})",
-            s.y + FRAME_TITLE_H
-        );
-        assert!(
-            jog_y < a.y,
-            "jog {jog_y:.2} not above the node top {:.2}",
-            a.y
-        );
-    }
-
     // ================= M10 — title-detour robustness =================
 
     #[test]
@@ -9356,158 +7079,6 @@ src --> a
         let tw = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
         (s.x + FRAME_TITLE_X, s.y + 2.0, tw, FRAME_TITLE_H - 6.0)
     }
-
-    #[test]
-    fn title_sized_frame_left_detour_when_node_sits_left_of_title() {
-        // No room past the title's right edge (the title determines the
-        // frame width, so the right margin is only FRAME_TITLE_X): the
-        // detour takes the left-side entry instead of giving up and running
-        // the stub straight through the title. The title's left edge is
-        // anchored at FRAME_TITLE_X, so the small base gap is safe there —
-        // no font fallback can widen it leftward.
-        let (_d, l) = left_detour_setup();
-        let a = node_rect(&l, "a");
-        let s = sub_rect(&l, 0);
-        // The node is under the title's left half.
-        let tw = text::measure("A Very Long Group Title Indeed", FRAME_TITLE_FONT_SIZE).width;
-        let title_mid = s.x + FRAME_TITLE_X + tw / 2.0;
-        assert!(
-            cx(a) < title_mid,
-            "test shape changed: node center {:.2} not under the title's left half (< {:.2})",
-            cx(a),
-            title_mid
-        );
-        // The frame is title-sized and NOT grown by the M10 pass: the left
-        // entry needs no extra width, so the group keeps its default frame
-        // geometry — the title width plus the fallback-safe right margin
-        // (`title_clear_gap`) every titled frame gets.
-        let natural = (FRAME_TITLE_X + tw + title_clear_gap(tw)).max(a.w + 2.0 * FRAME_PAD_X);
-        assert!(
-            (s.w - natural).abs() < 1e-2,
-            "frame grew unnecessarily: {}",
-            s.w
-        );
-        // The entry is left of the title, TITLE_CLEAR_GAP past its first
-        // glyph.
-        let entry_x = frame_top_entry_x(&l, s, "a");
-        let want = s.x + FRAME_TITLE_X - TITLE_CLEAR_GAP;
-        assert!(
-            (entry_x - want).abs() < 1e-2,
-            "entry {entry_x:.2} not at the left-side detour point {want:.2}"
-        );
-        // And no segment of the edge touches the title text.
-        let e = edge_path(&l, "src", "a");
-        let tr = title_rect(s, "A Very Long Group Title Indeed");
-        for w in e.points.windows(2) {
-            assert!(
-                !segment_intersects_rect(w[0], w[1], tr),
-                "edge segment {:?}->{:?} crosses the title rect {tr:?}",
-                w[0],
-                w[1]
-            );
-        }
-    }
-
-    #[test]
-    fn title_sized_frame_grows_width_for_right_half_detour() {
-        // A node under the title's RIGHT half of a title-sized frame: before
-        // M10 the detour gave up (no clear band past the title — the right
-        // margin is only FRAME_TITLE_X) and the straight stub ran through
-        // the title. Now the frame grows sideways so the entry past the
-        // title exists; growing keeps the children anchored at the left/top
-        // insets, so the group's internal arrangement is untouched.
-        let (_d, l) = lay_final(
-            r#"diagram top-down
-src
-group left-right "A Very Long Group Title Indeed"
-a
-b
-end
-src --> b
-"#,
-        );
-        let a = node_rect(&l, "a");
-        let b = node_rect(&l, "b");
-        let s = sub_rect(&l, 0);
-        let tw = long_width_hint();
-        let title_mid = s.x + FRAME_TITLE_X + tw / 2.0;
-        assert!(
-            cx(b) >= title_mid,
-            "test shape changed: node center {:.2} not under the title's right half (>= {:.2})",
-            cx(b),
-            title_mid
-        );
-        // The frame grew to fit a clear entry past the title plus side
-        // padding (the natural title-sized width is tw + 2·FRAME_TITLE_X).
-        let need = FRAME_TITLE_X + tw + title_clear_gap(tw) + FRAME_PAD_X;
-        assert!(
-            s.w >= need - 1e-2,
-            "frame width {:.2} did not grow to fit the detour entry (need {:.2})",
-            s.w,
-            need
-        );
-        assert!(
-            s.w > tw + 2.0 * FRAME_TITLE_X,
-            "frame not grown past natural"
-        );
-        // The entry sits past the title's right edge by the fallback-safe
-        // gap — not clamped inside the title as before.
-        let entry_x = frame_top_entry_x(&l, s, "b");
-        let want = s.x + FRAME_TITLE_X + tw + title_clear_gap(tw);
-        assert!(
-            (entry_x - want).abs() < 1e-2,
-            "entry {entry_x:.2} not past the title's right edge {want:.2}"
-        );
-        // No segment of the edge touches the title text.
-        let e = edge_path(&l, "src", "b");
-        let tr = title_rect(s, "A Very Long Group Title Indeed");
-        for w in e.points.windows(2) {
-            assert!(
-                !segment_intersects_rect(w[0], w[1], tr),
-                "edge segment {:?}->{:?} crosses the title rect {tr:?}",
-                w[0],
-                w[1]
-            );
-        }
-        // The M5 guarantee: the children keep their internal arrangement
-        // (anchored at the left/top insets) — growth is sideways only. The
-        // two edge-less members are packed onto adjacent ranks, so under
-        // left-right b sits a rank band right of a (band step = a's width
-        // + RANK_GAP), not a NODE_SEP row step.
-        assert!((b.x - s.x - (FRAME_PAD_X + a.w + RANK_GAP)).abs() < 1e-2);
-        assert_all_finite(&l);
-        assert_no_overlaps(&l);
-    }
-
-    #[test]
-    fn title_detour_entry_clears_measured_title_by_the_fallback_gap() {
-        // The detour entry past the title's right edge is placed
-        // `title_clear_gap` beyond the title's *measured* right edge — the
-        // gap now includes the fixed + proportional fallback margins, so a
-        // viewer rendering the title with a wider fallback face still does
-        // not reach the entry.
-        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
-        let s = sub_rect(&l, 0);
-        let title = "Kubernetes Cluster";
-        let tw = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
-        let e = edge_path(&l, "lb", "api1");
-        let entry_x = e
-            .points
-            .iter()
-            .find(|p| (p.1 - s.y).abs() < 1e-2)
-            .expect("no connection point on the K8s frame top")
-            .0;
-        let want = s.x + FRAME_TITLE_X + tw + title_clear_gap(tw);
-        assert!(
-            (entry_x - want).abs() < 1e-2,
-            "entry {entry_x:.2} not a fallback-safe gap past the title's measured edge {want:.2}"
-        );
-        assert!(
-            entry_x - (s.x + FRAME_TITLE_X + tw) > TITLE_CLEAR_GAP + TITLE_FALLBACK_PAD - 1e-2,
-            "entry gap lost the fallback margins"
-        );
-    }
-
     // ================= M5.5 — centered block alignment =================
 
     /// Horizontal center of a node rect.
@@ -9767,175 +7338,6 @@ src --> b
             );
         }
     }
-
-    #[test]
-    fn titled_frame_top_stub_jogs_near_node() {
-        // lb -> api1 enters the titled K8s frame from the top. A naive
-        // midpoint jog would land on the "Kubernetes Cluster" title; instead
-        // the stub jogs [`STUB_JOG_CLEARANCE`] above the node, in the clear
-        // padding below the title. The jog is closer to the node than to the
-        // frame top (proving the near-node bias, not the midpoint default).
-        let (_d, l) = lay_final(include_str!("../examples/infra.dgmr"));
-        let api1 = node_rect(&l, "api1");
-        let k8s = sub_rect(&l, 0);
-        let e = edge_path(&l, "lb", "api1");
-        // The within-frame horizontal jog: a same-y pair strictly between the
-        // frame top and the node top.
-        let mut jog_y: Option<f32> = None;
-        for w in e.points.windows(2) {
-            if (w[0].1 - w[1].1).abs() < 1e-2
-                && (w[0].0 - w[1].0).abs() > 1e-2
-                && w[0].1 > k8s.y
-                && w[0].1 < api1.y
-            {
-                jog_y = Some(w[0].1);
-                break;
-            }
-        }
-        let jog_y = jog_y.expect("no within-frame horizontal jog on lb->api1");
-        assert!(
-            (jog_y - (api1.y - STUB_JOG_CLEARANCE)).abs() < 1e-2,
-            "jog at {jog_y:.2}, expected api1.y - STUB_JOG_CLEARANCE = {:.2}",
-            api1.y - STUB_JOG_CLEARANCE
-        );
-        let midpoint = (k8s.y + api1.y) / 2.0;
-        assert!(
-            jog_y > midpoint,
-            "jog {jog_y:.2} not below midpoint {midpoint:.2}"
-        );
-        assert!(
-            jog_y < api1.y,
-            "jog {jog_y:.2} not above api1 top {:.2}",
-            api1.y
-        );
-    }
-
-    #[test]
-    fn cross_boundary_edges_enter_group_aligned_with_target_node() {
-        // Two cross-boundary edges into the same group enter it at their
-        // respective target node's cross-coordinate on the frame — not at the
-        // frame's midpoint — so they stay distinct instead of converging on
-        // one point (which read as both sources reaching both targets). The
-        // frame's title is narrow here, so neither node sits under it and both
-        // stubs run straight down to the node.
-        let (_d, l) = lay_final(
-            r#"diagram top-down
-src1
-src2
-group left-right "S"
-a
-b
-end
-src1 --> a
-src2 --> b
-"#,
-        );
-        let a = node_rect(&l, "a");
-        let b = node_rect(&l, "b");
-        let s = sub_rect(&l, 0);
-        let s_top_y = s.y;
-        let s_center = s.x + s.w / 2.0;
-        // Each edge's connection point on S's top edge.
-        let cp_x = |from: &str, to: &str| -> f32 {
-            let e = edge_path(&l, from, to);
-            e.points
-                .iter()
-                .find(|p| (p.1 - s_top_y).abs() < 1e-2)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "no connection point on S's top edge for {from}->{to}: {:?}",
-                        e.points
-                    )
-                })
-                .0
-        };
-        let cp1 = cp_x("src1", "a");
-        let cp2 = cp_x("src2", "b");
-        assert!(
-            (cp1 - cx(a)).abs() < 1e-2,
-            "src1->a enters S at x {cp1:.2}, not a's center {:.2}",
-            cx(a)
-        );
-        assert!(
-            (cp2 - cx(b)).abs() < 1e-2,
-            "src2->b enters S at x {cp2:.2}, not b's center {:.2}",
-            cx(b)
-        );
-        assert!(
-            (cp1 - s_center).abs() > 1e-2,
-            "src1->a merges at S's center-x"
-        );
-        assert!(
-            (cp2 - s_center).abs() > 1e-2,
-            "src2->b merges at S's center-x"
-        );
-        assert!(
-            (cp1 - cp2).abs() > 1e-2,
-            "the two edges share a connection point (merge)"
-        );
-        assert!(is_orthogonal(&edge_path(&l, "src1", "a").points));
-        assert!(is_orthogonal(&edge_path(&l, "src2", "b").points));
-        assert_all_finite(&l);
-    }
-
-    #[test]
-    fn cross_boundary_edge_between_aligned_nodes_is_straight() {
-        // A cross-boundary edge whose two endpoints share a cross-coordinate
-        // (here two single nodes in side-by-side grown groups under a
-        // left-right LCA) runs as a single straight line along that coordinate
-        // — it does not jog up to a group's frame-center coordinate and
-        // back down. Before this change the rep port sat at each frame's
-        // center, so the off-center node (pushed down by the grown frame's
-        // extra top inset) forced exactly such a jog.
-        let (_d, l) = lay_final(
-            r#"diagram top-down
-src
-group left-right "Outer"
-    group "A"
-    a
-    end
-    group "B"
-    b
-    end
-end
-src --> a
-a --> b
-"#,
-        );
-        let a = node_rect(&l, "a");
-        let b = node_rect(&l, "b");
-        let fa = sub_rect(&l, 1); // "A"
-        let fb = sub_rect(&l, 2); // "B"
-        // The two nodes share a center-y (side-by-side grown frames, same rank).
-        let ay = a.y + a.h / 2.0;
-        let by = b.y + b.h / 2.0;
-        assert!(
-            (ay - by).abs() < 1e-2,
-            "a and b not aligned: {ay:.2} vs {by:.2}"
-        );
-        // ... and that y is off each frame's center (the frames are grown), so a
-        // frame-center port really would have jogged.
-        assert!(
-            (ay - (fa.y + fa.h / 2.0)).abs() > 1e-2,
-            "a sits at A's frame center"
-        );
-        assert!(
-            (ay - (fb.y + fb.h / 2.0)).abs() > 1e-2,
-            "b sits at B's frame center"
-        );
-        // The edge a->b is a single straight horizontal line at that y.
-        let e = edge_path(&l, "a", "b");
-        assert!(e.points.len() >= 2);
-        for p in &e.points {
-            assert!(
-                (p.1 - ay).abs() < 1e-2,
-                "a->b point {p:?} not on the node center-y {ay:.2}"
-            );
-        }
-        assert!(is_orthogonal(&e.points));
-        assert_all_finite(&l);
-    }
-
     // ================= M9 — edge separation & obstacle avoidance =================
 
     /// Two axis-aligned segments share a collinear, overlapping span (i.e. the
@@ -10102,6 +7504,31 @@ a --> b
             );
         }
         assert_no_edge_overlaps_or_node_passage(&d, &l);
+    }
+
+    #[test]
+    fn cluster_and_tencent_edges_do_not_overlap_or_pass_through_nodes() {
+        // The two deepest cross-boundary samples (nested titled groups on
+        // both sides of every edge) — the whole-path regime's hardest
+        // geometry: the search must thread the same corridors the deleted
+        // rep model hand-built, without riding a peer or puncturing a node.
+        for src in [
+            include_str!("../examples/cluster.dgmr"),
+            include_str!("../examples/tencent.dgmr"),
+        ] {
+            let (d, l) = lay_final(src);
+            assert_all_finite(&l);
+            for e in &l.edges {
+                assert!(
+                    is_orthogonal(&e.points),
+                    "{}->{} not orthogonal: {:?}",
+                    e.from,
+                    e.to,
+                    e.points
+                );
+            }
+            assert_no_edge_overlaps_or_node_passage(&d, &l);
+        }
     }
 
     #[test]
@@ -11112,7 +8539,6 @@ src -- to="bottom" --> t
             id_index,
             node_rect,
             frame_rect: std::collections::HashMap::new(),
-            frame_children: std::collections::HashMap::new(),
             direct_pts,
             level_items: std::collections::HashMap::new(),
         };
@@ -11311,7 +8737,6 @@ src -- to="bottom" --> t
             id_index,
             node_rect,
             frame_rect: std::collections::HashMap::new(),
-            frame_children: std::collections::HashMap::new(),
             direct_pts: std::collections::HashMap::new(),
             level_items: std::collections::HashMap::new(),
         };
@@ -11439,83 +8864,6 @@ src -- to="bottom" --> t
     /// node-port crosses and never consults the fan, so two edges into one
     /// frame parked their approaches on one column and overlapped (the
     /// dense-stress row-fan defect).
-    #[test]
-    fn unforced_cross_edges_use_their_fanned_rep_crossings() {
-        let (d, l) = lay_final(
-            r#"diagram top-down
-a "A"
-b "B"
-group "G"
-    t1 "T1"
-    t2 "T2"
-end
-a --> t1
-a --> t2
-b --> t1
-"#,
-        );
-        assert_no_edge_overlaps_or_node_passage(&d, &l);
-        // The two a-edges enter frame G from the top at their fanned
-        // crossings: their rep-port legs (the vertical descent into the
-        // frame) must run on distinct columns.
-        let g = &l.groups[0];
-        let g_top = g.y;
-        let mut cols: Vec<f32> = Vec::new();
-        for e in &l.edges {
-            if e.from != "a" {
-                continue;
-            }
-            // The leg crossing the frame's top border: the point at the
-            // border, on the segment that crosses it.
-            for w in e.points.windows(2) {
-                let y0 = w[0].1.min(w[1].1);
-                let y1 = w[0].1.max(w[1].1);
-                let vertical = (w[0].0 - w[1].0).abs() < 1e-3;
-                if vertical && y0 < g_top - 1e-3 && y1 >= g_top - 1e-3 {
-                    cols.push(w[0].0);
-                }
-            }
-        }
-        assert_eq!(cols.len(), 2, "both a-edges must cross G's top border");
-        assert!(
-            (cols[0] - cols[1]).abs() > 1e-3,
-            "the a-edges ride one shared rep column: {cols:?}"
-        );
-    }
-
-    /// The LCA↔stub seam never draws an out-and-back spike: the routed
-    /// span meets the within-frame stubs at the rep ports, and neither may
-    /// double back over the other (the whole-suite no-self-overlap
-    /// invariant). During S19c a generalized `Escapes` bar over every
-    /// port kind was tried here and found unnecessary once the fanned
-    /// rep crossings were actually consulted — the spikes were downstream
-    /// symptoms of two edges converging on one shared rep column — so the
-    /// bars stay scoped to the perpendicular (escaped) ports; this fixture
-    /// pins the seam's invariants on the geometry class that produced
-    /// the defect (a deep cross-group fan), so a regression in either
-    /// mechanism surfaces here before it surfaces as a stress-sweep
-    /// failure.
-    #[test]
-    fn lca_seam_never_reverses_over_the_stub() {
-        let (d, l) = lay_final(
-            r#"diagram top-down
-a "A"
-b "B"
-group "G"
-    t1 "T1"
-    t2 "T2"
-    t3 "T3"
-end
-a --> t1
-b --> t3
-"#,
-        );
-        assert_no_edge_overlaps_or_node_passage(&d, &l);
-        for e in &l.edges {
-            assert!(is_orthogonal(&e.points), "{}->{}", e.from, e.to);
-        }
-    }
-
     // ============ M17 — phase-1 permutation invariance ======================
     // M16 finding 2, enshrined: the routing pass's phase 1 is simultaneous —
     // every edge routes against the same world (nodes, frame borders,
@@ -11644,179 +8992,6 @@ end
             }
         }
     }
-
-    #[test]
-    fn multiframe_stub_avoids_side_by_side_deep_sibling() {
-        // The M18 regression fixture: a two-deep from-chain whose endpoint
-        // siblings sit side by side — the sibling spans the entire useful
-        // range of the port's side, so no port cross avoids it and only a
-        // vertical jog can. The generalized sibling-avoidance detour (multi-
-        // frame chains route the failing straight stub with track_route
-        // against the chain frames' bands and the siblings) keeps the stub
-        // legal: no segment pierces the sibling, the route is orthogonal,
-        // and the A->C and B->C separate (no shared leg).
-        let (_d, l) = lay_final(
-            "diagram left-right\n\
-             group \"Outer\"\n\
-             \x20 group \"Inner\"\n\
-             \x20\x20 A\n\
-             \x20\x20 B\n\
-             \x20 end\n\
-             end\n\
-             C\n\
-             A --> C\n\
-             B --> C\n",
-        );
-        let b = node_rect(&l, "B");
-        let e = edge_path(&l, "A", "C");
-        for w in e.points.windows(2) {
-            assert!(
-                !segment_intersects_rect(w[0], w[1], (b.x, b.y, b.w, b.h)),
-                "A->C segment {w:?} pierces sibling B: {:?}",
-                e.points
-            );
-        }
-        assert!(
-            is_orthogonal(&e.points),
-            "A->C not orthogonal: {:?}",
-            e.points
-        );
-        let last = *e.points.last().unwrap();
-        let c = node_rect(&l, "C");
-        assert!(
-            on_boundary((c.x, c.y, c.w, c.h), last),
-            "A->C misses C's boundary: {last:?}"
-        );
-        // The two edges stay distinct where they leave the inner frame:
-        // A->C escapes through the inner frame's top band and jogs across
-        // above B (outside B's cross-span), B->C leaves along its own port
-        // — so they do not ride collinearly on top of each other. Assert
-        // the *distinctness* that the generalized detour guarantees: B->C
-        // keeps its own straight node-aligned run (its port, its frame
-        // crossing at B's own cross), while A->C's detour bends — the two
-        // routes are not the same polyline. (An exact-collinear overlap of
-        // their parallel fan legs is left to the stress invariant, which
-        // owns peer-riding negotiation; the free runs here are clean, and
-        // the detour keeps A->C off B entirely.)
-        let eb = edge_path(&l, "B", "C");
-        assert!(
-            e.points.len() >= eb.points.len(),
-            "A->C detour ({:?}) is not even as long as B->C's straight run ({:?})",
-            e.points,
-            eb.points
-        );
-        assert!(
-            eb.points
-                .iter()
-                .zip(&e.points[..eb.points.len()])
-                .all(|(p, q)| p != q),
-            "A->C copies B->C's route {:?}",
-            e.points
-        );
-    }
-
-    #[test]
-    fn mismatched_multiframe_stub_gets_the_dispatch_reroute() {
-        // S19b task 2: the mismatched stub (M14) was the last blind span —
-        // its corridor ([`mismatched_rep_cross`]) is clamped clear of the
-        // chain siblings and titles, but knows nothing of the shared
-        // routing world (a reserved port corridor of another edge, parked
-        // peer occupancy). A multi-frame mismatched end whose descent rides
-        // a hard corridor band is rerouted through the same dispatch
-        // regime the straight span got (S19a): the track router against
-        // the chain-local world, chain bands hard, peer/corridor
-        // occupancy carried over. The forced-side port is honored either
-        // way (the bounded-ladder convention).
-        //
-        // Fixture: top-down; the node (100,100,60,30) sits two frames
-        // deep (inner 80,60,160,100 inside outer 40,20,240,160), forced
-        // into its RIGHT side (mismatched: the frames keep their natural
-        // top crossing). The mismatched descent runs at the rep cross
-        // x=170, from the outer frame's top border down to the port's
-        // row — straight through a reserved corridor band of another
-        // edge's port (162,40,16,60 — vertical, spanning the descent).
-        let node = (100.0, 100.0, 60.0, 30.0);
-        let inner = (80.0, 60.0, 160.0, 100.0);
-        let outer = (40.0, 20.0, 240.0, 160.0);
-        let port = (160.0, 115.0); // right side, the node's mid-row
-        let rep_port = (170.0, 20.0); // on the outer frame's top border
-        let end = StubEnd {
-            node,
-            chain: &[0, 1],
-            port,
-            cross: 115.0,
-            node_side: Side::Right,
-            frame_side: Side::Top,
-            rep_cross: 170.0,
-            mismatched: true,
-        };
-        let frame_rect = |s: usize| if s == 0 { inner } else { outer };
-        let frame_children = |s: usize| if s == 0 { vec![node] } else { vec![inner] };
-        let mut world = Obstacles::empty();
-        world.push_corridor((162.0, 40.0, 16.0, 60.0));
-
-        // Sanity: the fixture reproduces the blind defect — the purely
-        // geometric mismatched stub rides the corridor band.
-        let blind = mismatched_stub(&end, rep_port, FlowAxis::Vertical, &frame_rect, true);
-        assert!(
-            !world.clear(&blind),
-            "fixture must reproduce the blind mismatched span"
-        );
-
-        // The dispatch reroute: the returned stub clears the whole shared
-        // world, stays orthogonal, and keeps both endpoints (the rep
-        // crossing and the forced-side port).
-        let stub = stub_for(
-            &end,
-            rep_port,
-            &[],
-            FlowAxis::Vertical,
-            &frame_rect,
-            &frame_children,
-            &|_| None,
-            &world,
-            true,
-        );
-        assert!(world.clear(&stub), "rerouted stub still rides the corridor");
-        assert!(
-            is_orthogonal(&stub),
-            "rerouted stub not orthogonal: {stub:?}"
-        );
-        assert_eq!(stub.first(), Some(&rep_port));
-        assert_eq!(stub.last(), Some(&port));
-
-        // A single-frame chain keeps the prior (M14-pinned) geometry
-        // unconditionally: its world is exactly the sibling/corridor facts
-        // the mismatched corridor already cleared.
-        let single = StubEnd {
-            node,
-            chain: &[0],
-            port,
-            cross: 115.0,
-            node_side: Side::Right,
-            frame_side: Side::Top,
-            rep_cross: 170.0,
-            mismatched: true,
-        };
-        let kept = stub_for(
-            &single,
-            rep_port,
-            &[],
-            FlowAxis::Vertical,
-            &frame_rect,
-            &frame_children,
-            &|_| None,
-            &world,
-            true,
-        );
-        let blind_single =
-            mismatched_stub(&single, rep_port, FlowAxis::Vertical, &frame_rect, true);
-        assert_eq!(
-            kept, blind_single,
-            "single-frame mismatched geometry must not flip"
-        );
-    }
-
     #[test]
     #[ignore = "trace phase-2 negotiation (DIAG_SRC = a .dgmr path)"]
     fn _trace_m18_stress() {
@@ -12047,7 +9222,6 @@ B --> C
             id_index,
             node_rect: std::collections::HashMap::new(),
             frame_rect,
-            frame_children: std::collections::HashMap::new(),
             direct_pts: std::collections::HashMap::new(),
             level_items: std::collections::HashMap::new(),
         };
@@ -12082,7 +9256,6 @@ B --> C
             id_index,
             node_rect: std::collections::HashMap::new(),
             frame_rect,
-            frame_children: std::collections::HashMap::new(),
             direct_pts: std::collections::HashMap::new(),
             level_items: std::collections::HashMap::new(),
         };
@@ -12129,7 +9302,6 @@ B --> C
             id_index,
             node_rect: node_rect.clone(),
             frame_rect,
-            frame_children: std::collections::HashMap::new(),
             direct_pts: std::collections::HashMap::new(),
             level_items: std::collections::HashMap::new(),
         };
@@ -12212,7 +9384,6 @@ B --> C
             id_index,
             node_rect: std::collections::HashMap::new(),
             frame_rect,
-            frame_children: std::collections::HashMap::new(),
             direct_pts: std::collections::HashMap::new(),
             level_items: std::collections::HashMap::new(),
         };
@@ -12228,5 +9399,206 @@ B --> C
         // transversals.
         let touching = vec![(150.0, 50.0), (150.0, 150.0), (150.0, 250.0)];
         assert!(fw.cross_cost(&touching) < fw.cross_cost(&two) - FRAME_CROSS_PENALTY);
+    }
+
+    // ---- M20.3: the search is the cross-boundary router ----
+
+    /// The whole-path search is the router for a cross-boundary edge: the
+    /// route is a single polyline from the source node's port to the target
+    /// node's port, and it crosses the group frame where the search chose —
+    /// no rep port, no piecewise stub seam. (Before M20.3 the route was
+    /// assembled from a within-frame stub, an LCA segment, and a second stub,
+    /// and the frame crossings were rep ports at fixed coordinates.)
+    #[test]
+    fn cross_boundary_edges_route_by_the_whole_path_search() {
+        let (_d, l) = lay_final(
+            "diagram top-down\n\
+             src\n\
+             group \"S\"\n\
+             t\n\
+             end\n\
+             src --> t\n",
+        );
+        let e = edge_path(&l, "src", "t");
+        let src = node_rect(&l, "src");
+        let t = node_rect(&l, "t");
+        // The polyline starts on the source's boundary and ends on the
+        // target's — the two node ports, nothing in between standing in for
+        // a frame rep.
+        assert!(on_boundary((src.x, src.y, src.w, src.h), e.points[0]));
+        assert!(on_boundary((t.x, t.y, t.w, t.h), *e.points.last().unwrap()));
+        assert!(is_orthogonal(&e.points));
+        // It crosses the frame's top border once, on the way in.
+        let s = sub_rect(&l, 0);
+        let crossings = e
+            .points
+            .iter()
+            .filter(|&&(x, y)| (y - s.y).abs() < 1e-2 && x > s.x && x < s.x + s.w)
+            .count();
+        assert!(
+            crossings >= 1,
+            "no crossing of the frame top: {:?}",
+            e.points
+        );
+    }
+
+    /// Titles are solid obstacles for the search (M20.3): no edge segment
+    /// crosses a group's drawn title text on any sample. The deleted title
+    /// detour hand-built exactly this clearance; the search now discovers it.
+    #[test]
+    fn every_edge_lands_on_its_endpoint_boundary_on_the_samples() {
+        for src in [
+            include_str!("../examples/infra.dgmr"),
+            include_str!("../examples/finance.dgmr"),
+            include_str!("../examples/subdirection.dgmr"),
+            include_str!("../examples/tencent.dgmr"),
+            include_str!("../examples/cluster.dgmr"),
+            include_str!("../examples/sides.dgmr"),
+        ] {
+            let (_d, l) = lay_final(src);
+            for e in &l.edges {
+                let a = node_rect(&l, &e.from);
+                let b = node_rect(&l, &e.to);
+                let first = e.points[0];
+                let last = *e.points.last().unwrap();
+                assert!(
+                    on_boundary((a.x, a.y, a.w, a.h), first),
+                    "{}->{} starts off {}'s boundary: {first:?} vs {a:?}",
+                    e.from,
+                    e.to,
+                    e.from
+                );
+                assert!(
+                    on_boundary((b.x, b.y, b.w, b.h), last),
+                    "{}->{} ends off {}'s boundary: {last:?} vs {b:?}",
+                    e.from,
+                    e.to,
+                    e.to
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn no_edge_crosses_a_group_title() {
+        for src in [
+            include_str!("../examples/infra.dgmr"),
+            include_str!("../examples/finance.dgmr"),
+            include_str!("../examples/subdirection.dgmr"),
+            include_str!("../examples/tencent.dgmr"),
+            include_str!("../examples/cluster.dgmr"),
+        ] {
+            let (d, l) = lay_final(src);
+            for s in &l.groups {
+                let Some(title) = d.groups[s.index].title.as_deref() else {
+                    continue;
+                };
+                let tr = title_text_rect((s.x, s.y, s.w, s.h), title);
+                for e in &l.edges {
+                    for w in e.points.windows(2) {
+                        assert!(
+                            !segment_intersects_rect(w[0], w[1], tr),
+                            "{}->{} crosses the title {title:?} of frame #{}: {:?}->{:?}",
+                            e.from,
+                            e.to,
+                            s.index,
+                            w[0],
+                            w[1]
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// A forced side on a cross-boundary edge still binds the node port
+    /// (M11 semantics): the port lands on the requested side and the route
+    /// leaves it outward. The search owns the span between the ports, so the
+    /// deleted rep model's coupled/decoupled duality no longer applies — the
+    /// frame crossing is just wherever the route goes.
+    #[test]
+    fn forced_cross_boundary_ports_are_honored_by_the_search() {
+        for side in ["top", "bottom", "left", "right"] {
+            let src = format!(
+                "diagram top-down\nsrc\ngroup \"S\"\nt \"Target\"\nend\nsrc -- to=\"{side}\" --> t\n"
+            );
+            let (_d, l) = lay(&src, false);
+            let t = node_rect(&l, "t");
+            let e = edge_path(&l, "src", "t");
+            assert!(
+                on_side(t, *e.points.last().unwrap(), side),
+                "to=\"{side}\": end {:?} not on t's {side} (t = {t:?})",
+                e.points.last().unwrap()
+            );
+            assert!(is_orthogonal(&e.points), "to=\"{side}\": {:?}", e.points);
+        }
+    }
+
+    /// The search leaves the graph's unrelated (solid) frames alone: an edge
+    /// between two top-level nodes never punctures a sibling group's frame,
+    /// even when the straight line would. (The M20 obstacle model's
+    /// by-construction rule — this is the property the deleted rep model's
+    /// cost tuning only approximated.)
+    #[test]
+    fn whole_path_search_never_punctures_an_unrelated_frame() {
+        // `a --> b` spans a whole sibling group that sits between them (the
+        // group is ranked between `a` and `b` by its own two edges). The
+        // group is *unrelated* to `a --> b` — neither endpoint is a member —
+        // so the M20 obstacle model makes it solid and the route must go
+        // around it rather than through it (the by-construction rule the
+        // deleted rep model's cost tuning only approximated).
+        let (_d, l) = lay_final(
+            "diagram top-down\n\
+             a \"A\"\n\
+             group \"Wall\"\n\
+             w1 \"W1\"\n\
+             w2 \"W2\"\n\
+             w1 --> w2\n\
+             end\n\
+             b \"B\"\n\
+             a --> w1\n\
+             w2 --> b\n\
+             a --> b\n",
+        );
+        let wall = sub_rect(&l, 0);
+        let wall_rect = (wall.x, wall.y, wall.w, wall.h);
+        let e = edge_path(&l, "a", "b");
+        // The fixture is meaningful only if the straight line really would
+        // cut the frame — otherwise the assertion below is vacuous.
+        let a = node_rect(&l, "a");
+        let b = node_rect(&l, "b");
+        assert!(
+            segment_intersects_rect(
+                (a.x + a.w / 2.0, a.y + a.h),
+                (b.x + b.w / 2.0, b.y),
+                wall_rect
+            ),
+            "fixture is vacuous: the straight a->b line misses the wall"
+        );
+        for w in e.points.windows(2) {
+            assert!(
+                !segment_intersects_rect(w[0], w[1], wall_rect),
+                "a->b segment {:?}->{:?} punctures the unrelated frame {wall_rect:?}",
+                w[0],
+                w[1]
+            );
+        }
+    }
+
+    /// Determinism survives the new regime: two layouts of the same source
+    /// produce byte-identical routes (the whole-path search has no
+    /// iteration-order dependence).
+    #[test]
+    fn cross_boundary_routes_are_deterministic() {
+        let src = include_str!("../examples/finance.dgmr");
+        let (_d1, l1) = lay_final(src);
+        let (_d2, l2) = lay_final(src);
+        for (a, b) in l1.edges.iter().zip(&l2.edges) {
+            assert_eq!(
+                a.points, b.points,
+                "{}->{} moved between runs",
+                a.from, a.to
+            );
+        }
     }
 }

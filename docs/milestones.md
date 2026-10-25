@@ -9,9 +9,10 @@ how the remaining work depends on itself.
 **Current position:** M0–M7.5, M9–M15, M16, M17, M18, and M19 are
 complete (M12 was absorbed by M11.5), plus the post-M13 hardening pass
 below and the post-M17 routing hardening (escape-stub spikes) recorded
-under M17. **M20.1 (whole-path maze routing: foundation) and M20.2 (whole-path search
-for direct internal edges) are complete.**
-**M8 (CLI polish) and the M20.3–M20.6 routing migration remain open.**
+under M17. **M20.1 (whole-path maze routing: foundation), M20.2 (whole-path
+search for direct internal edges), and M20.3 (whole-path search for
+cross-boundary edges; rep model deleted) are complete.**
+**M8 (CLI polish) and the M20.4–M20.6 routing migration remain open.**
 
 ---
 
@@ -1616,7 +1617,7 @@ the suite and by re-rendering the examples).
       [`seg_clear`]/[`seg_clear`] segment form,
       [`EdgeFrameWorld::cross_cost`], and [`EdgeFrameWorld::track_seeds`]
       — are the whole-path search's (M20.2) scoring and vocabulary:
-      [`cross_cost`] charges [`FRAME_CROSS_PENALTY`] (300, tuned once:
+      [`cross_cost`] charges [`FRAME_CROSS_PENALTY`] \(300, tuned once:
       ~25 bends' worth, so a whole-path search prefers one crossing per
       ancestor frame over a cheap-looking double-cross) per *mid-segment*
       perpendicular transversal of an ancestor band, keeping a segment
@@ -1626,7 +1627,7 @@ the suite and by re-rendering the examples).
       designated-crossing rows [`track_route`] already uses) and solid
       frames at edges only (nothing may touch them).
 - [x] **The track graph accepts a caller-chosen region.** The Dijkstra
-      core was extracted into [`track_search`] (graph + start/goal +
+      core was extracted into [`track_search`] \(graph + start/goal +
       world; the search itself unchanged, byte-identical behavior);
       [`track_route`] now calls it with its own derived
       ports-and-obstacles region, and the new
@@ -1745,7 +1746,124 @@ repoints it.
 
 **Blocked by:** nothing. **Blocks:** M20.3 (which repoints the cross-boundary
 regime at the same search and deletes the rep model).
-### [ ] M20.3 — Whole-path search for cross-boundary edges; delete the rep model.
+### ✅ M20.3 — Whole-path search for cross-boundary edges; delete the rep model
+
+The plan's big milestone, landed as scoped: **every unforced, non-self-loop
+edge — direct and cross-boundary alike — is now routed by one whole-path A\*
+search from source node port to target node port against the unified M20
+obstacle model**, and the rep model is **deleted**. The containment tree's
+only remaining routing role is the per-edge ancestor/solid classification.
+
+- [x] **One router, one world.** [`whole_path_candidate`] feeds the search
+      the edge's *node* ports (`from_port` → `to_port`) for both regimes —
+      the plan's "one polyline from port to port" — and [`route_edge`] pushes
+      its result first, so the A* route is what is drawn. [`edge_world`] is
+      now the same world for every edge: node interiors, the edge's
+      ancestor-frame bands (as `borders` + the crossing cost), its unrelated
+      frames as fully-solid rects, and every group title's text rect as a
+      solid obstacle ([`title_obstacle_rect`]).
+- [x] **Titles are obstacles, not a special case.** The deleted title detour
+      hand-built a jog below the title text; the search instead routes around
+      the title's solid rect. Two layout consequences made that corridor
+      exist: a titled frame's top inset keeps a route-wide strip below the
+      text ([`TITLE_BAND_PAD`]), and a title-sized frame is wide enough to
+      pass a route beside its title (the frame-width floor now includes the
+      title's routing clearance plus one [`FRAME_PAD_X`]). Pinned by
+      `no_edge_crosses_a_group_title` across all five samples.
+- [x] **The search re-derives the ladder's cross-boundary rows.** A
+      cross-boundary edge seeds [`Obstacles::jog_rows`] with the flow
+      midpoints between consecutive *gates* along the run (node port, each
+      chain frame's facing border, the other node port) and
+      [`Obstacles::lane_row`] with the M9 lane pre-pass's assigned row — the
+      row that keeps parallel edges through one gap apart. A
+      [`LANE_DRIFT_COST`] preference (far above [`JOG_DRIFT_COST`]) makes the
+      search land on the assigned lane wherever that row is routable; the
+      row is only honored when it lies within the edge's own port span
+      ([`LANE_ROW_SLACK`]), so a stale row cannot pull a route into an
+      out-and-back spike.
+- [x] **The row preference is charged per cross-run, not per track hop.**
+      [`Obstacles::row_drift_cost`] is paid once at the bend that starts a
+      cross-axis run. Charging per hop made the cost scale with how many
+      tracks happened to lie along a run, which punished exactly the long
+      runs the search should prefer.
+- [x] **Both terminal legs get the stub preference.** The M20.2 term had
+      only the goal paying [`MIN_TERMINAL_STUB`]; a cross-run jammed against
+      the *source* port (a jog row 3 px below it) read as a kink in the box,
+      so the source leg pays it too.
+- [x] **Repair keeps the better route.** The M16 rip-up loop now keeps a
+      reroute only when it is no longer *and* no more conflicting than the
+      current polyline — a legal route is not shuffled into a longer one —
+      and a route riding a peer's band never wins the comparison, so two
+      riders cannot each "keep" themselves and survive every pass.
+- [x] **Forced sides.** A forced `from=`/`to=` side still binds the node
+      port with M11 semantics. A forced *cross-boundary* edge routes through
+      the escape-and-ladder fallback ([`forced_cross_boundary_path`]), and a
+      forced *direct* edge keeps the M11 ladder (M20.2's scope); the search
+      is scoped to unforced edges until M20.4 re-grounds port selection on
+      search outputs. Pinned by
+      `forced_cross_boundary_ports_are_honored_by_the_search` (all four
+      sides) and the M11 forced-side suite.
+- [x] **Deleted** (the milestone's headline): `cross_pieces_candidate`,
+      `around_target_candidate`, `try_around_target_route`,
+      `cross_boundary_path`, `CrossPieces`, `stub_for`, `build_stub`,
+      `StubEnd`, `stub_world`, `reroute_stub_span`, `blocked_beyond_title`,
+      `mismatched_stub`, `mismatched_rep_cross`, `mismatched_bend`,
+      `MismatchBend`, `inner_far`, `sub_intervals`, `clamped_escape`,
+      `into_param`, `record_chain_crossings`, `title_detours`,
+      `TitleDetour`, `title_detour_clear_x`, `lca_segment`,
+      `side_perpendicular`, `refresh_rep_crosses`, `ctx_with_crosses`'s rep
+      half, `cross_boundary_reach`, and the M16 frame rep-crossing fan pass.
+      With them go `EdgeCtx`'s rep-port fields (`from_frame_side`,
+      `to_frame_side`, `from_mismatched`, `to_mismatched`, `from_rep_cross`,
+      `to_rep_cross`, `around_target`, `lca_dir`, `rep_*_rect`) and the
+      constants that only they read (`STUB_JOG_CLEARANCE`,
+      `CROSS_FRAME_PAD`, `TITLE_LEFT_ENTRY_MIN`, `APPROACH_MIN`,
+      `AROUND_CLEAR`), plus the helpers only they used (`port`,
+      `side_flow_coord`, `port_flow`, `line_rect_exit`, `orthogonalize`,
+      `cross_range`, `Geometry::children`/`title_width`/`title_text_rect`,
+      `Geometry::frame_children`, the `Obstacles::push_frame`/
+      `push_segment` leftovers). `CROSS_FRAME_PAD` retires in favour of
+      [`TITLE_BAND_PAD`], which serves the same purpose (a route-wide strip
+      below the title) without the per-chain-frame over-approximation.
+- [x] **Tests.** New: `cross_boundary_edges_route_by_the_whole_path_search`
+      (one port-to-port polyline, a single frame crossing),
+      `no_edge_crosses_a_group_title` (all samples),
+      `forced_cross_boundary_ports_are_honored_by_the_search` (all four
+      sides), `whole_path_search_never_punctures_an_unrelated_frame`,
+      `cross_boundary_routes_are_deterministic`,
+      `every_edge_lands_on_its_endpoint_boundary_on_the_samples`, and
+      `cluster_and_tencent_edges_do_not_overlap_or_pass_through_nodes` (the
+      two deepest cross-boundary samples join the no-overlap/no-pass-through
+      gate). Deleted
+      with the code they pinned: the rep-crossing fan test, the LCA↔stub
+      seam test, the four title-detour tests, the around-target pair, the
+      aligned-entry pair, the sibling-pierce test, the S19b mismatched stub
+      test, and the two rep-port waypoint-count tests
+      (`cross_boundary_edge_connects_two_frames`,
+      `cross_boundary_edge_routes_through_frame_connection_point` — their
+      intent, "crosses the frame at a recorded point", lives on in
+      `cross_boundary_frame_points_preserve_group_direction` and
+      `cross_boundary_edge_crosses_each_nested_frame`). The M9/M16/M17 regression gates (dense stress, phase-1
+      permutation invariance, no-overlap/no-pass-through on every sample,
+      label resolution) all stay green unchanged.
+- [x] **Docs.** The `layout.rs` module docs now describe the one-router
+      architecture; `AGENTS.md`'s pipeline, module map, and shared-constant
+      notes are updated, and its "whole-path search is the router" invariant
+      states the M20.3 scope explicitly.
+- **Deliverable:** suite green (214 tests + 7 ignored inspection helpers;
+  snapshots regenerated deliberately — six changed: `cluster`, `finance`,
+  `group_style`, `infra`, `sides`, `subdirection`). Every route is one
+  search polyline; the six untouched snapshots (`cycle`, `diamond`,
+  `isolated_nodes`, `left_right_chain`, `shapes_styles`, `simple_chain`) are
+  byte-identical, which is the quality signal: simple shapes still come out
+  exactly as before. The visible churn is the title band (`TITLE_BAND_PAD`
+  adds 14 px of frame height) and the cross-boundary rows landing on the
+  search's own choices instead of the ladder's hand-built ones.
+
+**Blocked by:** nothing. **Blocks:** M20.4 (which re-grounds the fan, pocket,
+and repair machinery on search outputs and re-points port selection).
+
 ### [ ] M20.4 — Frames bands, fans, pockets, repair loop re-grounded.
+(see ./plan-for-whole-path-maze-routing.md)
 ### [ ] M20.5 — Labels re-tuned (M13 still holds its contract).
 ### [ ] M20.6 — Deletion & doc pass.

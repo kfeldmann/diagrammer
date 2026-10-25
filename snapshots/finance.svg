@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="1274.73" height="419.00" viewBox="0 0 1274.73 419.00">
+<svg xmlns="http://www.w3.org/2000/svg" width="1274.73" height="399.00" viewBox="0 0 1274.73 399.00">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -8,71 +8,71 @@
     </marker>
   </defs>
   <g fill="none" stroke="#88BDA4" stroke-width="1" stroke-linejoin="round">
-    <rect x="20.00" y="129.50" width="1234.73" height="269.50" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
-    <rect x="41.00" y="271.00" width="1192.73" height="108.00" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
+    <rect x="20.00" y="129.50" width="1234.73" height="249.50" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
+    <rect x="41.00" y="273.00" width="1192.73" height="98.00" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
   </g>
   <g fill="#3a3a3a" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00">
     <text x="30.00" y="133.50" text-anchor="start" dominant-baseline="hanging">Tencent</text>
-    <text x="51.00" y="275.00" text-anchor="start" dominant-baseline="hanging">Private subnets</text>
+    <text x="51.00" y="277.00" text-anchor="start" dominant-baseline="hanging">Private subnets</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="665.07,62.00 665.07,122.50 717.01,122.50 717.01,129.50 717.01,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="662.10,203.50 662.10,219.65 156.95,219.65 156.95,271.00 156.95,298.00 117.55,298.00 117.55,306.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="173.10,331.00 236.60,331.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="609.66,62.00 609.66,95.75 557.72,95.75 557.72,129.50 557.72,157.50" stroke="#333" stroke-width="3" marker-end="url(#arrow)"/>
-    <polyline points="557.72,203.50 557.72,210.50 480.84,210.50 480.84,271.00 480.84,306.00" stroke="#333" stroke-width="3" marker-end="url(#arrow)"/>
-    <polyline points="698.71,203.50 698.71,237.96 504.84,237.96 504.84,271.00 504.84,306.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="680.40,203.50 680.40,228.81 286.96,228.81 286.96,271.00 286.96,306.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="717.01,203.50 717.01,247.11 633.93,247.11 633.93,271.00 633.93,306.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="735.32,203.50 735.32,237.25 806.48,237.25 806.48,271.00 806.48,306.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="753.62,203.50 753.62,211.50 982.96,211.50 982.96,271.00 982.96,306.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="771.93,203.50 771.93,264.00 1160.86,264.00 1160.86,271.00 1160.86,299.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="665.07,62.00 665.07,122.50 717.01,122.50 717.01,129.50 717.01,159.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="662.10,205.50 662.10,273.00 662.10,293.50 117.55,293.50 117.55,310.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="173.10,335.00 236.60,335.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="609.66,62.00 609.66,95.75 557.72,95.75 557.72,129.50 557.72,159.50" stroke="#333" stroke-width="3" marker-end="url(#arrow)"/>
+    <polyline points="557.72,205.50 557.72,213.50 480.84,213.50 480.84,273.00 480.84,310.00" stroke="#333" stroke-width="3" marker-end="url(#arrow)"/>
+    <polyline points="698.71,205.50 698.71,239.96 504.84,239.96 504.84,273.00 504.84,310.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="680.40,205.50 680.40,230.81 286.96,230.81 286.96,273.00 286.96,310.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="717.01,205.50 717.01,249.11 633.93,249.11 633.93,273.00 633.93,310.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="735.32,205.50 735.32,269.00 806.48,269.00 806.48,273.00 806.48,310.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="753.62,205.50 753.62,239.25 982.96,239.25 982.96,273.00 982.96,310.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="771.93,205.50 771.93,254.74 1160.86,254.74 1160.86,273.00 1160.86,303.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g fill="#fff" stroke="none">
-    <rect x="85.60" y="229.13" width="142.69" height="32.40"/>
-    <rect x="194.01" y="322.00" width="25.68" height="18.00"/>
+    <rect x="318.48" y="277.30" width="142.69" height="32.40"/>
+    <rect x="194.01" y="326.00" width="25.68" height="18.00"/>
     <rect x="525.27" y="79.55" width="116.83" height="32.40"/>
-    <rect x="464.72" y="231.75" width="32.23" height="18.00"/>
-    <rect x="502.34" y="238.28" width="87.97" height="32.40"/>
-    <rect x="264.29" y="240.90" width="45.35" height="18.00"/>
-    <rect x="611.26" y="250.06" width="45.35" height="18.00"/>
-    <rect x="783.81" y="275.00" width="45.35" height="18.00"/>
-    <rect x="845.62" y="202.50" width="45.35" height="18.00"/>
-    <rect x="1144.74" y="258.50" width="32.23" height="18.00"/>
+    <rect x="464.72" y="234.25" width="32.23" height="18.00"/>
+    <rect x="502.34" y="240.28" width="87.97" height="32.40"/>
+    <rect x="264.29" y="242.90" width="45.35" height="18.00"/>
+    <rect x="611.26" y="252.06" width="45.35" height="18.00"/>
+    <rect x="748.23" y="260.00" width="45.35" height="18.00"/>
+    <rect x="845.62" y="230.25" width="45.35" height="18.00"/>
+    <rect x="1144.74" y="254.87" width="32.23" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
-    <text x="156.95" y="238.13">tech.finance.example.com<tspan x="156.95" y="252.53">443</tspan></text>
-    <text x="206.85" y="331.00">443</text>
+    <text x="389.82" y="286.30">tech.finance.example.com<tspan x="389.82" y="300.70">443</tspan></text>
+    <text x="206.85" y="335.00">443</text>
     <text x="583.69" y="88.55">finance.example.com<tspan x="583.69" y="102.95">443</tspan></text>
-    <text x="480.84" y="240.75">8088</text>
-    <text x="546.32" y="247.28">22, 8088, 8080,<tspan x="546.32" y="261.68">30001, 1234</tspan></text>
-    <text x="286.96" y="249.90">22, 443</text>
-    <text x="633.93" y="259.06">22, 443</text>
-    <text x="806.48" y="284.00">22, 443</text>
-    <text x="868.29" y="211.50">22, 443</text>
-    <text x="1160.86" y="267.50">3306</text>
+    <text x="480.84" y="243.25">8088</text>
+    <text x="546.32" y="249.28">22, 8088, 8080,<tspan x="546.32" y="263.68">30001, 1234</tspan></text>
+    <text x="286.96" y="251.90">22, 443</text>
+    <text x="633.93" y="261.06">22, 443</text>
+    <text x="770.90" y="269.00">22, 443</text>
+    <text x="868.29" y="239.25">22, 443</text>
+    <text x="1160.86" y="263.87">3306</text>
   </g>
   <g>
     <rect x="602.66" y="20.00" width="69.41" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="637.36" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">User</text>
-    <rect x="505.33" y="161.50" width="104.77" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="557.72" y="182.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Public CLB</text>
-    <rect x="655.10" y="161.50" width="123.83" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="717.01" y="182.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">VPN Endpoint</text>
-    <rect x="62.00" y="310.00" width="111.10" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="117.55" y="331.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Private CLB</text>
-    <rect x="400.82" y="310.00" width="111.01" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="456.33" y="331.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Middleware</text>
-    <rect x="240.60" y="310.00" width="92.72" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="286.96" y="331.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Platform</text>
-    <rect x="579.34" y="310.00" width="109.20" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="633.93" y="331.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Application</text>
-    <rect x="756.03" y="310.00" width="100.90" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="806.48" y="331.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Algorithm</text>
-    <rect x="924.44" y="310.00" width="117.05" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="982.96" y="331.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">MultiDim DB</text>
-    <path d="M1108.99,308.00 L1108.99,354.00 A51.87,5.00 0 0 0 1212.73,354.00 L1212.73,308.00 A51.87,5.00 0 0 0 1108.99,308.00 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <ellipse cx="1160.86" cy="308.00" rx="51.87" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="1160.86" y="335.42" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">TDSQL DB</text>
+    <rect x="505.33" y="163.50" width="104.77" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="557.72" y="184.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Public CLB</text>
+    <rect x="655.10" y="163.50" width="123.83" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="717.01" y="184.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">VPN Endpoint</text>
+    <rect x="62.00" y="314.00" width="111.10" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="117.55" y="335.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Private CLB</text>
+    <rect x="400.82" y="314.00" width="111.01" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="456.33" y="335.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Middleware</text>
+    <rect x="240.60" y="314.00" width="92.72" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="286.96" y="335.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Platform</text>
+    <rect x="579.34" y="314.00" width="109.20" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="633.93" y="335.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Application</text>
+    <rect x="756.03" y="314.00" width="100.90" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="806.48" y="335.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Algorithm</text>
+    <rect x="924.44" y="314.00" width="117.05" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="982.96" y="335.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">MultiDim DB</text>
+    <path d="M1108.99,312.00 L1108.99,358.00 A51.87,5.00 0 0 0 1212.73,358.00 L1212.73,312.00 A51.87,5.00 0 0 0 1108.99,312.00 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <ellipse cx="1160.86" cy="312.00" rx="51.87" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="1160.86" y="339.42" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">TDSQL DB</text>
   </g>
 </svg>

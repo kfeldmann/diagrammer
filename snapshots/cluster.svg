@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="571.82" height="679.30" viewBox="0 0 571.82 679.30">
+<svg xmlns="http://www.w3.org/2000/svg" width="590.58" height="639.30" viewBox="0 0 590.58 639.30">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -23,72 +23,72 @@
     </marker>
   </defs>
   <g fill="none" stroke="#88BDA4" stroke-width="1" stroke-linejoin="round">
-    <rect x="20.00" y="129.50" width="531.82" height="529.80" rx="8" ry="8" fill="none" stroke="none" stroke-width="1"/>
-    <rect x="41.00" y="137.50" width="195.81" height="513.80" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
-    <rect x="63.21" y="169.50" width="151.39" height="110.80" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>
-    <rect x="62.00" y="347.80" width="153.81" height="108.00" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>
-    <rect x="63.12" y="523.30" width="151.56" height="108.00" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>
-    <rect x="304.31" y="202.70" width="226.52" height="383.40" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
-    <rect x="325.31" y="222.70" width="184.52" height="355.40" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
-    <rect x="346.31" y="242.70" width="133.69" height="327.40" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>
+    <rect x="20.00" y="129.50" width="550.58" height="489.80" rx="8" ry="8" fill="none" stroke="none" stroke-width="1"/>
+    <rect x="41.00" y="137.50" width="214.56" height="473.80" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
+    <rect x="72.58" y="171.50" width="151.39" height="100.80" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>
+    <rect x="71.38" y="339.80" width="153.81" height="98.00" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>
+    <rect x="62.00" y="505.30" width="172.56" height="98.00" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>
+    <rect x="323.06" y="173.70" width="226.52" height="401.40" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
+    <rect x="344.06" y="207.70" width="184.52" height="359.40" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1"/>
+    <rect x="365.06" y="241.70" width="133.69" height="317.40" rx="8" ry="8" fill="#f2f8f4" stroke="#88BDA4" stroke-width="1" stroke-dasharray="6 4"/>
   </g>
   <g fill="#3a3a3a" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00">
     <text x="51.00" y="141.50" text-anchor="start" dominant-baseline="hanging">Application</text>
-    <text x="73.21" y="173.50" text-anchor="start" dominant-baseline="hanging">LB Security Group</text>
-    <text x="72.00" y="351.80" text-anchor="start" dominant-baseline="hanging">DB Security Group</text>
-    <text x="73.12" y="527.30" text-anchor="start" dominant-baseline="hanging">Cache Security Group</text>
-    <text x="314.31" y="206.70" text-anchor="start" dominant-baseline="hanging">Shared Services</text>
-    <text x="335.31" y="226.70" text-anchor="start" dominant-baseline="hanging">Kubernetes Node Group</text>
-    <text x="356.31" y="246.70" text-anchor="start" dominant-baseline="hanging">Node Group<tspan x="356.31" y="261.10">Security Group</tspan></text>
+    <text x="82.58" y="175.50" text-anchor="start" dominant-baseline="hanging">LB Security Group</text>
+    <text x="81.38" y="343.80" text-anchor="start" dominant-baseline="hanging">DB Security Group</text>
+    <text x="72.00" y="509.30" text-anchor="start" dominant-baseline="hanging">Cache Security Group</text>
+    <text x="333.06" y="177.70" text-anchor="start" dominant-baseline="hanging">Shared Services</text>
+    <text x="354.06" y="211.70" text-anchor="start" dominant-baseline="hanging">Kubernetes Node Group</text>
+    <text x="375.06" y="245.70" text-anchor="start" dominant-baseline="hanging">Node Group<tspan x="375.06" y="260.10">Security Group</tspan></text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="285.91,62.00 285.91,129.50 285.91,208.50 236.81,208.50 214.60,208.50 183.12,208.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="179.12,230.30 214.60,230.30 236.81,230.30 297.31,230.30 297.31,296.10 304.31,296.10 325.31,296.10 346.31,296.10 363.31,296.10" stroke="#b00" stroke-width="1.5" marker-end="url(#arrow-b00)"/>
-    <polyline points="179.12,241.80 214.60,241.80 236.81,241.80 269.56,241.80 269.56,405.60 304.31,405.60 325.31,405.60 346.31,405.60 363.31,405.60" stroke="#b00" stroke-width="1.5" marker-end="url(#arrow-b00)"/>
-    <polyline points="179.12,253.30 214.60,253.30 236.81,253.30 228.06,253.30 228.06,515.10 236.81,515.10 304.31,515.10 325.31,515.10 346.31,515.10 363.31,515.10" stroke="#b00" stroke-width="1.5" marker-end="url(#arrow-b00)"/>
-    <polyline points="367.31,312.60 346.31,312.60 325.31,312.60 304.31,312.60 243.81,312.60 243.81,386.80 236.81,386.80 215.81,386.80 186.39,386.80" stroke="#00b" stroke-width="1.5" marker-end="url(#arrow-00b)"/>
-    <polyline points="367.31,417.10 346.31,417.10 325.31,417.10 304.31,417.10 266.01,417.10 266.01,417.30 236.81,417.30 215.81,417.30 186.39,417.30" stroke="#00b" stroke-width="1.5" marker-end="url(#arrow-00b)"/>
-    <polyline points="367.31,526.60 346.31,526.60 325.31,526.60 304.31,526.60 243.21,526.60 243.21,428.80 236.81,428.80 215.81,428.80 186.39,428.80" stroke="#00b" stroke-width="1.5" marker-end="url(#arrow-00b)"/>
-    <polyline points="367.31,324.10 346.31,324.10 325.31,324.10 304.31,324.10 254.91,324.10 254.91,562.30 236.81,562.30 214.68,562.30 167.53,562.30" stroke="#0b0" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-0b0)"/>
-    <polyline points="367.31,433.60 346.31,433.60 325.31,433.60 304.31,433.60 277.11,433.60 277.11,572.30 236.81,572.30 214.68,572.30 167.53,572.30" stroke="#0b0" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-0b0)"/>
-    <polyline points="367.31,543.10 346.31,543.10 325.31,543.10 304.31,543.10 299.31,543.10 299.31,582.30 236.81,582.30 214.68,582.30 167.53,582.30" stroke="#0b0" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-0b0)"/>
-    <polyline points="409.74,331.10 409.74,394.60" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
-    <polyline points="409.74,440.60 409.74,504.10" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
-    <polyline points="419.74,508.10 419.74,444.60" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
-    <polyline points="419.74,398.60 419.74,335.10" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
+    <polyline points="295.29,62.00 295.29,129.50 295.29,212.50 255.56,212.50 223.98,212.50 192.49,212.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="188.49,234.30 223.98,234.30 255.56,234.30 323.06,234.30 344.06,234.30 507.50,234.30 507.50,282.50 498.75,282.50 373.81,282.50 373.81,297.10 382.06,297.10" stroke="#b00" stroke-width="1.5" marker-end="url(#arrow-b00)"/>
+    <polyline points="188.49,245.80 223.98,245.80 255.56,245.80 323.06,245.80 331.81,245.80 331.81,203.70 537.33,203.70 537.33,340.10 528.58,340.10 498.75,340.10 373.81,340.10 373.81,406.60 382.06,406.60" stroke="#b00" stroke-width="1.5" marker-end="url(#arrow-b00)"/>
+    <polyline points="188.49,257.30 223.98,257.30 255.56,257.30 323.06,257.30 344.06,257.30 352.81,257.30 352.81,516.10 365.06,516.10 382.06,516.10" stroke="#b00" stroke-width="1.5" marker-end="url(#arrow-b00)"/>
+    <polyline points="386.06,313.60 365.06,313.60 344.06,313.60 323.06,313.60 262.56,313.60 262.56,380.80 255.56,380.80 225.18,380.80 195.76,380.80" stroke="#00b" stroke-width="1.5" marker-end="url(#arrow-00b)"/>
+    <polyline points="386.06,418.10 365.06,418.10 344.06,418.10 323.06,418.10 274.12,418.10 274.12,411.30 255.56,411.30 225.18,411.30 195.76,411.30" stroke="#00b" stroke-width="1.5" marker-end="url(#arrow-00b)"/>
+    <polyline points="386.06,527.60 365.06,527.60 344.06,527.60 323.06,527.60 264.31,527.60 264.31,422.80 255.56,422.80 225.18,422.80 195.76,422.80" stroke="#00b" stroke-width="1.5" marker-end="url(#arrow-00b)"/>
+    <polyline points="386.06,325.10 365.06,325.10 344.06,325.10 323.06,325.10 286.26,325.10 286.26,546.30 255.56,546.30 234.56,546.30 166.40,546.30" stroke="#0b0" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-0b0)"/>
+    <polyline points="386.06,434.60 365.06,434.60 344.06,434.60 323.06,434.60 255.56,434.60 252.58,434.60 252.58,556.30 234.56,556.30 166.40,556.30" stroke="#0b0" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-0b0)"/>
+    <polyline points="386.06,544.10 365.06,544.10 344.06,544.10 323.06,544.10 314.31,544.10 314.31,566.30 255.56,566.30 234.56,566.30 166.40,566.30" stroke="#0b0" stroke-width="1.5" stroke-dasharray="6 4" marker-end="url(#arrow-0b0)"/>
+    <polyline points="428.49,332.10 428.49,395.60" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
+    <polyline points="428.49,441.60 428.49,505.10" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
+    <polyline points="438.49,509.10 438.49,445.60" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
+    <polyline points="438.49,399.60 438.49,336.10" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
   </g>
   <g fill="#fff" stroke="none">
-    <rect x="281.19" y="254.20" width="32.23" height="18.00"/>
-    <rect x="180.74" y="232.80" width="32.23" height="18.00"/>
-    <rect x="216.32" y="244.30" width="32.23" height="18.00"/>
-    <rect x="319.69" y="303.60" width="32.23" height="18.00"/>
-    <rect x="269.04" y="408.10" width="32.23" height="18.00"/>
-    <rect x="319.69" y="517.60" width="32.23" height="18.00"/>
+    <rect x="273.19" y="225.30" width="32.23" height="18.00"/>
+    <rect x="521.21" y="262.90" width="32.23" height="18.00"/>
+    <rect x="336.69" y="377.70" width="32.23" height="18.00"/>
+    <rect x="246.44" y="338.20" width="32.23" height="18.00"/>
+    <rect x="224.26" y="402.30" width="32.23" height="18.00"/>
+    <rect x="338.44" y="518.60" width="32.23" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
-    <text x="297.31" y="263.20">8080</text>
-    <text x="196.86" y="241.80">8080</text>
-    <text x="232.43" y="253.30">8080</text>
-    <text x="335.81" y="312.60">3306</text>
-    <text x="285.16" y="417.10">3306</text>
-    <text x="335.81" y="526.60">3306</text>
+    <text x="289.31" y="234.30">8080</text>
+    <text x="537.33" y="271.90">8080</text>
+    <text x="352.81" y="386.70">8080</text>
+    <text x="262.56" y="347.20">3306</text>
+    <text x="240.37" y="411.30">3306</text>
+    <text x="354.56" y="527.60">3306</text>
   </g>
   <g>
-    <rect x="84.21" y="201.50" width="94.91" height="58.80" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="131.66" y="222.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Load<tspan x="131.66" y="239.30">Balancer</tspan></text>
-    <path d="M83.00,384.80 L83.00,430.80 A49.69,5.00 0 0 0 182.39,430.80 L182.39,384.80 A49.69,5.00 0 0 0 83.00,384.80 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <ellipse cx="132.69" cy="384.80" rx="49.69" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="132.69" y="412.22" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Database</text>
-    <path d="M84.12,560.30 L84.12,606.30 A39.70,5.00 0 0 0 163.53,606.30 L163.53,560.30 A39.70,5.00 0 0 0 84.12,560.30 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <ellipse cx="123.82" cy="560.30" rx="39.70" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="123.82" y="587.72" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Cache</text>
-    <rect x="367.31" y="289.10" width="84.86" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="409.74" y="310.10" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Node 1</text>
-    <rect x="367.31" y="398.60" width="84.86" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="409.74" y="419.60" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Node 2</text>
-    <rect x="367.31" y="508.10" width="84.86" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="409.74" y="529.10" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Node 3</text>
-    <rect x="251.21" y="20.00" width="69.41" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="285.91" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">User</text>
+    <rect x="93.58" y="205.50" width="94.91" height="58.80" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="141.04" y="226.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Load<tspan x="141.04" y="243.30">Balancer</tspan></text>
+    <path d="M92.38,378.80 L92.38,424.80 A49.69,5.00 0 0 0 191.76,424.80 L191.76,378.80 A49.69,5.00 0 0 0 92.38,378.80 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <ellipse cx="142.07" cy="378.80" rx="49.69" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="142.07" y="406.22" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Database</text>
+    <path d="M83.00,544.30 L83.00,590.30 A39.70,5.00 0 0 0 162.40,590.30 L162.40,544.30 A39.70,5.00 0 0 0 83.00,544.30 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <ellipse cx="122.70" cy="544.30" rx="39.70" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="122.70" y="571.72" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Cache</text>
+    <rect x="386.06" y="290.10" width="84.86" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="428.49" y="311.10" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Node 1</text>
+    <rect x="386.06" y="399.60" width="84.86" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="428.49" y="420.60" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Node 2</text>
+    <rect x="386.06" y="509.10" width="84.86" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="428.49" y="530.10" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Node 3</text>
+    <rect x="260.58" y="20.00" width="69.41" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="295.29" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">User</text>
   </g>
 </svg>

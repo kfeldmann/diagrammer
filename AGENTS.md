@@ -30,8 +30,8 @@ source string
   → resolve.rs      validated Diagram (dedup nodes, strict attrs, group
                     membership + containment tree, per-group direction)
   → layout.rs       Layout (Sugiyama flat engine + compound recursion +
-                    cross-boundary frame routing + M9 edge separation &
-                    obstacle-aware LCA routing + M13 label placement;
+                    whole-path maze routing for every edge (M20.3) + M9
+                    edge separation & lane assignment + M13 label placement;
                     forced `from=`/`to=` sides bind the endpoint node only)
   → render/svg.rs   self-contained SVG string
   → main.rs         CLI: `diagrammer <in.dgmr> [-o <out.svg>]`
@@ -55,20 +55,23 @@ src/
   resolve.rs     raw → validated Diagram (dedup, attrs, group membership)
   layout.rs      ★ biggest file: flat Sugiyama engine + component packing
                  (M15: edge-less items follow the scope's direction) +
-                 compound (per-group direction) + cross-boundary edge routing
-                 + M9 edge separation & obstacle-aware LCA routing +
+                 compound (per-group direction) + M20 whole-path maze routing:
+                 one A* from source node port to target node port over one
+                 obstacle model (node interiors, ancestor-frame bands, solid
+                 unrelated frames, solid group titles) for every unforced
+                 edge — direct and cross-boundary alike (M20.3 deleted the
+                 rep model: rep ports, frame-crossing fan, within-frame
+                 stubs, title detours, around-target wrapper, M14
+                 coupled/decoupled duality) + M9 edge separation & lane
+                 assignment (the search honors them as row preferences) +
                  sealed-port fallback (a lone side's port slides when its
                  escape pocket is sealed) + M13 label placement & label-aware
-                 fan/lane spacing + M14 forced sides decoupled from frame
-                 crossings + M16 global routing pass (a simultaneous pass
-                 against the shared obstacle world — no peer segments — then
-                 a bounded rip-up-and-repair loop with soft peer occupancy
-                 and reserved port pockets) + M17 union-merge lane grouping
-                 with content-keyed (endpoint-id) sort tie-breaks, so phase-1
-                 routing is invariant under edge permutation + M20.1/M20.2
-                 whole-path maze routing: per-edge solid/ancestor frame
-                 classifier, and unforced direct edges routed by one A*
-                 whole-path search against the unified obstacle model
+                 fan/lane spacing + M16 global routing pass (a simultaneous
+                 pass against the shared obstacle world — no peer segments —
+                 then a bounded rip-up-and-repair loop with soft peer
+                 occupancy and reserved port pockets) + M17 union-merge lane
+                 grouping with content-keyed (endpoint-id) sort tie-breaks,
+                 so phase-1 routing is invariant under edge permutation
                  → Layout
   text.rs        label measurement against the baked metrics table
   metrics_table.rs  GENERATED baked DejaVu metrics — never hand-edit;
@@ -142,19 +145,33 @@ as the host UID:GID. See `build/README.md`.
   order leaking into output, system fonts). Edge-label placement (M13) is a
   fixed-order greedy pass plus one refinement pass over candidate anchors —
   keep it that way (no randomness, no iteration-order dependence).
-- **The whole-path search is the direct-edge router (M20.2).** For an
-  *unforced* direct edge, `route_edge` pushes the `whole_path_route` result
-  **first**, so the A* route is what is drawn and the M11 ladder's candidates
-  are only its bounded fallback. Two things keep that from silently
-  regressing: (a) the caller must seed `Obstacles::jog_rows` with the flat
-  engine's own jog rows and set `Obstacles::port_graph`, or the search cannot
-  re-derive the ladder's shapes (a Z's length is jog-row-invariant, so
-  without them the shape is decided by tie-break); (b) the search is scoped to
-  **unforced** edges only — a forced `from=`/`to=` side keeps M11/M14
-  semantics (port on the requested side, `SIDE_ESCAPE` outward) which the
-  search's free-choice port model cannot honor. Cross-boundary edges still go
-  through the rep model until M20.3; don't half-repoint one regime without the
-  other.
+- **The whole-path search is the router (M20.3).** Every *unforced*
+  non-self-loop edge — direct (M20.2) and cross-boundary (M20.3) alike — is
+  routed by one `whole_path_route` A* search from source node port to target
+  node port over one obstacle model, and `route_edge` pushes that result
+  **first**, so the A* route is what is drawn. Things that keep this from
+  silently regressing:
+  (a) the caller must seed `Obstacles::jog_rows` (the flat engine's own jog
+  rows) and set `Obstacles::port_graph`, or the search cannot re-derive the
+  flat engine's shapes (a Z's length is jog-row-invariant, so without them
+  the shape is decided by tie-break); for a cross-boundary edge the
+  mid-stub/rep-port gate rows and `Obstacles::lane_row` (the M9 lane
+  pre-pass's assigned row) join them.
+  (b) the obstacle model is the M20 one — `edge_world` builds it for *every*
+  edge: node interiors, the edge's ancestor-frame bands (crossable, never
+  rideable), its unrelated frames fully solid, every group title's text rect
+  solid. Don't reintroduce per-edge-kind world variation.
+  (c) the search is scoped to **unforced** edges only — a forced
+  `from=`/`to=` side keeps M11 semantics (port on the requested side,
+  `SIDE_ESCAPE` outward) which the search's free-choice port model cannot
+  honor. A forced *cross-boundary* edge routes through the
+  escape-and-ladder fallback (`forced_cross_boundary_path`); a forced
+  *direct* edge through the M11 ladder. M20.4 re-grounds port selection on
+  search outputs.
+  The rep model (rep ports, frame-crossing fan, within-frame stubs, title
+  detours, around-target wrapper, M14 coupled/decoupled duality) is
+  **deleted** — don't resurrect it; the containment tree's only routing role
+  is the ancestor/solid classification (`FrameClass`).
 - **Measurement is baked and verified.** `src/metrics_table.rs` is *generated*
   — never hand-edit it; regenerate with `cargo run -p gen-metrics-table`
   (and commit the result) when the bundled font changes. The
@@ -183,40 +200,26 @@ breaks geometry):
   this radius.
 - `layout::FRAME_TITLE_X = 10.0`, `layout::FRAME_TITLE_TOP = 4.0`, and
   `layout::FRAME_TITLE_FONT_SIZE = 12.0` — the inset, top offset, and font
-  size of a group's title text. Layout reads these to detect when a
-  cross-boundary within-frame stub would cross the title text
-  (`title_detour_clear_x`) so it can route around it, and to keep label
-  knockouts off the title (`title_text_rect`, M13); they must match
-  `render::FRAME_TITLE_X` (10.0), `render::FRAME_TITLE_Y` (4.0), and
-  `render::FRAME_TITLE_SIZE` (12.0), else the title-detour would misjudge the
-  title's extent and labels would clear the wrong box.
+  size of a group's title text. Layout reads these to build the title's
+  **routing obstacle** (`title_obstacle_rect`, M20.3) — the solid rect the
+  whole-path search keeps clear, so it routes around a title instead of
+  through it — and to keep label knockouts off the title (`title_text_rect`,
+  M13). They must match `render::FRAME_TITLE_X` (10.0),
+  `render::FRAME_TITLE_Y` (4.0), and `render::FRAME_TITLE_SIZE` (12.0), else
+  the search would clear the wrong box and a route could cross the drawn
+  title.
+- `layout::TITLE_BAND_PAD = 14.0` — the strip kept below a titled frame's
+  title text (added to the frame's top inset). It is what makes a within-frame
+  corridor under the title exist, so the whole-path search can pass under a
+  title instead of around the frame. Sized above `ROUTE_PAD` plus a track gap.
 - `layout::MIN_TERMINAL_STUB = 12.0` and
   `layout::STUB_SHORTFALL_COST = 25.0` — the whole-path search's port-stub
   preference (M20.2). A Z's total length is jog-row-invariant, so every track
   row ties on length and bends; without a stub term the search jogs one track
-  gap (8 px) off the target, which hides under the arrowhead. `MIN_TERMINAL_STUB`
-  must exceed the arrowhead's back-extent (`render`'s `markerHeight`, 10) for
-  the same reason [`STUB_JOG_CLEARANCE`] does — keep the two in step.
-- `layout::STUB_JOG_CLEARANCE = 12.0` — how far a title-detour within-frame
-  stub jogs from a node port (it sits in the grown `CROSS_FRAME_PAD` band just
-  below the title). Detours apply per chain frame — one jog per titled frame
-  the stub would cross. It must exceed `render::ARROW_BACKOFF`
-  (4.0), else the stub's final segment is shorter than the line-end
-  shortening and the arrowhead tip pokes into the node; and it must exceed
-  the arrowhead's back-extent (`render`'s `markerHeight`, 10.0 — the marker
-  base sits `markerHeight` short of the tip), else the horizontal approach
-  line cuts into the arrowhead's side. With `CROSS_FRAME_PAD` growing the
-  frame it also clears the title text above the node. (One-directional:
-  layout does not read the render constants, it just promises to stay above
-  them.)
-- `layout::CROSS_FRAME_PAD = 12.0` — extra top + bottom padding added to a
-  group frame that hosts a cross-boundary within-frame stub's jog: a frame
-  with a cross-boundary edge to an immediate child, and — so a nested title
-  detour has its band — any *titled* frame in a cross-boundary chain under a
-  top-down LCA. The padding gives the stub room to jog (clear of the title
-  above the node and of the node's arrowhead below the jog). One group-title
-  font height each side; keep in sync with `render::FRAME_TITLE_SIZE` (12.0).
-  A group with no such edges keeps the default frame geometry.
+  gap (8 px) off the target, which hides under the arrowhead. Both terminal
+  legs (source and target) pay it, so a cross-run cannot jam against a port.
+  `MIN_TERMINAL_STUB` must exceed the arrowhead's back-extent (`render`'s
+  `markerHeight`, 10) — keep the two in step.
 
 ## Editor tooling
 

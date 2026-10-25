@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="251.16" height="243.50" viewBox="0 0 251.16 243.50">
+<svg xmlns="http://www.w3.org/2000/svg" width="251.16" height="233.50" viewBox="0 0 251.16 233.50">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -8,29 +8,29 @@
     </marker>
   </defs>
   <g fill="none" stroke="#88BDA4" stroke-width="1" stroke-linejoin="round">
-    <rect x="20.00" y="129.50" width="211.16" height="94.00" rx="8" ry="8" fill="#cfe" stroke="#0a7" stroke-width="1" stroke-dasharray="6 4"/>
+    <rect x="20.00" y="129.50" width="211.16" height="84.00" rx="8" ry="8" fill="#cfe" stroke="#0a7" stroke-width="1" stroke-dasharray="6 4"/>
   </g>
   <g fill="#3a3a3a" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00">
     <text x="30.00" y="133.50" fill="#005" text-anchor="start" dominant-baseline="hanging">Group</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="77.96,62.00 77.96,69.00 82.52,69.00 82.52,129.50 82.52,149.50 66.20,149.50 66.20,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="173.20,62.00 173.20,122.50 184.53,122.50 184.53,129.50 184.53,157.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="77.96,62.00 77.96,129.50 77.96,155.50 66.20,155.50 66.20,159.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="173.20,62.00 173.20,122.50 184.53,122.50 184.53,129.50 184.53,159.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g fill="#fff" stroke="none">
-    <rect x="67.69" y="90.25" width="29.67" height="18.00"/>
+    <rect x="63.12" y="86.75" width="29.67" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
-    <text x="82.52" y="99.25" fill="#0a7">sync</text>
+    <text x="77.96" y="95.75" fill="#0a7">sync</text>
   </g>
   <g>
     <rect x="52.85" y="20.00" width="50.23" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="77.96" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#0055ff" text-anchor="middle" dominant-baseline="central">A</text>
     <rect x="148.07" y="20.00" width="50.25" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
     <text x="173.20" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">B</text>
-    <rect x="41.00" y="161.50" width="50.40" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="66.20" y="182.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">C</text>
-    <rect x="158.90" y="161.50" width="51.26" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="184.53" y="182.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#a00" text-anchor="middle" dominant-baseline="central">D</text>
+    <rect x="41.00" y="163.50" width="50.40" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="66.20" y="184.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">C</text>
+    <rect x="158.90" y="163.50" width="51.26" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="184.53" y="184.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#a00" text-anchor="middle" dominant-baseline="central">D</text>
   </g>
 </svg>

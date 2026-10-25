@@ -62,16 +62,21 @@ src/
                  edge — direct and cross-boundary alike (M20.3 deleted the
                  rep model: rep ports, frame-crossing fan, within-frame
                  stubs, title detours, around-target wrapper, M14
-                 coupled/decoupled duality) + M9 edge separation & lane
-                 assignment (the search honors them as row preferences) +
-                 sealed-port fallback (a lone side's port slides when its
-                 escape pocket is sealed) + M13 label placement & label-aware
-                 fan/lane spacing + M16 global routing pass (a simultaneous
-                 pass against the shared obstacle world — no peer segments —
-                 then a bounded rip-up-and-repair loop with soft peer
-                 occupancy and reserved port pockets) + M17 union-merge lane
-                 grouping with content-keyed (endpoint-id) sort tie-breaks,
-                 so phase-1 routing is invariant under edge permutation
+                 coupled/decoupled duality) + M9/M20.4 edge separation
+                 pre-passes — port fan, lane assignment, and the
+                 frame-crossing fan (`separate_frame_crossings`: edges into
+                 one ancestor frame side get distinct crossing columns; the
+                 search honors all three as row preferences) + sealed-port
+                 fallback (a lone side's port slides when its escape pocket
+                 is sealed) + M13 label placement & label-aware fan/lane
+                 spacing + M16 global routing pass (a simultaneous pass
+                 against the shared obstacle world — no peer segments — then
+                 a bounded rip-up-and-repair loop with soft peer occupancy
+                 and reserved port pockets, both derived from each edge's
+                 current polyline so they needed no M20.4 repointing) + M17
+                 union-merge lane grouping with content-keyed (endpoint-id)
+                 sort tie-breaks, so phase-1 routing is invariant under edge
+                 permutation
                  → Layout
   text.rs        label measurement against the baked metrics table
   metrics_table.rs  GENERATED baked DejaVu metrics — never hand-edit;
@@ -166,12 +171,43 @@ as the host UID:GID. See `build/README.md`.
   `SIDE_ESCAPE` outward) which the search's free-choice port model cannot
   honor. A forced *cross-boundary* edge routes through the
   escape-and-ladder fallback (`forced_cross_boundary_path`); a forced
-  *direct* edge through the M11 ladder. M20.4 re-grounds port selection on
-  search outputs.
+  *direct* edge through the M11 ladder. **Settled at M20.4:** grounding
+  forced sides on the search (the plan's "the forced port is simply where
+  the search begins") was implemented and measured — it is a regression
+  (shorter but wrong shapes: the outward `SIDE_ESCAPE` collapses to an
+  arrowhead-length stub), so don't re-attempt it without adding a cost term
+  that encodes the escape.
   The rep model (rep ports, frame-crossing fan, within-frame stubs, title
   detours, around-target wrapper, M14 coupled/decoupled duality) is
   **deleted** — don't resurrect it; the containment tree's only routing role
   is the ancestor/solid classification (`FrameClass`).
+- **The separation pre-passes are what make the search's output legible
+  (M9/M16, re-grounded at M20.4).** Three deterministic pre-passes run
+  before any search and feed it *preferences* (never bars): the port fan
+  (`separate_ports`), the lane assignment (`assign_lanes`), and the
+  **frame-crossing fan** (`separate_frame_crossings`). The last one is
+  load-bearing and easy to lose: *every* ancestor-band crossing is a
+  designated waypoint, so it costs the same as any other, and without an
+  allocated coordinate two edges entering one frame side both pick the
+  side's cheapest row — they collapse onto one column and the repair loop
+  pushes one all the way around the frame (678.6 px on `cluster`, 140.4 px
+  on the nested-fan fixture). The fan's pieces that must stay together:
+  (a) the *inside* endpoint's column is the desired coordinate (a lone edge
+  then keeps the descent it would draw anyway), and the side fanned is the
+  one the port-to-port segment meets first (`frame_entry_side`) — "the side
+  facing the source along the dominant axis" picks a vertical side for an
+  edge that plainly enters through the top of a wide frame, and perturbs
+  `finance`;
+  (b) the assigned coordinate is seeded as a track **on the side's own
+  axis** (`Obstacles::crossing_rows`) and preferred by
+  `CROSSING_DRIFT_COST`; seeding the wrong axis drops a track inside the
+  band's thickness and the crossing becomes unreachable;
+  (c) `seg_clear_border`'s designated-crossing exemption must accept a
+  segment end anywhere in the band (`in_band`), not only on the exact
+  centerline, or a seeded crossing splits into two hops and the second is
+  rejected.
+  `pocket_rects` and the M16 repair loop needed no repointing: both already
+  work off each edge's *current* polyline / the one dispatch point.
 - **Measurement is baked and verified.** `src/metrics_table.rs` is *generated*
   — never hand-edit it; regenerate with `cargo run -p gen-metrics-table`
   (and commit the result) when the bundled font changes. The
@@ -212,6 +248,10 @@ breaks geometry):
   title text (added to the frame's top inset). It is what makes a within-frame
   corridor under the title exist, so the whole-path search can pass under a
   title instead of around the frame. Sized above `ROUTE_PAD` plus a track gap.
+- `layout::FAN_SEP = 10.0` — the minimum gap between two fanned ports on a
+  node side *and* between two fanned crossings on an ancestor frame side
+  (M20.4). Both fans use it as the floor their label-aware separation
+  (`label_pair_sep`) starts from; shrinking it makes fans read as one line.
 - `layout::MIN_TERMINAL_STUB = 12.0` and
   `layout::STUB_SHORTFALL_COST = 25.0` — the whole-path search's port-stub
   preference (M20.2). A Z's total length is jog-row-invariant, so every track

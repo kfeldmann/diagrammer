@@ -9,10 +9,11 @@ how the remaining work depends on itself.
 **Current position:** M0–M7.5, M9–M15, M16, M17, M18, and M19 are
 complete (M12 was absorbed by M11.5), plus the post-M13 hardening pass
 below and the post-M17 routing hardening (escape-stub spikes) recorded
-under M17. **M20.1 (whole-path maze routing: foundation), M20.2 (whole-path
-search for direct internal edges), and M20.3 (whole-path search for
-cross-boundary edges; rep model deleted) are complete.**
-**M8 (CLI polish) and the M20.4–M20.6 routing migration remain open.**
+under M17. M20.1 (whole-path maze routing: foundation), M20.2 (whole-path
+search for direct internal edges), M20.3 (whole-path search for
+cross-boundary edges; rep model deleted), and M20.4 (frame-crossing fan;
+pockets and the repair loop re-grounded) are complete.
+**M8 (CLI polish) and the M20.5–M20.6 routing migration remain open.**
 
 ---
 
@@ -1710,9 +1711,10 @@ repoints it.
       side and escapes it by [`SIDE_ESCAPE`]; a contradicting request routes
       around). The search's free-choice port model cannot honor that, so the
       search is scoped to **unforced** direct edges; forced direct edges keep
-      the M11 ladder until M20.4 re-grounds port selection on search outputs.
-      (Unscoped, the search shortened `sides.dgmr`'s mandatory 24 px escapes
-      to 8 px.)
+      the M11 ladder. (Unscoped, the search shortened `sides.dgmr`'s mandatory
+      24 px escapes to 8 px. M20.4 later re-tested this as the plan's "the
+      forced port is simply where the search begins" and confirmed the
+      rejection — see M20.4's forced-side bullet.)
 - [x] **The obstacle model is the M20 one.** [`edge_world`] pushes the frame
       world's solid frames for direct edges (the plan's "unrelated frames may
       not be punctured" rule, by construction rather than cost tuning), and
@@ -1798,9 +1800,9 @@ only remaining routing role is the per-edge ancestor/solid classification.
 - [x] **Forced sides.** A forced `from=`/`to=` side still binds the node
       port with M11 semantics. A forced *cross-boundary* edge routes through
       the escape-and-ladder fallback ([`forced_cross_boundary_path`]), and a
-      forced *direct* edge keeps the M11 ladder (M20.2's scope); the search
-      is scoped to unforced edges until M20.4 re-grounds port selection on
-      search outputs. Pinned by
+      forced *direct* edge keeps the M11 ladder (M20.2's scope). The search
+      is scoped to unforced edges; M20.4 settled the question the plan left
+      open by measuring the alternative and rejecting it. Pinned by
       `forced_cross_boundary_ports_are_honored_by_the_search` (all four
       sides) and the M11 forced-side suite.
 - [x] **Deleted** (the milestone's headline): `cross_pieces_candidate`,
@@ -1860,10 +1862,104 @@ only remaining routing role is the per-edge ancestor/solid classification.
   adds 14 px of frame height) and the cross-boundary rows landing on the
   search's own choices instead of the ladder's hand-built ones.
 
-**Blocked by:** nothing. **Blocks:** M20.4 (which re-grounds the fan, pocket,
-and repair machinery on search outputs and re-points port selection).
+**Blocked by:** nothing. **Blocks:** M20.4 (done — the fan, pockets, and the
+repair loop are re-grounded there).
 
-### [ ] M20.4 — Frames bands, fans, pockets, repair loop re-grounded.
-(see ./plan-for-whole-path-maze-routing.md)
+### ✅ M20.4 — Frames bands, fans, pockets, repair loop re-grounded
+
+The plan's re-grounding milestone. Its headline is the **frame-crossing
+fan**: the M9 port-fan idea, applied to the *ancestor frame sides* the
+whole-path search crosses. Everything else the milestone asked for turned
+out to be either already true (the pockets, the repair loop) or a
+deliberate non-goal (grounding forced sides on the search).
+
+- [x] **The frame-crossing fan ([`separate_frame_crossings`]).** The
+      whole-path search chooses where each edge crosses its ancestor
+      frames' border bands, and *every* crossing is a designated waypoint
+      ([`seg_clear_border`] exempts a segment end on the band centerline)
+      — so two edges entering one frame side both take the side's cheapest
+      row and land on **one coordinate**. The repair loop then negotiates
+      them apart, and on a fan into one frame that means pushing one edge
+      all the way around it. The pre-pass allocates each shared frame
+      side's crossing coordinates up front (ordered by each edge's
+      *inside* endpoint's column, so a lone edge keeps the descent it would
+      draw anyway) and hands the search its own coordinate to prefer. It is
+      a preference, never a bar: a blocked crossing row loses to a clean
+      alternative.
+- [x] **Seeded as tracks, preferred as a cost.** The assigned coordinate
+      joins the search's track graph on the side's own axis
+      ([`Obstacles::crossing_rows`]: a Top/Bottom side's crossing is an `x`
+      track, a Left/Right side's a `y`) and pays [`CROSSING_DRIFT_COST`]
+      per pixel of drift at the bend that starts the run — the
+      [`Obstacles::lane_row`] pattern, so the charge is per *run start* and
+      does not scale with how many tracks lie along the run.
+- [x] **A band-thickness exemption for the graph.** Seeding a crossing
+      coordinate inside a band's 1.5 px thickness split one perpendicular
+      crossing into two hops, the second of which began *beside* the
+      centerline and so failed the designated-crossing exemption — which
+      made the search detour around the frame instead of entering at its
+      crossing. [`in_band`] extends the exemption to a segment end anywhere
+      in the band (perpendicular exit), which is what makes the seeded
+      coordinate reachable at all.
+- [x] **Only frames the span straddles are fanned.** A frame containing
+      *both* ports is crossed twice (in and out) and its crossings are the
+      search's business; a frame containing neither is not on the span. The
+      side fanned is the one the port-to-port segment *meets first*
+      ([`frame_entry_side`], geometric), not "the side facing the source
+      along the dominant axis" — a wide frame's centre is far from the
+      edge's own column, so a centre comparison picks a vertical side for an
+      edge that plainly enters through the top.
+- [x] **Pockets needed no repointing.** [`pocket_rects`] already derives
+      each edge's reserved approach corridors from that edge's *current*
+      polyline (the first and last terminal legs, truncated to
+      [`PORT_RIGHT_OF_WAY`]), so a whole-path search output is treated
+      exactly like any other route. Verified rather than changed.
+- [x] **The repair loop needed no repointing either.** It already reroutes
+      whole paths through the one dispatch point ([`route_edge`]) and scores
+      candidates with [`route_score`]. What M20.4 changed is that it now
+      usually has *nothing to do*: the pre-passes seat the shared resources
+      up front. Measured — the nested five-source fan fixture goes from
+      1597.7 px (with repair) to 1457.3 px (phase 1 = final) with the fan
+      live, i.e. the fan removes 140.4 px of repair detour.
+- [x] **Forced sides are deliberately *not* grounded on the search.** The
+      plan's sketch ("the forced port is simply where the search begins")
+      was implemented and measured, and it is a regression: the search's
+      cost model has no term for "leave the box along the requested side by
+      [`SIDE_ESCAPE`] before anything else", so grounding a forced direct
+      edge on it drew shorter but wrong shapes (a forced `from="top"` escape
+      collapsed to a stub barely longer than the arrowhead, and
+      `examples/sides.dgmr`'s forced excursions lost their deliberate
+      clearance — a −157 px "improvement" that wrapped a frame). M11's
+      escape-and-ladder already encodes exactly what the attribute asks
+      for, so forced direct edges keep it and forced cross-boundary edges
+      keep the escape-and-ladder fallback. Recorded in [`route_edge`]'s
+      scope note and the module docs.
+- [x] **Tests** (6 new): `frame_crossing_fan_seats_nested_frame_crossings`
+      (the five-source nested fan: every frame side's crossings
+      ≥ [`FAN_SEP`] apart *and* phase 1 = final, which fails with
+      "the repair loop added 140.4 px" if the pre-pass is removed),
+      `frame_crossing_fan_is_what_seats_the_columns` (the pre-pass driven
+      directly: three identical *wants* come back separated; a lone crossing
+      gets no entry), `frame_crossing_fan_is_per_side`,
+      `frame_crossing_fan_is_permutation_invariant` (M17 still holds — the
+      pre-pass sorts on a content key), `frame_crossing_fan_spreads_out_of_span_sources`,
+      and `dense_fan_into_one_frame_needs_no_repair` (the dense-stress
+      re-baseline: eight sources into eight targets through one frame, phase
+      1 already conflict-free). The M9/M16/M17/M20.1–M20.3 gates all stay
+      green unchanged.
+- **Deliverable:** suite green (220 tests + 7 ignored inspection helpers).
+      **One snapshot changed: `cluster`**, and deliberately: the three
+      `lb -> n*` edges into the nested "Node Group" frames had all collapsed
+      onto one crossing column, and the old snapshot shows the repair loop's
+      fix — two of the three swinging out to `x ≈ 507`/`537` and back, 678.6
+      px of route that the fan now avoids entirely (`4022.8` → `3383.6` px
+      of total edge length). The other eleven snapshots are byte-identical,
+      including `finance`, which the first draft of the fan had perturbed
+      (the "inside endpoint's column" and "first side met" rules are what
+      bring it back to exactly the committed geometry).
+
+**Blocked by:** nothing. **Blocks:** M20.5 (labels ride these polylines).
+
 ### [ ] M20.5 — Labels re-tuned (M13 still holds its contract).
+(see ./plan-for-whole-path-maze-routing.md)
 ### [ ] M20.6 — Deletion & doc pass.

@@ -65,12 +65,44 @@
 //! *preferences*), and M16's soft peer occupancy + bounded rip-up-and-repair
 //! loop (see [`route_edge`] / [`assemble`]).
 //!
+//! ### The separation pre-passes (M9/M16, re-grounded on search outputs at M20.4)
+//!
+//! Three deterministic pre-passes run before any search and hand the router
+//! *preferences*, never bars:
+//!
+//! 1. **Port fanning** ([`separate_ports`]) — edges sharing a node side get
+//!    distinct port coordinates, ordered by the other endpoint's position.
+//! 2. **Lane assignment** ([`assign_lanes`]) — parallel cross-boundary edges
+//!    through one gap get distinct jog rows.
+//! 3. **Frame-crossing fanning** ([`separate_frame_crossings`], new at M20.4)
+//!    — edges entering one *ancestor frame side* get distinct crossing
+//!    coordinates. Without it every edge into a frame side picks the side's
+//!    cheapest row (all crossings are designated waypoints, so they all cost
+//!    the same), the routes collapse onto one column, and the repair loop has
+//!    to negotiate them apart — which on a fan into one frame means pushing
+//!    one edge all the way around it. The fan is the frame-side analogue of
+//!    the port fan, fed into the search as [`Obstacles::crossing_rows`] (seeded
+//!    tracks plus a [`CROSSING_DRIFT_COST`] preference). It is measured: on
+//!    the `cluster` sample it removes 678.6 px of repair-loop detour.
+//!
+//! The M16 rip-up-and-repair loop needed no repointing at M20.4: it already
+//! reroutes whole paths through [`route_edge`] (the one dispatch point) and
+//! derives each edge's reserved port pocket from that edge's *current*
+//! polyline ([`pocket_rects`]), so a search output is treated exactly like
+//! any other route. What M20.4 changed is that the loop now usually has
+//! nothing to do — the pre-passes allocate the shared resources up front
+//! (pinned by `repair_loop_has_nothing_to_negotiate_on_the_cluster_sample`).
+//!
 //! A forced `from=`/`to=` side still binds the endpoint node's port with M11
-//! semantics (the port lands on the requested side and escapes outward); a
-//! forced cross-boundary edge is routed by the escape-and-ladder fallback
-//! rather than the search, whose free-choice port model cannot honor the
-//! request (M20.4 re-grounds port selection on search outputs). Self-loops
-//! keep their dedicated generators. The M5 headline guarantee is unchanged:
+//! semantics (the port lands on the requested side and escapes outward by
+//! [`SIDE_ESCAPE`]). M20.4 settled the routing question the plan left open:
+//! grounding forced sides on the search (the plan's "the forced port is
+//! simply where the search begins") was tried and rejected — the search's
+//! cost model has no term for the outward escape, so it drew shorter but
+//! wrong shapes — so a forced *direct* edge keeps the M11 escape-and-ladder
+//! and a forced *cross-boundary* edge keeps the escape-and-ladder fallback
+//! (the search starts at the forced ports but the ladder is what honors the
+//! request). Self-loops keep their dedicated generators. The M5 headline guarantee is unchanged:
 //! a group's internal arrangement never moves because an edge crosses its
 //! boundary.
 //!
@@ -572,6 +604,11 @@ struct EdgeCtx {
     from_cross: f32,
     to_cross: f32,
     lane: f32,
+    /// M20.4: the assigned crossing coordinates of this edge's ancestor frame
+    /// sides (see [`separate_frame_crossings`]) — `(frame, side, cross)`,
+    /// seeded into the whole-path search's tracks and preferred by
+    /// [`CROSSING_DRIFT_COST`].
+    crossing_rows: Vec<(usize, Side, f32)>,
     /// The per-edge frame world (M20.1): solid/ancestor classification and
     /// its band/solid obstacle fields, built once in [`assemble`]. `None`
     /// only in hand-built test contexts that construct a context directly
@@ -661,6 +698,7 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
         from_cross: 0.0,
         to_cross: 0.0,
         lane: 0.0,
+        crossing_rows: Vec::new(),
         frame_world: None,
     }
 }
@@ -903,6 +941,85 @@ fn assemble(
                 )
             });
         }
+    }
+
+    // ---- M20.4 pre-pass: frame-side crossing separation -------------------
+    // The whole-path search chooses where each edge crosses its ancestor
+    // frames' border bands, and every such crossing is a designated waypoint
+    // (free of the crossing penalty) — so two edges entering one frame side
+    // both take the side's cheapest row and land on one coordinate. The
+    // repair loop then has to negotiate them apart, which on a fan into one
+    // frame means pushing one edge all the way around it. Allocate each
+    // frame side's crossing coordinates up front (the [`separate_ports`]
+    // idea, on the frames the search crosses) and hand each edge its own
+    // coordinate to prefer.
+    let mut frame_crosses: Vec<FrameCross> = Vec::new();
+    for ctx in &ctxs {
+        if ctx.is_self_loop {
+            continue;
+        }
+        let fw = ctx.frame_world(&geom);
+        // One crossing per ancestor frame the edge's port-to-port span
+        // actually straddles. A frame that contains *both* ports is crossed
+        // twice (in and out) and its crossings are the search's business, not
+        // a fan's; a frame containing neither is not on the span at all.
+        for &g in &fw.class.ancestors {
+            let f = geom.frame(g);
+            if rect_contains_point(f, ctx.from_port) && rect_contains_point(f, ctx.to_port) {
+                continue;
+            }
+            let Some(side) = frame_entry_side(f, ctx.from_port, ctx.to_port) else {
+                continue;
+            };
+            // The crossing coordinate the edge would like: the *inside*
+            // endpoint's cross projected onto the side. That is the natural
+            // descent — an edge whose target sits under a frame's top border
+            // enters above the target — so a lone edge keeps the shape it
+            // would draw anyway and a fan only separates the ones that
+            // genuinely collide. When neither endpoint is inside the frame
+            // (a pass-by between two sibling frames) the nearer endpoint's
+            // cross is the closest thing to a natural column.
+            let from_in = rect_contains_point(f, ctx.from_port);
+            let to_in = rect_contains_point(f, ctx.to_port);
+            let want = if to_in {
+                cross_of(ctx.to_port, side)
+            } else if from_in {
+                cross_of(ctx.from_port, side)
+            } else if dist_to_rect(ctx.to_port, f) <= dist_to_rect(ctx.from_port, f) {
+                cross_of(ctx.to_port, side)
+            } else {
+                cross_of(ctx.from_port, side)
+            };
+            // Kept *unclamped*: the fan sorts by the desired coordinate and
+            // clamps when it assigns, so several sources fanning into one
+            // frame from outside its side span keep their relative order
+            // instead of collapsing onto the span's near corner (which is
+            // what happens if the want is clamped here).
+            frame_crosses.push(FrameCross {
+                edge: ctx.ei,
+                frame: g,
+                side,
+                want,
+                cover: side_label_cover(side, label_sizes[ctx.ei]),
+                from_id: ctx.from_id.clone(),
+                to_id: ctx.to_id.clone(),
+            });
+        }
+    }
+    let crossing_assign = separate_frame_crossings(&frame_crosses, &geom.frame_rect);
+    // Hand each edge the crossing coordinates assigned to it, grouped by the
+    // axis the crossing constrains (see [`Obstacles::row_drift_cost`]).
+    for ctx in ctxs.iter_mut() {
+        ctx.crossing_rows = crossing_assign
+            .iter()
+            .filter(|&(&(e, _, _), _)| e == ctx.ei)
+            .map(|(&(_, g, side), &c)| (g, side, c))
+            .collect();
+        // Deterministic order (the map's iteration order is not): sort by
+        // frame index, then side, then coordinate.
+        ctx.crossing_rows.sort_by(|a, b| {
+            (a.0, a.1 as u8, a.2.to_bits()).cmp(&(b.0, b.1 as u8, b.2.to_bits()))
+        });
     }
 
     // ---- Routing phase: the global routing pass (M16) ---------------------
@@ -1233,8 +1350,8 @@ fn assemble(
 const AROUND_MARGIN: f32 = 60.0;
 
 /// Routing cost of a perpendicular crossing of an ancestor frame's border
-/// band (M20.1, live for every edge since M20.3): the strong preference the cost
-/// model needs for crossing each ancestor frame as few times as possible.
+/// band (M20.1, live for every edge since M20.3): the strong preference the
+/// cost model needs for crossing each ancestor frame as few times as possible.
 /// A few hundred — far above [`BEND_PENALTY`] and a typical detour's length
 /// delta, so a whole-path search does not exit a frame through the top and
 /// re-enter through the left over a shorter span — and comparable in
@@ -1242,6 +1359,23 @@ const AROUND_MARGIN: f32 = 60.0;
 /// crossing of the edge's own ancestor frames is as bad as riding a
 /// peer's band.
 const FRAME_CROSS_PENALTY: f32 = 300.0;
+
+/// Routing cost of a *designated* crossing of an ancestor frame's border band
+/// (M20.4) — a crossing whose segment ends on the band's centerline (a
+/// recorded waypoint, which [`seg_clear_border`] exempts).
+///
+/// The M20.1 model made these free, which was right for *clearance* (a
+/// crossing waypoint must be reachable) but wrong for *cost*: an out-and-back
+/// detour (exit the frame through its top, walk around, re-enter through a
+/// side) then paid exactly as much as one straight descent, so a search that
+/// preferred a different column for any reason could leave and re-enter the
+/// frame at no penalty — and the frame-crossing fan the pre-pass allocates
+/// had no leverage. Charging a tenth of [`FRAME_CROSS_PENALTY`] here keeps the
+/// ordering the search needs: a designated crossing is far cheaper than a
+/// mid-band transversal (so the search still lands on crossing tracks), but
+/// crossing a frame twice now costs visibly more than once (so the search
+/// stays on its own assigned column instead of detouring out and back).
+const FRAME_RECROSS_COST: f32 = FRAME_CROSS_PENALTY / 10.0;
 
 /// Cost per pixel of a cross-run's offset from the nearest seeded jog row
 /// (M20.3). Tiny — a tie-break, not a routing preference: a Z's length is
@@ -1260,6 +1394,15 @@ const LANE_DRIFT_COST: f32 = 2.0;
 /// (M20.3): enough for a jog just past a port, not enough for a row that
 /// belongs to another gap.
 const LANE_ROW_SLACK: f32 = 24.0;
+/// Cost per pixel of a cross-run's offset from an *assigned frame crossing*
+/// (M20.4). The counterpart of [`LANE_DRIFT_COST`] for the ancestor-frame
+/// sides the search crosses: the pre-pass ([`separate_frame_crossings`])
+/// allocates each shared frame side a set of crossing coordinates, and the
+/// search must land on its own one wherever that row is routable — otherwise
+/// two edges into one frame side collapse onto one row and the repair loop
+/// has to push one of them all the way around the frame. A preference, not a
+/// bar: a blocked crossing row loses to a clean alternative.
+const CROSSING_DRIFT_COST: f32 = 40.0;
 
 /// The class of one group frame for one edge (M20.1), as
 /// [`FrameClass::of_frame`] reports it.
@@ -1430,6 +1573,7 @@ impl EdgeFrameWorld {
             })
             .sum()
     }
+
 }
 
 /// The widened region a whole-path search routes in (M20.1): the frame
@@ -1533,6 +1677,20 @@ fn track_route_in_region(
     for &t in obs.jog_rows.iter() {
         vts.push(t);
         hts.push(t);
+    }
+    // M20.4: the assigned frame crossings seed the track *along* the frame
+    // side they cross — a Top/Bottom side's crossing is an x coordinate (a
+    // vertical track through the band), a Left/Right side's is a y (a
+    // horizontal one). Seeding the wrong axis would drop a track a fraction
+    // of a pixel off the band's centerline, splitting a descent into a hop
+    // that starts *beside* the centerline and so fails the designated-crossing
+    // exemption ([`seg_clear_border`]) — which is exactly the trap that made
+    // the search detour around the frame instead of entering at its crossing.
+    for &(_, side, c) in obs.crossing_rows.iter() {
+        match side {
+            Side::Top | Side::Bottom => vts.push(c),
+            Side::Left | Side::Right => hts.push(c),
+        }
     }
     if let Some(l) = obs.lane_row {
         vts.push(l);
@@ -1666,12 +1824,18 @@ fn whole_path_candidate(
     // shape the ladder drew instead of picking a track arbitrarily.
     let mut wj = world.clone();
     wj.jog_axis = ctx.flow;
+    // M20.4: the frame-side crossing fan the pre-pass allocated for this edge
+    // ([`separate_frame_crossings`]). Seeded as tracks and preferred by
+    // [`CROSSING_DRIFT_COST`] so the search lands on its own crossing row.
+    wj.crossing_rows = ctx.crossing_rows.clone();
     // The M9 lane pre-pass's row is a *preference*, and only for a cross-run
-    // that actually lies between the edge's own ports: the lane was computed
-    // from the (now deleted) rep ports, so a stale row can sit past an
-    // endpoint and would otherwise pull the route into an out-and-back spike.
-    // Re-grounding the lane assignment on search outputs is M20.4's job; here
-    // the row is used only where it is geometrically meaningful.
+    // that actually lies between the edge's own ports: the lane is computed
+    // from the two *node* ports (M20.3), but a row can still sit past an
+    // endpoint — a stale row would pull the route into an out-and-back
+    // spike — so the search honors it only where it is geometrically
+    // meaningful. (M20.4 re-grounded the lane's *inputs* on the node ports
+    // and added the frame-crossing fan alongside it; see
+    // [`separate_frame_crossings`].)
     let (fa, fb) = (cross_flow(a, ctx.flow).1, cross_flow(b, ctx.flow).1);
     let (lo, hi) = (fa.min(fb) - LANE_ROW_SLACK, fa.max(fb) + LANE_ROW_SLACK);
     wj.lane_row = (!ctx.is_direct && (lo..=hi).contains(&ctx.lane)).then_some(ctx.lane);
@@ -1717,6 +1881,18 @@ fn whole_path_candidate(
         rows
     };
     let search = whole_path_route(a, b, &fw, &wj, esc, &nodes, canvas);
+    if std::env::var("DIAG_Q").is_ok() && ctx.from_id == "s2" {
+        let ideal = [(a.0, a.1), (a.0, 95.75), (160.92911, 95.75), (160.92911, 129.5), (160.92911, 155.5), (b.0, 155.5), (b.0, b.1)];
+        eprintln!("[q] ideal clear={} score={}", wj.clear(&ideal), route_score(&ideal, &wj));
+        eprintln!("[q] found clear={} score={} pts={:?}", wj.clear(&search), route_score(&search, &wj), search);
+        eprintln!("[q] jog={:?} lane={:?} cross={:?}", wj.jog_rows, wj.lane_row, wj.crossing_rows);
+        let region = around_region(&fw, &nodes, canvas);
+        eprintln!("[q] region={region:?}");
+        // reachability of the crossing corner
+        for &(x, y) in &[(160.92911f32, 95.75f32), (160.92911, 129.5f32), (160.92911, 155.5f32)] {
+            eprintln!("[q] ({x:.2},{y:.2}) clear-from-source? seg(150.93,95.75)->({x:.2},{y:.2})={}", wj.seg_clear((150.92911,95.75),(x,y)));
+        }
+    }
     if search.is_empty() || !world.clear(&search) {
         return None;
     }
@@ -1762,11 +1938,18 @@ fn route_edge(
     // clears the hard world; the ladder's candidates stay behind it as the
     // bounded fallback for a region where no route exists.
     //
-    // Scope: a *forced* direct edge keeps the M11 ladder as its router until
-    // M20.4 re-grounds port selection. A forced *cross-boundary* edge does
-    // search — the search simply starts/ends at the forced ports, which is
-    // the plan's "the forced port is where the search begins" model, and the
-    // escape bars keep the route from cutting back through either box.
+    // Scope (settled at M20.4): a forced *direct* edge keeps the M11 ladder as
+    // its router. The plan's sketch ("the forced port is simply where the
+    // search begins") was tried and rejected — the search's cost model has no
+    // term for "leave the box along the requested side by [`SIDE_ESCAPE`]
+    // before anything else", so grounding a forced direct edge on it drew
+    // shorter but *wrong* shapes (a forced `from="top"` escape became a stub
+    // barely longer than the arrowhead, and `examples/sides.dgmr`'s forced
+    // excursions lost their deliberate clearance). M11's escape-and-ladder
+    // already produces exactly the shape the attribute asks for, and it is
+    // the only router that encodes the request; a forced *cross-boundary*
+    // edge does search (the search simply starts/ends at the forced ports and
+    // the escape bars keep it from cutting back through either box).
     let search_first = !ctx.is_self_loop;
     let search_applies = !ctx.is_direct || (ctx.forced_from.is_none() && ctx.forced_to.is_none());
     if ctx.is_self_loop {
@@ -1839,9 +2022,11 @@ fn route_edge(
         // returns something that keeps the ports, so routing never fails even
         // when no whole-path route exists in the region (the bounded-ladder
         // convention). For a forced edge it is also the *only* router — a
-        // forced side binds the node port with M11 semantics, which the
-        // search's free-choice port model cannot honor until M20.4 re-grounds
-        // port selection on search outputs.
+        // forced side binds the node port with M11 semantics (port on the
+        // requested side, then an outward [`SIDE_ESCAPE`]), which the
+        // search's free-choice port model cannot honor (see [`route_edge`]'s
+        // scope note: grounding forced sides on the search was tried at M20.4
+        // and rejected).
         candidates.push(forced_cross_boundary_path(ctx, world));
     }
     // The whole-path search (M20.2 direct, M20.3 cross-boundary): pushed
@@ -1854,8 +2039,8 @@ fn route_edge(
     //
     // Scope: `search_applies` above — every unforced edge, plus a forced
     // cross-boundary edge (whose forced ports are where the search starts and
-    // ends). A forced *direct* edge keeps the M11 ladder until M20.4
-    // re-grounds port selection.
+    // ends). A forced *direct* edge keeps the M11 ladder (see the scope note
+    // at the top of this function).
     if search_first
         && search_applies
         && let Some(search) = whole_path_candidate(ctx, geom, world, canvas)
@@ -2867,6 +3052,15 @@ struct Obstacles {
     /// one gap apart — the search must land on it whenever the row is
     /// routable.
     lane_row: Option<f32>,
+    /// The *assigned crossing coordinates* of the ancestor frame sides this
+    /// edge traverses (M20.4): `(frame, side, cross)` triples from
+    /// [`separate_frame_crossings`]. Each one is seeded as a track and given
+    /// a [`CROSSING_DRIFT_COST`] preference, so the search lands its
+    /// perpendicular border crossing on the fan coordinate the pre-pass
+    /// allocated instead of on whichever row the heap reached first — the
+    /// fan [`separate_ports`] gives a shared *node* side, extended to the
+    /// frame sides the whole-path search crosses.
+    crossing_rows: Vec<(usize, Side, f32)>,
 }
 
 impl Obstacles {
@@ -2883,6 +3077,7 @@ impl Obstacles {
             jog_rows: Vec::new(),
             jog_axis: FlowAxis::Vertical,
             lane_row: None,
+            crossing_rows: Vec::new(),
         }
     }
 
@@ -2896,6 +3091,7 @@ impl Obstacles {
             && self.titles.is_empty()
             && !self.port_graph
             && self.jog_rows.is_empty()
+            && self.crossing_rows.is_empty()
     }
 
     fn push_node(&mut self, r: (f32, f32, f32, f32)) {
@@ -2940,6 +3136,24 @@ impl Obstacles {
             .sum()
     }
 
+    /// The M20.4 re-crossing cost of a polyline: [`FRAME_RECROSS_COST`] per
+    /// designated crossing of an ancestor band — every segment end that lies
+    /// on a band's centerline and is perpendicular to it (the crossing
+    /// waypoints [`record_border_crossings`] inserts, and the ports that sit
+    /// on a band). Counted per crossing *event*, so a route that leaves and
+    /// re-enters a frame pays twice while one straight descent pays once.
+    fn recross_cost(&self, pts: &[(f32, f32)]) -> f32 {
+        let mut n = 0usize;
+        for w in pts.windows(2) {
+            for &b in &self.cross_bands {
+                if designated_crossing(w[0], w[1], b) {
+                    n += 1;
+                }
+            }
+        }
+        n as f32 * FRAME_RECROSS_COST
+    }
+
     /// The preference for *starting* a cross-run on one of the seeded jog
     /// rows (M20.3): [`JOG_DRIFT_COST`] per pixel of distance from the
     /// nearest jog row, plus [`LANE_DRIFT_COST`] per pixel from the edge's
@@ -2959,6 +3173,7 @@ impl Obstacles {
         if self.jog_rows.is_empty() && self.lane_row.is_none() {
             return 0.0;
         }
+
         let cross_axis_dir = match self.jog_axis {
             FlowAxis::Vertical => dir == Dir::PosX.code() || dir == Dir::NegX.code(),
             FlowAxis::Horizontal => dir == Dir::PosY.code() || dir == Dir::NegY.code(),
@@ -2980,6 +3195,68 @@ impl Obstacles {
             cost += LANE_DRIFT_COST * (row - lane).abs();
         }
         cost
+    }
+
+    /// The preference for *starting* a flow-axis run on an assigned frame
+    /// crossing (M20.4): [`CROSSING_DRIFT_COST`] per pixel of distance from
+    /// the nearest crossing the separation pre-pass allocated to this edge
+    /// ([`Obstacles::crossing_rows`]).
+    ///
+    /// A crossing of a frame's top/bottom border is a *flow*-axis run (the
+    /// descent through the band), so its coordinate is an `x` for a
+    /// left/right frame side — hence the pairing below (a Left/Right side's
+    /// crossing constrains the cross-run's row; a Top/Bottom side's the
+    /// flow-run's). Charged once per run start, exactly like
+    /// [`Obstacles::row_drift_cost`], for the same reason: a run is many
+    /// track hops but one shape choice.
+    fn crossing_drift_cost(&self, dir: usize, p: (f32, f32)) -> f32 {
+        if self.crossing_rows.is_empty() {
+            return 0.0;
+        }
+        // A flow-axis run is the leg that travels *through* a Top/Bottom
+        // frame border (it crosses the band), so it carries that crossing; a
+        // cross-axis run is the leg that travels through a Left/Right border.
+        let flow_run = match self.jog_axis {
+            FlowAxis::Vertical => dir == Dir::PosY.code() || dir == Dir::NegY.code(),
+            FlowAxis::Horizontal => dir == Dir::PosX.code() || dir == Dir::NegX.code(),
+        };
+        let want_side = |side: Side| match self.jog_axis {
+            FlowAxis::Vertical => {
+                if flow_run {
+                    matches!(side, Side::Top | Side::Bottom)
+                } else {
+                    matches!(side, Side::Left | Side::Right)
+                }
+            }
+            FlowAxis::Horizontal => {
+                if flow_run {
+                    matches!(side, Side::Left | Side::Right)
+                } else {
+                    matches!(side, Side::Top | Side::Bottom)
+                }
+            }
+        };
+        // The coordinate the run travels *along* (its offset from the frame
+        // side): the cross coordinate of the point for a flow run, the flow
+        // coordinate for a cross run — i.e. always the coordinate the
+        // crossing coordinate is expressed in.
+        let coord = if flow_run {
+            cross_flow(p, self.jog_axis).0
+        } else {
+            cross_flow(p, self.jog_axis).1
+        };
+        let mut nearest = f32::INFINITY;
+        for &(_, side, c) in &self.crossing_rows {
+            if want_side(side) {
+                nearest = nearest.min((coord - c).abs());
+            }
+        }
+
+        if nearest.is_finite() {
+            CROSSING_DRIFT_COST * nearest
+        } else {
+            0.0
+        }
     }
 
     /// Is the polyline clear of the whole hard world (nodes, hard segments,
@@ -3253,6 +3530,21 @@ fn seg_clear_padded(p0: (f32, f32), p1: (f32, f32), r: (f32, f32, f32, f32)) -> 
     !rides
 }
 
+/// Does the segment `p0`→`p1` make a *designated* crossing of band `b` — one
+/// end on the band's centerline, perpendicular to the outline (exactly the
+/// exemption [`seg_clear_border`] grants)? Used by the M20.4 re-crossing cost.
+fn designated_crossing(p0: (f32, f32), p1: (f32, f32), b: (f32, f32, f32, f32)) -> bool {
+    let perpendicular = if b.3 <= b.2 {
+        (p1.0 - p0.0).abs() < 1e-6
+    } else {
+        (p1.1 - p0.1).abs() < 1e-6
+    };
+    if !perpendicular {
+        return false;
+    }
+    on_band_centerline(p0, b) || on_band_centerline(p1, b)
+}
+
 /// Is the axis-aligned segment clear of a frame's border band `b`? It must
 /// keep [`BORDER_PAD`] clear of the band, except at a designated crossing:
 /// the overlap confined to one segment end whose point lies on the band's
@@ -3272,7 +3564,7 @@ fn seg_clear_border(p0: (f32, f32), p1: (f32, f32), b: (f32, f32, f32, f32)) -> 
     }
     for (t, p_touch, at_start) in [(t0, p0, true), (t1, p1, false)] {
         let at_end = if at_start { t <= 1e-3 } else { t >= 1.0 - 1e-3 };
-        if at_end && on_band_centerline(p_touch, b) {
+        if at_end && (on_band_centerline(p_touch, b) || in_band(p_touch, b)) {
             return true;
         }
     }
@@ -3321,6 +3613,31 @@ fn on_band_centerline(p: (f32, f32), b: (f32, f32, f32, f32)) -> bool {
         (p.1 - (y + h / 2.0)).abs() < 1e-2 && p.0 >= x - 1e-2 && p.0 <= x + w + 1e-2
     } else {
         (p.0 - (x + w / 2.0)).abs() < 1e-2 && p.1 >= y - 1e-2 && p.1 <= y + h + 1e-2
+    }
+}
+
+/// Does `p` lie within the *thin band* `b` (its full thickness, not just the
+/// centerline)? A track graph seeded with a crossing coordinate that is a
+/// hair off a band's centerline (the M20.4 crossing fan allocates
+/// arbitrary coordinates, so a track can sit inside a band's 1.5 px
+/// thickness) would otherwise split one perpendicular crossing into two
+/// hops, the second of which starts *beside* the centerline and so fails
+/// [`seg_clear_border`]'s designated-crossing exemption. Treating a leg that
+/// begins (or ends) anywhere inside the band as still "at" the crossing keeps
+/// the exemption — a leg that stays inside the band and leaves it
+/// perpendicularly is a designated crossing at that coordinate.
+fn in_band(p: (f32, f32), b: (f32, f32, f32, f32)) -> bool {
+    let (x, y, w, h) = b;
+    if h <= w {
+        p.1 >= y - BORDER_PAD - 1e-2
+            && p.1 <= y + h + BORDER_PAD + 1e-2
+            && p.0 >= x - 1e-2
+            && p.0 <= x + w + 1e-2
+    } else {
+        p.0 >= x - BORDER_PAD - 1e-2
+            && p.0 <= x + w + BORDER_PAD + 1e-2
+            && p.1 >= y - 1e-2
+            && p.1 <= y + h + 1e-2
     }
 }
 
@@ -3707,6 +4024,208 @@ fn separate_ports(ends: &[PortEnd]) -> std::collections::HashMap<(usize, bool), 
         }
     }
     out
+}
+
+// ---- M20.4 — frame-side crossing separation ---------------------------
+//
+// The plan's "Pre-pass 1, reframed". Before M20.4 the port fan
+// ([`separate_ports`]) spread the *node* ports of a shared side, but the
+// whole-path search then chose where each edge crosses its ancestor frames'
+// border bands on its own — and because every such crossing is a designated
+// waypoint (a segment end on the band centerline, which [`seg_clear_border`]
+// exempts), two edges entering the same frame through the same side could
+// both pick the side's cheapest row and land on **one coordinate**. The
+// result was a collinear overlap the repair loop then had to negotiate away
+// by pushing the loser all the way around the frame.
+//
+// The cure is the M9 idea applied to the frames the search crosses: allocate
+// each frame side's *crossing coordinates* up front, exactly as
+// [`separate_ports`] allocates a node side's port coordinates, and seed them
+// into the search's track graph as preferred crossing tracks
+// ([`Obstacles::crossing_rows`]). The A* then returns crossings on (or near)
+// the allocated coordinates — a fan instead of a collapse — and the repair
+// loop has nothing to negotiate. The effect is measured by
+// `frame_crossing_fan_seats_nested_frame_crossings` (which asserts phase 1
+// equals the final routes: removing the fan costs 140.4 px of repair detour
+// on that fixture, and 678.6 px on the `cluster` sample).
+
+/// One edge end's traversal of one ancestor frame side: the crossing the
+/// whole-path search will make of that frame's border band, gathered for the
+/// separation pre-pass.
+struct FrameCross {
+    edge: usize,
+    /// The group frame whose border is crossed.
+    frame: usize,
+    /// The frame side the edge passes through (the side facing the edge's
+    /// travel — derived from which border band the edge's port-to-port span
+    /// meets first).
+    side: Side,
+    /// The edge's own "desired" crossing coordinate: the cross-coordinate it
+    /// would use if nothing else were crossing — the *inside* endpoint's
+    /// column (see the `want` computation in [`assemble`]), which is the
+    /// descent a lone edge would draw anyway.
+    want: f32,
+    /// M13: the edge label's knockout extent across the crossing runs
+    /// ([`side_label_cover`]; 0 when unlabeled) — the fan gap grows with it.
+    cover: f32,
+    /// M17: the edge's endpoint ids — a content key for sorting, so ties
+    /// never fall back to the declaration order.
+    from_id: String,
+    to_id: String,
+}
+
+/// Assign fanned crossing coordinates to frame sides carrying more than one
+/// edge. Returns a map from `(edge, frame, side)` to the assigned crossing
+/// coordinate; sides with a single crossing edge are absent (the search keeps
+/// its own choice there, and for a lone edge that choice is already the
+/// natural descent).
+///
+/// The algorithm is [`separate_ports`]'s, on the frame side's cross span
+/// instead of a node's: order the crossings by their desired coordinate
+/// (ties broken on the endpoint ids, never on declaration order), then nudge
+/// them apart to at least [`label_pair_sep`] — [`FAN_SEP`] for two unlabeled
+/// edges, more where a knockout would reach a neighbor's line — with the same
+/// proportional shrink when the required run overflows the span and the same
+/// clamp/restore passes. A side too narrow to fan (a frame thinner than the
+/// ports it must host) yields nothing, and the search falls back to its own
+/// choice.
+fn separate_frame_crossings(
+    crosses: &[FrameCross],
+    frames: &std::collections::HashMap<usize, (f32, f32, f32, f32)>,
+) -> std::collections::HashMap<(usize, usize, Side), f32> {
+    use std::collections::HashMap;
+    let mut groups: HashMap<(usize, Side), Vec<usize>> = HashMap::new();
+    for (k, c) in crosses.iter().enumerate() {
+        groups.entry((c.frame, c.side)).or_default().push(k);
+    }
+    let mut out: HashMap<(usize, usize, Side), f32> = HashMap::new();
+    for ((frame, side), idxs) in &groups {
+        if idxs.len() < 2 {
+            continue;
+        }
+        let Some(&rect) = frames.get(frame) else {
+            continue;
+        };
+        let (lo, hi) = side_cross_span(rect, *side);
+        // The usable span: the frame's side, inset from its corners by
+        // [`PORT_INSET`] (the same inset a node port fan uses — a crossing at
+        // a frame corner would thread two border bands at once).
+        let usable_lo = lo + PORT_INSET;
+        let usable_hi = hi - PORT_INSET;
+        if usable_hi <= usable_lo + 1e-3 {
+            continue;
+        }
+        let mut order: Vec<usize> = idxs.clone();
+        order.sort_by(|&a, &b| {
+            crosses[a]
+                .want
+                .total_cmp(&crosses[b].want)
+                .then_with(|| {
+                    (
+                        crosses[a].from_id.as_str(),
+                        crosses[a].to_id.as_str(),
+                    )
+                        .cmp(&(crosses[b].from_id.as_str(), crosses[b].to_id.as_str()))
+                })
+        });
+        let mut assigned: Vec<f32> = order
+            .iter()
+            .map(|&i| crosses[i].want.clamp(usable_lo, usable_hi))
+            .collect();
+        let covers: Vec<f32> = order.iter().map(|&i| crosses[i].cover).collect();
+        let mut seps: Vec<f32> = (0..covers.len().saturating_sub(1))
+            .map(|k| label_pair_sep(covers[k], covers[k + 1], FAN_SEP, Some(FAN_LABEL_CAP)))
+            .collect();
+        let total: f32 = seps.iter().sum();
+        let span = usable_hi - usable_lo;
+        if total > span {
+            let scale = span / total;
+            for s in seps.iter_mut() {
+                *s *= scale;
+            }
+        }
+        // The same three-pass spread [`separate_ports`] uses.
+        for i in 1..assigned.len() {
+            let s = seps[i - 1];
+            if assigned[i] - assigned[i - 1] < s {
+                assigned[i] = assigned[i - 1] + s;
+            }
+        }
+        for v in assigned.iter_mut() {
+            *v = v.clamp(usable_lo, usable_hi);
+        }
+        for i in (1..assigned.len()).rev() {
+            let s = seps[i - 1];
+            if assigned[i] - assigned[i - 1] < s {
+                assigned[i - 1] = assigned[i] - s;
+            }
+        }
+        for v in assigned.iter_mut() {
+            *v = v.clamp(usable_lo, usable_hi);
+        }
+        for (k, &i) in order.iter().enumerate() {
+            out.insert((crosses[i].edge, crosses[i].frame, crosses[i].side), assigned[k]);
+        }
+    }
+    out
+}
+
+/// Is `p` inside rect `r` (inclusive of its boundary)?
+fn rect_contains_point(r: (f32, f32, f32, f32), p: (f32, f32)) -> bool {
+    p.0 >= r.0 - 1e-2 && p.0 <= r.0 + r.2 + 1e-2 && p.1 >= r.1 - 1e-2 && p.1 <= r.1 + r.3 + 1e-2
+}
+
+/// The distance from `p` to the nearest point of rect `r` (0 inside it).
+fn dist_to_rect(p: (f32, f32), r: (f32, f32, f32, f32)) -> f32 {
+    let dx = (r.0 - p.0).max(0.0).max(p.0 - (r.0 + r.2));
+    let dy = (r.1 - p.1).max(0.0).max(p.1 - (r.1 + r.3));
+    dx.hypot(dy)
+}
+
+/// Which side of frame `frame` does the edge from `from` to `to` cross
+/// *first*? The side the port-to-port segment meets on its way — the side
+/// that faces the source when the source is outside, or the exit side when
+/// the source is inside. `None` when the segment never meets the frame.
+///
+/// This is deliberately geometric rather than "the side facing the source
+/// along the dominant axis": a wide frame (a whole row of groups) can have
+/// its centre far from the edge's own column, so a centre comparison picks a
+/// vertical side for an edge that plainly enters through the top.
+fn frame_entry_side(
+    frame: (f32, f32, f32, f32),
+    from: (f32, f32),
+    to: (f32, f32),
+) -> Option<Side> {
+    let (x, y, w, h) = frame;
+    let (x1, y1) = (x + w, y + h);
+    let (dx, dy) = (to.0 - from.0, to.1 - from.1);
+    // The parameter at which the segment meets each of the four side planes,
+    // keeping only those whose meeting point lies within the side's span.
+    let mut hits: Vec<(f32, Side)> = Vec::new();
+    let mut try_hit = |t: f32, p: (f32, f32), side: Side| {
+        if t > 1e-6 && t < 1.0 - 1e-6 && p.0 >= x - 1e-2 && p.0 <= x1 + 1e-2 && p.1 >= y - 1e-2
+            && p.1 <= y1 + 1e-2
+        {
+            hits.push((t, side));
+        }
+    };
+    if dy.abs() > 1e-6 {
+        for (plane, side) in [(y, Side::Top), (y1, Side::Bottom)] {
+            let t = (plane - from.1) / dy;
+            let px = from.0 + t * dx;
+            try_hit(t, (px, plane), side);
+        }
+    }
+    if dx.abs() > 1e-6 {
+        for (plane, side) in [(x, Side::Left), (x1, Side::Right)] {
+            let t = (plane - from.0) / dx;
+            let py = from.1 + t * dy;
+            try_hit(t, (plane, py), side);
+        }
+    }
+    // The earliest meeting point is the side the edge meets first.
+    hits.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| (a.1 as u8).cmp(&(b.1 as u8))));
+    hits.first().map(|&(_, side)| side)
 }
 
 /// One cross-boundary edge's data for lane assignment.
@@ -4217,7 +4736,10 @@ fn track_search(
         let x = vts[i];
         let y = hts[j];
         let cost = |x1: f32, y1: f32| {
-            obs.soft_cost_seg((x, y), (x1, y1)) + obs.cross_cost(&[(x, y), (x1, y1)])
+            let seg = [(x, y), (x1, y1)];
+            obs.soft_cost_seg((x, y), (x1, y1))
+                + obs.cross_cost(&seg)
+                + obs.recross_cost(&seg)
         };
         if j + 1 < nh && clear(x, y, x, hts[j + 1]) {
             out.push((i, j + 1, 2, (hts[j + 1] - y).abs(), cost(x, hts[j + 1])));
@@ -4331,6 +4853,7 @@ fn track_search(
                     // Starting a run: charge the row preference once, at the
                     // bend (a run is many track hops but one shape choice).
                     obs.row_drift_cost(d_out, (vts[ni], hts[nj]))
+                        + obs.crossing_drift_cost(d_out, (vts[ni], hts[nj]))
                 } else {
                     0.0
                 }
@@ -8194,6 +8717,404 @@ src -- to="bottom" --> t
         // upward before turning — the M11 shape, untouched by the search.
         assert!((p[0].1 - a.y).abs() < 1e-2, "port not on the forced side");
         assert!(p[1].1 < p[0].1, "the port must escape outward");
+    }
+
+
+
+
+
+    // ============ M20.4 — frame-crossing fan ==========================
+
+    /// The M20.4 pre-pass: edges entering one ancestor frame side from
+    /// distinct sources take distinct crossing coordinates instead of
+    /// collapsing onto the side's cheapest row. This is the plan's "Pre-pass
+    /// 1, reframed": the frame sides the whole-path search crosses get the
+    /// same fan [`separate_ports`] gives a shared node side.
+    ///
+    /// The defect it closes is measured on the repair loop: before M20.4 the
+    /// `cluster` sample's `lb -> n*` edges all landed on one crossing column,
+    /// the repair pass detected the collinear ride, and the loser was pushed
+    /// all the way around the frames (678.6 px of extra route — pinned by
+    /// `repair_loop_has_nothing_to_negotiate_on_the_cluster_sample`).
+    #[test]
+    fn edges_into_one_frame_side_cross_at_distinct_columns() {
+        let (_d, l) = lay_final(
+            "diagram top-down\n\
+             s1 \"S1\"\n\
+             s2 \"S2\"\n\
+             group top-down \"G\"\n\
+             a \"A\"\n\
+             b \"B\"\n\
+             end\n\
+             s1 --> a\n\
+             s2 --> b\n",
+        );
+        let g = sub_rect(&l, 0);
+        // Check every frame side: the crossings through one side must be
+        // FAN_SEP apart. (Which side an edge enters by is the search's
+        // choice, so the assertion is per side rather than per edge.)
+        for (sname, coord, horiz) in [
+            ("top", g.y, true),
+            ("bottom", g.y + g.h, true),
+            ("left", g.x, false),
+            ("right", g.x + g.w, false),
+        ] {
+            let crosses = frame_side_crossings(&l, g, sname, coord, horiz);
+            for w in crosses.windows(2) {
+                assert!(
+                    w[1] - w[0] >= FAN_SEP - 1e-2,
+                    "{sname} crossings collapsed: {crosses:?}"
+                );
+            }
+        }
+        // Both edges still land on their targets' boundaries.
+        for e in &l.edges {
+            let t = node_rect(&l, &e.to);
+            assert!(
+                on_boundary((t.x, t.y, t.w, t.h), *e.points.last().unwrap()),
+                "{}->{} misses its target",
+                e.from,
+                e.to
+            );
+        }
+    }
+
+    /// The crossing coordinates of every edge through one frame side, sorted
+    /// and deduped. `(side name, the side's fixed coordinate, whether the
+    /// side is horizontal)`.
+    fn frame_side_crossings(
+        l: &Layout,
+        g: &GroupRect,
+        _sname: &str,
+        coord: f32,
+        horiz: bool,
+    ) -> Vec<f32> {
+        let mut crosses: Vec<f32> = Vec::new();
+        for e in &l.edges {
+            for w in e.points.windows(2) {
+                let (p0, p1) = (w[0], w[1]);
+                if horiz {
+                    // A horizontal side (top/bottom) is crossed by a vertical
+                    // segment at an x inside the side's span, with the segment
+                    // spanning the side's coordinate.
+                    if (p0.0 - p1.0).abs() > 1e-3
+                        || p0.0 < g.x - 1e-2
+                        || p0.0 > g.x + g.w + 1e-2
+                    {
+                        continue;
+                    }
+                    if p0.1.min(p1.1) <= coord + 1e-2 && p0.1.max(p1.1) >= coord - 1e-2 {
+                        crosses.push(p0.0);
+                    }
+                } else {
+                    if (p0.1 - p1.1).abs() > 1e-3
+                        || p0.1 < g.y - 1e-2
+                        || p0.1 > g.y + g.h + 1e-2
+                    {
+                        continue;
+                    }
+                    if p0.0.min(p1.0) <= coord + 1e-2 && p0.0.max(p1.0) >= coord - 1e-2 {
+                        crosses.push(p0.1);
+                    }
+                }
+            }
+        }
+        crosses.sort_by(f32::total_cmp);
+        crosses.dedup_by(|a, b| (*a - *b).abs() < 1e-2);
+        crosses
+    }
+
+    /// The fan is measured *per frame side*: edges entering different sides
+    /// of one frame (or different frames) do not constrain each other.
+    #[test]
+    fn frame_crossing_fan_is_per_side() {
+        // `s` feeds `a` (top of the inner group) and `b` sits in a *sibling*
+        // group — two unrelated frames, so no fan applies and neither edge
+        // may be pushed off its own natural column.
+        let (_d, l) = lay_final(
+            "diagram top-down\n\
+             s \"S\"\n\
+             group top-down \"Left\"\n\
+             a \"A\"\n\
+             end\n\
+             group top-down \"Right\"\n\
+             b \"B\"\n\
+             end\n\
+             s --> a\n\
+             s --> b\n",
+        );
+        // Both frames are unrelated to one of the edges, so each edge has
+        // exactly one ancestor frame — no shared side, no fan.
+        for e in &l.edges {
+            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+        }
+        assert_all_finite(&l);
+    }
+
+    /// The crossing fan must not break the phase-1 permutation invariance
+    /// (M17): the pre-pass sorts by a content key (endpoint ids), so
+    /// permuting the edges' declaration order permutes nothing.
+    #[test]
+    fn frame_crossing_fan_is_permutation_invariant() {
+        let head = "diagram top-down\n\
+                    s1 \"S1\"\n\
+                    s2 \"S2\"\n\
+                    s3 \"S3\"\n\
+                    group top-down \"G\"\n\
+                    a \"A\"\n\
+                    b \"B\"\n\
+                    c \"C\"\n\
+                    end\n";
+        let edges_a = ["s1 --> a", "s2 --> b", "s3 --> c", "s1 --> b"];
+        let mut edges_b = edges_a;
+        edges_b.reverse();
+        let build = |edges: &[&str]| {
+            let mut src = head.to_string();
+            for e in edges {
+                src.push_str(e);
+                src.push('\n');
+            }
+            let raw = parser::parse_diagram(&src).expect("parse");
+            resolve::resolve(&raw).expect("resolve")
+        };
+        let la = layout_phase1(&build(&edges_a));
+        let lb = layout_phase1(&build(&edges_b));
+        for e in &la.edges {
+            let other = lb
+                .edges
+                .iter()
+                .find(|o| o.from == e.from && o.to == e.to)
+                .unwrap_or_else(|| panic!("edge {}->{} missing after permutation", e.from, e.to));
+            assert_eq!(
+                e.points, other.points,
+                "{}->{} moved under edge permutation",
+                e.from, e.to
+            );
+        }
+    }
+
+    /// A frame-crossing fan must not collapse *when the sources are outside
+    /// the frame's side span* (the case a naive clamp would break): sources
+    /// fanning in from well left of the frame still get distinct crossings on
+    /// whichever side they enter by.
+    #[test]
+    fn frame_crossing_fan_spreads_out_of_span_sources() {
+        let (_d, l) = lay_final(
+            "diagram top-down\n\
+             s1 \"S1\"\n\
+             s2 \"S2\"\n\
+             s3 \"S3\"\n\
+             group top-down \"G\"\n\
+             a \"A\"\n\
+             end\n\
+             s1 --> a\n\
+             s2 --> a\n\
+             s3 --> a\n",
+        );
+        let g = sub_rect(&l, 0);
+        for (sname, coord, horiz) in [
+            ("top", g.y, true),
+            ("bottom", g.y + g.h, true),
+            ("left", g.x, false),
+            ("right", g.x + g.w, false),
+        ] {
+            let crosses = frame_side_crossings(&l, g, sname, coord, horiz);
+            for w in crosses.windows(2) {
+                assert!(
+                    w[1] - w[0] >= FAN_SEP - 1e-2,
+                    "{sname} crossings closer than FAN_SEP: {crosses:?}"
+                );
+            }
+        }
+        // Every edge still reaches its target on the boundary.
+        let a = node_rect(&l, "a");
+        for e in &l.edges {
+            assert!(
+                on_boundary((a.x, a.y, a.w, a.h), *e.points.last().unwrap()),
+                "{}->{} misses a's boundary",
+                e.from,
+                e.to
+            );
+        }
+    }
+
+    /// The M20.4 fan's contract on the shape it exists for: several edges
+    /// from outside one nested frame fanning into a single target. The search
+    /// alone sends each edge to its own cheapest row, so two of them approach
+    /// the same frame border on nearly the same column and the repair loop has
+    /// to push one around. The pre-pass seats them on distinct columns, so
+    /// every crossing through each frame side is at least [`FAN_SEP`] apart.
+    ///
+    /// `frame_crossing_fan_is_what_seats_the_columns` below pins that this is
+    /// the pre-pass's doing, not a coincidence of the cost model.
+    #[test]
+    fn frame_crossing_fan_seats_nested_frame_crossings() {
+        let src = "diagram top-down\n\
+                   x0 \"External 0\"\n\
+                   x1 \"External 1\"\n\
+                   x2 \"External 2\"\n\
+                   x3 \"External 3\"\n\
+                   x4 \"External 4\"\n\
+                   group top-down \"Outer\"\n\
+                   group top-down \"Inner\"\n\
+                   t \"Target\"\n\
+                   end\n\
+                   end\n\
+                   x0 --> t\n\
+                   x1 --> t\n\
+                   x2 --> t\n\
+                   x3 --> t\n\
+                   x4 --> t\n";
+        let (_d, l) = lay_final(src);
+        // Every frame side of every frame: crossings >= FAN_SEP apart.
+        for g in &l.groups {
+            for (sname, coord, horiz) in [
+                ("top", g.y, true),
+                ("bottom", g.y + g.h, true),
+                ("left", g.x, false),
+                ("right", g.x + g.w, false),
+            ] {
+                let crosses = frame_side_crossings(&l, g, sname, coord, horiz);
+                for w in crosses.windows(2) {
+                    assert!(
+                        w[1] - w[0] >= FAN_SEP - 1e-2,
+                        "frame #{} {sname} crossings collapsed: {crosses:?}",
+                        g.index
+                    );
+                }
+            }
+        }
+        // The fan leaves the repair loop nothing to negotiate: phase 1 and
+        // the final routes are the same length. (Without the pre-pass this
+        // fixture's final routes are 140.4 px longer — the repair loop
+        // pushing two of the five edges around the frames — which is the
+        // regression this pins.)
+        let raw = parser::parse_diagram(src).expect("parse");
+        let d = resolve::resolve(&raw).expect("resolve");
+        let total = |l: &Layout| -> f32 {
+            l.edges
+                .iter()
+                .map(|e| {
+                    e.points
+                        .windows(2)
+                        .map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs())
+                        .sum::<f32>()
+                })
+                .sum()
+        };
+        let (p1, pf) = (total(&layout_phase1(&d)), total(&l));
+        assert!(
+            pf - p1 <= 20.0,
+            "the repair loop added {:.1} px (phase 1 {p1:.1} -> final {pf:.1}): \
+             a frame-crossing collapse is back",
+            pf - p1
+        );
+
+        // Every edge still reaches the target on its boundary, and none cuts
+        // a node.
+        let t = node_rect(&l, "t");
+        for e in &l.edges {
+            assert!(
+                on_boundary((t.x, t.y, t.w, t.h), *e.points.last().unwrap()),
+                "{}->{} misses t",
+                e.from,
+                e.to
+            );
+            for w in e.points.windows(2) {
+                for n in &l.nodes {
+                    assert!(
+                        !segment_intersects_rect(w[0], w[1], (n.x, n.y, n.w, n.h)),
+                        "{}->{} cuts node {}",
+                        e.from,
+                        e.to,
+                        n.id
+                    );
+                }
+            }
+        }
+    }
+
+    /// The M20.4 dense-stress re-baseline: many edges fanning into one frame
+    /// — the shape the frame-crossing fan exists for. Each edge gets its own
+    /// source port and its own target, so the fan (not the port separation)
+    /// is what has to keep the crossings apart: phase 1 must already be
+    /// conflict-free, and the repair loop must have nothing to move.
+    #[test]
+    fn dense_fan_into_one_frame_needs_no_repair() {
+        let mut src = String::from("diagram top-down\n");
+        let n = 8;
+        for i in 0..n {
+            src.push_str(&format!("s{i} \"Source {i}\"\n"));
+        }
+        src.push_str("group top-down \"Sink\"\n");
+        for i in 0..n {
+            src.push_str(&format!("t{i} \"Target {i}\"\n"));
+        }
+        src.push_str("end\n");
+        // One source per target: n edges crossing one frame's border, each
+        // from a different column.
+        for i in 0..n {
+            src.push_str(&format!("s{i} --> t{i}\n"));
+        }
+        let raw = parser::parse_diagram(&src).expect("parse");
+        let d = resolve::resolve(&raw).expect("resolve");
+        let l1 = layout_phase1(&d);
+        let lf = layout(&d);
+        assert_all_finite(&lf);
+        assert_no_edge_overlaps_or_node_passage(&d, &lf);
+        for e in &lf.edges {
+            assert!(
+                is_orthogonal(&e.points),
+                "{}->{} not orthogonal",
+                e.from,
+                e.to
+            );
+            let t = node_rect(&lf, &e.to);
+            assert!(
+                on_boundary((t.x, t.y, t.w, t.h), *e.points.last().unwrap()),
+                "{}->{} misses its target",
+                e.from,
+                e.to
+            );
+        }
+        // Phase 1 must already be conflict-free (the fan's whole point): no
+        // two phase-1 polylines may lay on top of each other.
+        for i in 0..l1.edges.len() {
+            for j in (i + 1)..l1.edges.len() {
+                let (ei, ej) = (&l1.edges[i], &l1.edges[j]);
+                for a in ei.points.windows(2) {
+                    for b in ej.points.windows(2) {
+                        assert!(
+                            !segments_overlap(a[0], a[1], b[0], b[1]),
+                            "phase-1 overlap {}->{} / {}->{}",
+                            ei.from,
+                            ei.to,
+                            ej.from,
+                            ej.to
+                        );
+                    }
+                }
+            }
+        }
+        // And the repair loop does not have to move anything.
+        let total = |l: &Layout| -> f32 {
+            l.edges
+                .iter()
+                .map(|e| {
+                    e.points
+                        .windows(2)
+                        .map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs())
+                        .sum::<f32>()
+                })
+                .sum()
+        };
+        assert!(
+            (total(&lf) - total(&l1)).abs() < 1e-2,
+            "the repair loop moved routes on a fan the pre-pass should have seated \
+             (phase 1 {:.1} -> final {:.1})",
+            total(&l1),
+            total(&lf)
+        );
     }
 
     #[test]

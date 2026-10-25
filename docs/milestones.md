@@ -11,9 +11,10 @@ complete (M12 was absorbed by M11.5), plus the post-M13 hardening pass
 below and the post-M17 routing hardening (escape-stub spikes) recorded
 under M17. M20.1 (whole-path maze routing: foundation), M20.2 (whole-path
 search for direct internal edges), M20.3 (whole-path search for
-cross-boundary edges; rep model deleted), and M20.4 (frame-crossing fan;
-pockets and the repair loop re-grounded) are complete.
-**M8 (CLI polish) and the M20.5–M20.6 routing migration remain open.**
+cross-boundary edges; rep model deleted), M20.4 (frame-crossing fan;
+pockets and the repair loop re-grounded), and M20.5 (labels re-tuned for
+the router's polylines) are complete.
+**M8 (CLI polish) and M20.6 (the M20 deletion & doc pass) remain open.**
 
 ---
 
@@ -1960,6 +1961,96 @@ deliberate non-goal (grounding forced sides on the search).
 
 **Blocked by:** nothing. **Blocks:** M20.5 (labels ride these polylines).
 
-### [ ] M20.5 — Labels re-tuned (M13 still holds its contract).
-(see ./plan-for-whole-path-maze-routing.md)
+### ✅ M20.5 — Labels re-tuned (M13 still holds its contract)
+
+The plan's small milestone, landed as scoped and turning up one real defect
+class plus one latent inconsistency. **M13's contract is unchanged and still
+enforced**: the pass is the same deterministic greedy + refinement over
+candidate anchors along each polyline, with the same scoring, and
+`assert_labels_resolved` (now also run on `cluster` and `tencent`, which were
+added after M13) still proves every labeled edge carries an anchor that
+touches its own line, covers no peer line, no other knockout, no node, no
+arrowhead and no group title. What changed is what the pass *sees*.
+
+- [x] **The defect: M20 fragments every run, and M13 is segment-local.** The
+      whole-path search (M20.3/M20.4) emits an explicit waypoint at *every*
+      ancestor-band crossing, lane row and jog row, so one drawn straight run
+      arrives as a chain of collinear segments — `cluster`'s `lb -> n1`
+      carries eight waypoints for three visual runs. [`label_candidates`] is
+      written in "offsets along segments": its longest-segment-first
+      preference and its `the knockout must fit inside the segment` clamp are
+      both segment-local, so on a fragmented polyline it could only ever see
+      the short pieces. The visible result was labels parked at arbitrary
+      taps of a fragment (a third of the way along a run, hard against a
+      bend) instead of at the middle of the line the eye reads.
+- [x] **The fix: merge collinear waypoints first ([`visual_runs`]).** One
+      pure helper collapses a polyline's consecutive collinear *and
+      forward-going* segments into the runs it draws, and both the candidate
+      generator and the degenerate-path fallback
+      ([`fallback_label_anchor`]) now work in that vocabulary. Requiring the
+      same direction matters: an out-and-back spike left on a collinear
+      stretch by the repair loop must stay two runs, or merging would hand
+      the label a zero-length or reversed run. Nothing about the *drawn*
+      polyline changes — this is a reading of it, not a rewrite.
+      Effect on the samples (19 labeled edges across the six examples): 16
+      now sit exactly at their visual run's midpoint, up from 10 under the
+      fragmented reading (measured both ways by re-running the census with the
+      merge disabled). The other three take a deliberate non-midpoint
+      placement — `finance`'s `user -> pubclb` steps off centre to stay clear
+      of "Tencent"'s top border (next bullet), and two labels are grazes whose
+      knockout is pushed off-line by a peer line or a crowded gap. The awkward
+      "label jammed against a bend" placements on `cluster` and `finance` are
+      gone.
+- [x] **The regression the fix exposed: knockouts centered on frame
+      outlines.** Merging runs moved midpoints onto group borders — a run
+      that crosses a frame edge has that edge exactly at its middle, so the
+      knockout square landed dead-center on the drawn line and read as a gap
+      in the group's box (`finance`'s `user -> pubclb` at `y = 129.6` on
+      "Tencent"'s top border, 175 px² of outline buried). M13.1 deliberately
+      keeps a label *crossing* a frame border legal, so the fix is a
+      **preference, not an obstacle**: [`FRAME_CENTER_COST`] (4) is charged
+      when the knockout's **center** lies in a frame edge's border band
+      ([`rect_covers_line`]) — above the midpoint term (2.0, so an adjacent
+      tap wins) and below the graze term (8, so nothing is shoved sideways
+      just to dodge an outline). `LabelWorld` grew `frame_edges` for it. The
+      M13.1 rule stands: crossing off-center still costs nothing.
+- [x] **The latent inconsistency: two title rects.** The placement engine
+      scored knockouts against the *bare glyph box*
+      ([`title_text_rect`]) while the router and `edge_world` keep clear of
+      the *grown routing obstacle* ([`title_obstacle_rect`] — the glyph box
+      plus the viewer-fallback margin, up to ~14 px wider on a long title).
+      A knockout could therefore sit in space the search had deliberately
+      reserved, which is exactly the fallback-font collision M20.3's obstacle
+      exists to prevent. `place_labels`' frame obstacle is now the same
+      [`title_obstacle_rect`] the search uses, and
+      `assert_labels_resolved` asserts against it — so the label guarantee
+      and the routing guarantee now describe the same box. No sample anchor
+      moved on this change alone (the margin was already being dodged), but
+      the two halves can no longer drift apart.
+- [x] **Tests** (5 new + 1 sample gate, all in `layout.rs`):
+      `visual_runs_merge_collinear_waypoints` (merge, bend split, the
+      out-and-back spike, degenerate input),
+      `label_sits_at_the_midpoint_of_its_visual_run` (the motivating
+      fixture: three collinear fragments must place the label at the real
+      run's midpoint, not a fragment's),
+      `label_is_not_centered_on_a_frame_outline`,
+      `rect_covers_line_tests_the_center_only` (center vs. mere crossing,
+      both axes, off-extent), `label_keeps_clear_of_the_routing_title_obstacle`
+      (a run in the strip only the grown obstacle covers), and
+      `labels_ride_visual_runs_and_clear_frame_outlines_on_the_samples`
+      (every labeled edge on all six examples: the anchor is on a visual run,
+      and no knockout is centered on any frame outline).
+      `labels_are_resolved_on_the_samples` grew `cluster` and `tencent`.
+- **Deliverable:** suite green (226 tests + 7 ignored inspection helpers;
+      six new). **Four snapshots changed — label anchors only:** `cluster`,
+      `finance`, `infra`, `group_style`. Verified mechanically: every changed
+      line in all four is a knockout `<rect>` or its `<text>` (8/8, 10/10,
+      2/2, 2/2 lines), with no node, frame, polyline, marker or canvas
+      change — the M20 routing is untouched, as the milestone intends. The
+      other eight snapshots are byte-identical (`sides`, `subdirection`,
+      `tencent` included: their labels were already at run midpoints).
+      Output is byte-stable across runs on all six examples.
+
+**Blocked by:** nothing. **Blocks:** M20.6 (the deletion/doc pass).
+
 ### [ ] M20.6 — Deletion & doc pass.

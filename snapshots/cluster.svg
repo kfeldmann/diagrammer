@@ -58,19 +58,19 @@
     <polyline points="438.49,399.60 438.49,336.10" stroke="#333" stroke-width="1.5" stroke-dasharray="1 4" marker-end="url(#arrow)"/>
   </g>
   <g fill="#fff" stroke="none">
-    <rect x="299.94" y="256.70" width="32.23" height="18.00"/>
-    <rect x="190.12" y="236.80" width="32.23" height="18.00"/>
-    <rect x="317.44" y="507.10" width="32.23" height="18.00"/>
+    <rect x="236.16" y="225.30" width="32.23" height="18.00"/>
+    <rect x="293.28" y="397.60" width="32.23" height="18.00"/>
+    <rect x="199.41" y="248.30" width="32.23" height="18.00"/>
     <rect x="246.44" y="338.20" width="32.23" height="18.00"/>
-    <rect x="338.44" y="382.60" width="32.23" height="18.00"/>
+    <rect x="252.78" y="382.60" width="32.23" height="18.00"/>
     <rect x="341.24" y="466.20" width="32.23" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
-    <text x="316.06" y="265.70">8080</text>
-    <text x="206.24" y="245.80">8080</text>
-    <text x="333.56" y="516.10">8080</text>
+    <text x="252.28" y="234.30">8080</text>
+    <text x="309.39" y="406.60">8080</text>
+    <text x="215.53" y="257.30">8080</text>
     <text x="262.56" y="347.20">3306</text>
-    <text x="354.56" y="391.60">3306</text>
+    <text x="268.89" y="391.60">3306</text>
     <text x="357.36" y="475.20">3306</text>
   </g>
   <g>

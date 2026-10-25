@@ -32,25 +32,25 @@
     <rect x="318.48" y="277.30" width="142.69" height="32.40"/>
     <rect x="194.01" y="326.00" width="25.68" height="18.00"/>
     <rect x="525.27" y="79.55" width="116.83" height="32.40"/>
-    <rect x="464.72" y="234.25" width="32.23" height="18.00"/>
-    <rect x="502.34" y="240.28" width="87.97" height="32.40"/>
-    <rect x="264.29" y="242.90" width="45.35" height="18.00"/>
-    <rect x="611.26" y="252.06" width="45.35" height="18.00"/>
+    <rect x="464.72" y="254.75" width="32.23" height="18.00"/>
+    <rect x="525.47" y="237.46" width="87.97" height="32.40"/>
+    <rect x="264.29" y="249.54" width="45.35" height="18.00"/>
+    <rect x="611.26" y="272.56" width="45.35" height="18.00"/>
     <rect x="748.23" y="260.00" width="45.35" height="18.00"/>
     <rect x="845.62" y="230.25" width="45.35" height="18.00"/>
-    <rect x="1144.74" y="254.87" width="32.23" height="18.00"/>
+    <rect x="1144.74" y="271.87" width="32.23" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
     <text x="389.82" y="286.30">tech.finance.example.com<tspan x="389.82" y="300.70">443</tspan></text>
     <text x="206.85" y="335.00">443</text>
     <text x="583.69" y="88.55">finance.example.com<tspan x="583.69" y="102.95">443</tspan></text>
-    <text x="480.84" y="243.25">8088</text>
-    <text x="546.32" y="249.28">22, 8088, 8080,<tspan x="546.32" y="263.68">30001, 1234</tspan></text>
-    <text x="286.96" y="251.90">22, 443</text>
-    <text x="633.93" y="261.06">22, 443</text>
+    <text x="480.84" y="263.75">8088</text>
+    <text x="569.46" y="246.46">22, 8088, 8080,<tspan x="569.46" y="260.86">30001, 1234</tspan></text>
+    <text x="286.96" y="258.54">22, 443</text>
+    <text x="633.93" y="281.56">22, 443</text>
     <text x="770.90" y="269.00">22, 443</text>
     <text x="868.29" y="239.25">22, 443</text>
-    <text x="1160.86" y="263.87">3306</text>
+    <text x="1160.86" y="280.87">3306</text>
   </g>
   <g>
     <rect x="602.66" y="20.00" width="69.41" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>

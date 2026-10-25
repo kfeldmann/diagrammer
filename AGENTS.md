@@ -69,11 +69,14 @@ src/
                  search honors all three as row preferences) + sealed-port
                  fallback (a lone side's port slides when its escape pocket
                  is sealed) + M13 label placement & label-aware fan/lane
-                 spacing + M16 global routing pass (a simultaneous pass
-                 against the shared obstacle world — no peer segments — then
-                 a bounded rip-up-and-repair loop with soft peer occupancy
-                 and reserved port pockets, both derived from each edge's
-                 current polyline so they needed no M20.4 repointing) + M17
+                 spacing (M20.5: candidate anchors are offsets along each
+                 polyline's *visual runs* — collinear waypoints merged — and
+                 the title obstacle is the router's grown one) + M16 global
+                 routing pass (a simultaneous pass against the shared
+                 obstacle world — no peer segments — then a bounded
+                 rip-up-and-repair loop with soft peer occupancy and reserved
+                 port pockets, both derived from each edge's current polyline
+                 so they needed no M20.4 repointing) + M17
                  union-merge lane grouping with content-keyed (endpoint-id)
                  sort tie-breaks, so phase-1 routing is invariant under edge
                  permutation
@@ -208,6 +211,36 @@ as the host UID:GID. See `build/README.md`.
   rejected.
   `pocket_rects` and the M16 repair loop needed no repointing: both already
   work off each edge's *current* polyline / the one dispatch point.
+- **Labels are placed along *visual runs*, not raw waypoints (M20.5).** The
+  router marks every ancestor-band crossing, lane row and jog row as an
+  explicit waypoint, so one drawn straight run arrives as a chain of
+  collinear segments (`cluster`'s `lb -> n1` has eight waypoints for three
+  visual runs). M13's candidate generator is segment-local — longest-segment
+  first, with the knockout clamped inside the segment — so reading raw
+  segments parks labels at taps of fragments, hard against bends. `visual_runs`
+  merges consecutive collinear *and forward-going* segments, and both
+  `label_candidates` and `fallback_label_anchor` work in that vocabulary.
+  The forward-going requirement is load-bearing: an out-and-back spike left
+  on a collinear stretch by the repair loop must stay two runs, or the label
+  is offered a zero-length or reversed one. Don't "simplify" the merge to
+  plain collinearity, and don't fold it back into the raw-waypoint reading.
+- **A knockout may cross a frame outline but must not be centered on it
+  (M20.5).** M13.1 deliberately keeps group borders out of `LabelWorld`
+  (a label may cross a group's outline; only the title text is an
+  obstacle). Merging visual runs moves run midpoints onto exactly the frame
+  edges a run crosses, which buries the drawn line under a white square, so
+  the engine charges `FRAME_CENTER_COST` when the knockout's **center**
+  falls in a frame edge's border band (`rect_covers_line`, fed by
+  `LabelWorld::frame_edges`). It is a *preference*, sized above the midpoint
+  term and below the graze term — keep it that way; turning borders into
+  obstacles would retract M13.1.
+- **One title rect, shared with the router (M20.5).** `place_labels` scores
+  knockouts against `title_obstacle_rect` — the same grown rect (measured
+  glyph box + viewer-fallback margin) that `edge_world` pushes as a solid
+  obstacle — not the bare `title_text_rect`. Two different title boxes let a
+  knockout sit in space the search had reserved for the fallback-font case
+  M20.3 exists to protect. `assert_labels_resolved` asserts against the
+  grown rect for the same reason.
 - **Measurement is baked and verified.** `src/metrics_table.rs` is *generated*
   — never hand-edit it; regenerate with `cargo run -p gen-metrics-table`
   (and commit the result) when the bundled font changes. The
@@ -234,13 +267,25 @@ breaks geometry):
 - `layout::CYL_RY = 5.0` — cylinder elliptical-cap radius; layout sizes the
   cylinder box to include it (`cyl_height`), the renderer draws the caps at
   this radius.
+- `layout::FRAME_CENTER_COST = 4.0` — the label engine's flat preference
+  against centering a knockout on a group frame's drawn outline (M20.5). It
+  sits above `TAP_W` (6.0 at a segment's end, 2.0 at a third, so an adjacent
+  tap wins) and below `OFFSET_W` (8.0, the graze penalty, so nothing is
+  shoved sideways merely to dodge an outline). It is *not* an obstacle:
+  M13.1 keeps a knockout crossing a frame border legal, and only the
+  knockout's center is tested (`rect_covers_line`). Raising it above
+  `OFFSET_W` would start overriding the graze escape; removing it buries
+  frame outlines under label squares wherever a run's midpoint lands on a
+  border.
 - `layout::FRAME_TITLE_X = 10.0`, `layout::FRAME_TITLE_TOP = 4.0`, and
   `layout::FRAME_TITLE_FONT_SIZE = 12.0` — the inset, top offset, and font
   size of a group's title text. Layout reads these to build the title's
   **routing obstacle** (`title_obstacle_rect`, M20.3) — the solid rect the
   whole-path search keeps clear, so it routes around a title instead of
-  through it — and to keep label knockouts off the title (`title_text_rect`,
-  M13). They must match `render::FRAME_TITLE_X` (10.0),
+  through it — and to build the *same* rect as the label engine's title
+  obstacle (M20.5: one box for both, so a knockout cannot sit in space the
+  search reserved for a viewer's wider fallback face). They must match
+  `render::FRAME_TITLE_X` (10.0),
   `render::FRAME_TITLE_Y` (4.0), and `render::FRAME_TITLE_SIZE` (12.0), else
   the search would clear the wrong box and a route could cross the drawn
   title.

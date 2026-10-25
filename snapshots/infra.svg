@@ -32,12 +32,12 @@
   </g>
   <g fill="#fff" stroke="none">
     <rect x="210.47" y="336.10" width="40.73" height="18.00"/>
-    <rect x="326.26" y="344.25" width="40.73" height="18.00"/>
+    <rect x="326.26" y="340.25" width="40.73" height="18.00"/>
     <rect x="36.39" y="471.25" width="60.36" height="18.00"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="12.00" text-anchor="middle" dominant-baseline="central">
     <text x="230.84" y="345.10">events</text>
-    <text x="346.62" y="353.25">events</text>
+    <text x="346.62" y="349.25">events</text>
     <text x="66.57" y="480.25">replication</text>
   </g>
   <g>

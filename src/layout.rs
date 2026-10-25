@@ -127,6 +127,15 @@
 //! dodge node interiors, rendered arrowheads, other edges' lines, other
 //! labels, and group titles — but not group frame borders: a label may sit on
 //! (or overhang across) a frame outline. See the M13 section below.
+//!
+//! M20.5 re-read that pass for the whole-path router's polylines: candidate
+//! offsets are measured along each polyline's **visual runs**
+//! ([`visual_runs`] — collinear waypoints merged, because the search emits one
+//! per designated crossing), a knockout may cross a frame outline but is
+//! nudged off being *centered* on one ([`FRAME_CENTER_COST`]), and the title
+//! obstacle is the router's grown [`title_obstacle_rect`] rather than the bare
+//! glyph box. M13's contract — the guarantees `assert_labels_resolved` pins —
+//! is unchanged.
 
 use crate::ast::{Diagram, Direction, Group};
 use crate::text;
@@ -1173,14 +1182,24 @@ fn assemble(
     let paths: Vec<Vec<(f32, f32)>> = edges_out.iter().map(|e| e.points.clone()).collect();
     let mut label_frames: Vec<(f32, f32, f32, f32)> = Vec::new();
     for s in 0..diagram.groups.len() {
-        if let Some(title) = diagram.groups[s].title.as_deref() {
-            label_frames.push(title_text_rect(geom.frame(s), title));
+        if let Some(t) = geom.title_obstacle_rect(s) {
+            label_frames.push(t);
         }
+    }
+    // M20.5: the group outlines, as lines a *centered* knockout would bury.
+    let mut frame_edges: Vec<(bool, f32, f32, f32)> = Vec::new();
+    for gi in 0..diagram.groups.len() {
+        let (x, y, w, h) = geom.frame(gi);
+        frame_edges.push((true, y, x, x + w));
+        frame_edges.push((true, y + h, x, x + w));
+        frame_edges.push((false, x, y, y + h));
+        frame_edges.push((false, x + w, y, y + h));
     }
     let label_world = LabelWorld {
         nodes: (0..diagram.nodes.len()).map(|gi| geom.node(gi)).collect(),
         frames: label_frames,
         arrows: paths.iter().filter_map(|p| arrowhead_rect(p)).collect(),
+        frame_edges,
     };
     let labels: Vec<Option<&str>> = diagram.edges.iter().map(|e| e.label.as_deref()).collect();
     let anchors = place_labels(&labels, &paths, &label_world);
@@ -5945,7 +5964,9 @@ fn edge_waypoints(e: &OrigEdge, x: &[f32], y: &[f32], w: &[f32], h: &[f32]) -> V
 // safe); the renderer just draws the knockout rect + text at the anchor.
 //
 // The placement engine enumerates candidate anchors along the polyline
-// (offsets along the segments — centered on the line, plus the two
+// (offsets along the *visual runs* — M20.5: consecutive collinear waypoints
+// merged, since the whole-path search marks every ancestor-band crossing, lane
+// row and jog row as an explicit waypoint; centered on the line, plus the two
 // perpendicular "graze" variants whose knockout edge still crosses the line
 // while the bulk of the rect clears one side), scores each against what it
 // must dodge — other edges' segments, other labels' knockouts, node rects,
@@ -6079,6 +6100,16 @@ const NODE_OVERLAP_FLAT: f32 = 120.0;
 /// only the title text is kept clear.
 const FRAME_OVERLAP_W: f32 = 0.4;
 const FRAME_OVERLAP_FLAT: f32 = 40.0;
+/// Flat cost for a knockout **centered on** a frame's outline (M20.5): the
+/// anchor sitting within the border band of a group frame's edge, which puts
+/// the white knockout square across the drawn line and reads as a gap in the
+/// group's box. M13.1 keeps the crossing legal — this is a preference, not an
+/// obstacle, and it is deliberately small: above the midpoint term (so a
+/// tap off the line wins, `TAP_W` at a third being 2.0) and below the graze
+/// term (so nothing is forced sideways just to dodge an outline). Sized
+/// against the M20 router's longer border-parallel runs, which is what made
+/// run midpoints land on frame edges in the first place.
+const FRAME_CENTER_COST: f32 = 4.0;
 /// The rendered arrowhead's extent along its edge's final segment, back from
 /// the tip (the renderer's `markerHeight`, 10 px with
 /// `markerUnits="userSpaceOnUse"` — so px; the marker's base sits this far
@@ -6096,23 +6127,32 @@ const ARROW_PAD: f32 = 1.0;
 /// as a broken edge (no visible target arrow).
 const ARROW_OVERLAP_W: f32 = 1.2;
 const ARROW_OVERLAP_FLAT: f32 = 80.0;
-/// Preference terms: distance from the segment midpoint (keep labels
-/// centered on their run) and the graze variants' penalty (the on-line look
-/// wins wherever nothing collides).
+/// Preference terms: distance from the run midpoint (keep labels centered on
+/// their run) and the graze variants' penalty (the on-line look wins wherever
+/// nothing collides). Both are read against [`FRAME_CENTER_COST`], which sits
+/// between them on purpose.
 const TAP_W: f32 = 6.0;
 const OFFSET_W: f32 = 8.0;
 
 /// The static obstacles a label must dodge (M13): node interiors, group
-/// frame title rects, and every rendered arrowhead's rect (see
+/// frame title rects (the *routing* rect — M20.5, see
+/// [`title_obstacle_rect`]), and every rendered arrowhead's rect (see
 /// [`arrowhead_rect`]). Deliberately absent: group frame border bands — a
-/// label may cross a group's outline (M13.1). Peer edge segments and other
-/// labels' knockouts are handled separately — the former per-edge (a label
-/// is *supposed* to break its own line), the latter by the greedy and
+/// label may cross a group's outline (M13.1). `frame_edges` carries the
+/// outlines anyway, as a *preference* source only: a knockout centered on one
+/// pays [`FRAME_CENTER_COST`] ([`rect_covers_line`]). Peer edge segments and
+/// other labels' knockouts are handled separately — the former per-edge (a
+/// label is *supposed* to break its own line), the latter by the greedy and
 /// refinement passes.
 struct LabelWorld {
     nodes: Vec<(f32, f32, f32, f32)>,
     frames: Vec<(f32, f32, f32, f32)>,
     arrows: Vec<(f32, f32, f32, f32)>,
+    /// The group frames' drawn outlines (M20.5), as `(horizontal, coordinate,
+    /// lo, hi)` edges. Not obstacles — a knockout centered on one merely pays
+    /// [`FRAME_CENTER_COST`] — so the M13.1 rule (a label may cross a group's
+    /// outline) stands while the worst placement on it is avoided.
+    frame_edges: Vec<(bool, f32, f32, f32)>,
 }
 
 /// One label's winning candidate: the anchor, its preference cost, and its
@@ -6177,28 +6217,70 @@ fn arrowhead_rect(points: &[(f32, f32)]) -> Option<(f32, f32, f32, f32)> {
     ))
 }
 
+/// The **visual runs** of a polyline (M20.5): consecutive collinear segments
+/// merged into one, so a run is the straight line the eye reads rather than
+/// the waypoint list the router emitted.
+///
+/// The whole-path search (M20.3/M20.4) marks *every* ancestor-band crossing,
+/// every lane row and every jog row as an explicit waypoint, so one drawn
+/// straight run arrives as a chain of collinear segments (a `cluster` edge
+/// carries eight waypoints for three visual runs). M13's candidate generator
+/// works in "offsets along segments" — its longest-segment-first preference
+/// and its clamp (`the knockout must fit inside the segment`) are both
+/// segment-local — so on a fragmented polyline it can only ever see the short
+/// pieces, never the long run the label belongs on. Merging first restores
+/// the pre-M20 reading of "the run" without changing which waypoints are
+/// drawn.
+fn visual_runs(points: &[(f32, f32)]) -> Vec<((f32, f32), (f32, f32))> {
+    let mut out: Vec<((f32, f32), (f32, f32))> = Vec::new();
+    for w in points.windows(2) {
+        if let Some(last) = out.last_mut() {
+            let (a, b) = *last;
+            let horizontal = (b.1 - a.1).abs() < 1e-3;
+            let collinear = if horizontal {
+                (w[1].1 - a.1).abs() < 1e-3
+            } else {
+                (w[1].0 - a.0).abs() < 1e-3
+            };
+            let contiguous = (w[0].0 - b.0).abs() < 1e-3 && (w[0].1 - b.1).abs() < 1e-3;
+            // Same direction, not merely the same line: an out-and-back spike
+            // (which the repair loop can leave on a collinear stretch) is two
+            // runs, and merging it would leave a zero-length or reversed one.
+            let forward = (w[1].0 - b.0) * (b.0 - a.0) + (w[1].1 - b.1) * (b.1 - a.1) > 0.0;
+            if collinear && contiguous && forward {
+                last.1 = w[1];
+                continue;
+            }
+        }
+        out.push((w[0], w[1]));
+    }
+    out
+}
+
 /// Candidate anchors for a label of knockout `size` along `points` (M13) —
-/// "offsets along segments": for each segment, the taps in [`LABEL_TAPS`]
-/// (clamped so the knockout fits inside the segment where it is long enough
-/// to hold it), each in up to three variants — centered on the line (the
-/// classic knockout-breaks-the-line look) and the two perpendicular grazes
-/// (the knockout's edge still crosses the line by [`LABEL_ON_LINE`], so the
-/// break reads, but its bulk clears one side — the escape hatch for a crowded
-/// parallel run). Returned in preference order — longest segment first (its
-/// midpoint is the classic choice), then by tap, on-line before the grazes —
-/// each with its preference cost; equal-cost ties in [`best_label_anchor`]
-/// go to the earlier candidate.
+/// "offsets along the run": for each **visual run** (M20.5 — [`visual_runs`],
+/// so the router's collinear crossing waypoints do not fragment the run), the
+/// taps in [`LABEL_TAPS`] (clamped so the knockout fits inside the run where
+/// it is long enough to hold it), each in up to three variants — centered on
+/// the line (the classic knockout-breaks-the-line look) and the two
+/// perpendicular grazes (the knockout's edge still crosses the line by
+/// [`LABEL_ON_LINE`], so the break reads, but its bulk clears one side — the
+/// escape hatch for a crowded parallel run). Returned in preference order —
+/// longest run first (its midpoint is the classic choice), then by tap,
+/// on-line before the grazes — each with its preference cost; equal-cost ties
+/// in [`best_label_anchor`] go to the earlier candidate.
 fn label_candidates(points: &[(f32, f32)], size: (f32, f32)) -> Vec<((f32, f32), f32)> {
-    let mut segs: Vec<(usize, f32)> = points
-        .windows(2)
+    let runs = visual_runs(points);
+    let mut segs: Vec<(usize, f32)> = runs
+        .iter()
         .enumerate()
-        .map(|(i, w)| (i, (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1)))
+        .map(|(i, (a, b))| (i, (b.0 - a.0).hypot(b.1 - a.1)))
         .filter(|&(_, l)| l > 1e-3)
         .collect();
     segs.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
     let mut out: Vec<((f32, f32), f32)> = Vec::new();
     for &(si, len) in &segs {
-        let (a, b) = (points[si], points[si + 1]);
+        let (a, b) = runs[si];
         let (ux, uy) = ((b.0 - a.0) / len, (b.1 - a.1) / len);
         // Axis-aligned (the routed case): `along` is the knockout's extent
         // along the run (rw for a horizontal one, rh for a vertical one) and
@@ -6246,9 +6328,12 @@ fn push_unique(out: &mut Vec<((f32, f32), f32)>, c: ((f32, f32), f32)) {
 /// The collision cost of putting a label's knockout rect `r` at a candidate
 /// (M13): peer edge lines hidden under it (every edge but the label's own —
 /// the knockout is *supposed* to break its own line), overlap with other
-/// labels' knockouts, node interiors, and frame borders/titles. A pure
-/// function of the rect — the preference terms ride on the candidate — so the
-/// greedy and refinement passes compare like with like.
+/// labels' knockouts, node interiors, group titles, and rendered arrowheads,
+/// plus the M20.5 preference against centering the knockout on a frame
+/// outline ([`FRAME_CENTER_COST`] / [`rect_covers_line`] — a preference, not
+/// an obstacle: M13.1 keeps a crossing legal). A pure function of the rect —
+/// the preference terms ride on the candidate — so the greedy and refinement
+/// passes compare like with like.
 fn label_cost(
     r: (f32, f32, f32, f32),
     own: usize,
@@ -6290,7 +6375,28 @@ fn label_cost(
             c += ARROW_OVERLAP_FLAT + ARROW_OVERLAP_W * a;
         }
     }
+    for &e in &world.frame_edges {
+        if rect_covers_line(r, e) {
+            c += FRAME_CENTER_COST;
+        }
+    }
     c
+}
+
+/// Does rect `r` straddle the line `e` — an axis-aligned frame edge, given as
+/// `(horizontal, coordinate, lo, hi)` — with its **center** inside the border
+/// band, i.e. is the knockout centered on the drawn outline rather than merely
+/// crossing it (M20.5)? Only the center is tested: a knockout that crosses a
+/// frame edge off-center still reads as a label sitting over a line, which is
+/// the look M13.1 licenses.
+fn rect_covers_line(r: (f32, f32, f32, f32), e: (bool, f32, f32, f32)) -> bool {
+    let (horizontal, line, lo, hi) = e;
+    let (c, a0, a1) = if horizontal {
+        (r.1 + r.3 / 2.0, r.0, r.0 + r.2)
+    } else {
+        (r.0 + r.2 / 2.0, r.1, r.1 + r.3)
+    };
+    (c - line).abs() <= BORDER_HALF + 0.5 && a0 < hi && a1 > lo
 }
 
 /// The minimum-total-cost candidate for one label. Ties go to the earlier
@@ -6331,17 +6437,19 @@ fn fallback_label_anchor(points: &[(f32, f32)]) -> (f32, f32) {
     if points.len() == 1 {
         return points[0];
     }
-    let mut best_i = 0usize;
+    // The longest *visual run* (M20.5), so the fallback agrees with
+    // [`label_candidates`] about which stretch of line the label belongs on.
+    let runs = visual_runs(points);
+    let mut best = (points[0], points[1.min(points.len() - 1)]);
     let mut best_len = -1.0_f32;
-    for (i, w) in points.windows(2).enumerate() {
-        let l = (w[1].0 - w[0].0).hypot(w[1].1 - w[0].1);
+    for r in &runs {
+        let l = (r.1.0 - r.0.0).hypot(r.1.1 - r.0.1);
         if l > best_len {
             best_len = l;
-            best_i = i;
+            best = *r;
         }
     }
-    let (a, b) = (points[best_i], points[best_i + 1]);
-    ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5)
+    ((best.0.0 + best.1.0) * 0.5, (best.0.1 + best.1.1) * 0.5)
 }
 
 /// Place every labeled edge's label (M13). `labels` and `paths` are in
@@ -8639,7 +8747,11 @@ src -- to="bottom" --> t
             }
             for s in &l.groups {
                 if let Some(t) = d.groups[s.index].title.as_deref() {
-                    let tr = title_text_rect((s.x, s.y, s.w, s.h), t);
+                    // M20.5: the *routing* obstacle, not the bare glyph box —
+                    // the same rect the placement engine now scores against
+                    // and the same one the search keeps clear, so the
+                    // fallback-font margin is covered by the assertion too.
+                    let tr = title_obstacle_rect(title_text_rect((s.x, s.y, s.w, s.h), t), t);
                     assert!(
                         rect_overlap_area(r, tr) <= 0.0,
                         "label {:?} covers the title {t:?} of frame #{}",
@@ -9124,6 +9236,8 @@ src -- to="bottom" --> t
             include_str!("../examples/infra.dgmr"),
             include_str!("../examples/subdirection.dgmr"),
             include_str!("../examples/sides.dgmr"),
+            include_str!("../examples/cluster.dgmr"),
+            include_str!("../examples/tencent.dgmr"),
         ] {
             let (d, l) = lay_final(src);
             assert_labels_resolved(&d, &l);
@@ -9178,6 +9292,7 @@ src -- to="bottom" --> t
         let world = LabelWorld {
             nodes: Vec::new(),
             frames: Vec::new(),
+            frame_edges: Vec::new(),
             arrows: Vec::new(),
         };
         let anchors = place_labels(&labels, &paths, &world);
@@ -9197,6 +9312,7 @@ src -- to="bottom" --> t
         let world = LabelWorld {
             nodes: Vec::new(),
             frames: Vec::new(),
+            frame_edges: Vec::new(),
             arrows: arrowhead_rect(&path).into_iter().collect(),
         };
         let anchors = place_labels(&labels, std::slice::from_ref(&path), &world);
@@ -9234,6 +9350,7 @@ src -- to="bottom" --> t
         let world = LabelWorld {
             nodes: Vec::new(),
             frames: Vec::new(),
+            frame_edges: Vec::new(),
             arrows: Vec::new(),
         };
         let anchors = place_labels(&labels, &[vec![(3.0, 4.0)], Vec::new()], &world);
@@ -9273,6 +9390,7 @@ src -- to="bottom" --> t
         let world = LabelWorld {
             nodes: Vec::new(),
             frames: Vec::new(),
+            frame_edges: Vec::new(),
             arrows: Vec::new(),
         };
         let anchors = place_labels(&labels, &paths, &world);
@@ -9294,6 +9412,236 @@ src -- to="bottom" --> t
             0.0,
             "refinement should leave the knockouts disjoint"
         );
+    }
+
+    // ---- M20.5: labels re-tuned for the whole-path router ----------------
+
+    #[test]
+    fn visual_runs_merge_collinear_waypoints() {
+        // The whole-path search emits a waypoint at *every* ancestor-band
+        // crossing and lane row, so a drawn straight run arrives as a chain
+        // of collinear segments. Three waypoints on one line are one run.
+        let pts = [(0.0, 10.0), (0.0, 30.0), (0.0, 55.0), (0.0, 90.0)];
+        assert_eq!(
+            visual_runs(&pts),
+            vec![((0.0, 10.0), (0.0, 90.0))],
+            "collinear waypoints must merge into one run"
+        );
+        // A bend splits them (each run starts at the bend point); a
+        // horizontal run merges the same way.
+        let pts = [(0.0, 10.0), (0.0, 40.0), (25.0, 40.0), (60.0, 40.0)];
+        assert_eq!(
+            visual_runs(&pts),
+            vec![
+                ((0.0, 10.0), (0.0, 40.0)),
+                ((0.0, 40.0), (60.0, 40.0)),
+            ]
+        );
+        // An out-and-back spike on a collinear stretch is *two* runs: merging
+        // it would leave a zero-length or reversed run for a label to sit on.
+        let pts = [(0.0, 0.0), (0.0, 50.0), (0.0, 30.0)];
+        assert_eq!(
+            visual_runs(&pts),
+            vec![((0.0, 0.0), (0.0, 50.0)), ((0.0, 50.0), (0.0, 30.0))]
+        );
+        // Degenerate input still yields what it can.
+        assert!(visual_runs(&[]).is_empty());
+        assert!(visual_runs(&[(1.0, 2.0)]).is_empty());
+    }
+
+    /// A label sits at the midpoint of the *visual run* it is on, not at a
+    /// tap of one of the collinear fragments the router emitted (M20.5). The
+    /// fixture reproduces the M20.4 shape that motivated the fix: one drawn
+    /// vertical run chopped into three waypoint-separated pieces, whose
+    /// longest raw piece starts a third of the way down the real run.
+    #[test]
+    fn label_sits_at_the_midpoint_of_its_visual_run() {
+        let labels = [Some("hello world"), None];
+        let paths = vec![
+            vec![
+                (0.0, 0.0),
+                (0.0, 30.0),
+                (0.0, 60.0),
+                (0.0, 200.0),
+                (80.0, 200.0),
+                (80.0, 240.0),
+            ],
+            Vec::new(),
+        ];
+        let world = LabelWorld {
+            nodes: Vec::new(),
+            frames: Vec::new(),
+            frame_edges: Vec::new(),
+            arrows: Vec::new(),
+        };
+        let anchors = place_labels(&labels, &paths, &world);
+        let (ax, ay) = anchors[0].expect("anchor");
+        // The long vertical run spans y ∈ [0, 200]; its midpoint is y = 100.
+        // The fragmented reading would have put the label at y = 85 (the
+        // midpoint of the 60→200 piece) or at a third of it.
+        assert!((ax - 0.0).abs() < 1e-3, "x off the run: {ax}");
+        assert!(
+            (ay - 100.0).abs() < 1e-2,
+            "label should sit at the visual run's midpoint (y=100), got {ay}"
+        );
+    }
+
+    /// The M20.5 re-tune must not center a knockout on a group frame's drawn
+    /// outline (the M13.1 rule still lets a label *cross* a border, but a
+    /// knockout square parked on the line reads as a gap in the group's box).
+    /// A run whose midpoint lands on the outline picks a neighbouring tap.
+    #[test]
+    fn label_is_not_centered_on_a_frame_outline() {
+        // A vertical run from y=0 to y=200 crossing a frame's top edge at
+        // y=100 — its midpoint sits exactly on the line.
+        let labels = [Some("sync"), None];
+        let paths = vec![vec![(0.0, 0.0), (0.0, 200.0)], Vec::new()];
+        let world = LabelWorld {
+            nodes: Vec::new(),
+            frames: Vec::new(),
+            // The frame's top edge: horizontal, at y=100, spanning x ∈ [-50, 50].
+            frame_edges: vec![(true, 100.0, -50.0, 50.0)],
+            arrows: Vec::new(),
+        };
+        let anchors = place_labels(&labels, &paths, &world);
+        let (_, ay) = anchors[0].expect("anchor");
+        let r = label_rect((0.0, ay), label_box("sync"));
+        assert!(
+            !rect_covers_line(r, (true, 100.0, -50.0, 50.0)),
+            "knockout centered on the frame outline at y=100: anchor y={ay}"
+        );
+        // Still on its own line, and still a near-midpoint tap.
+        assert!((ay - 100.0).abs() > 1.0, "anchor stayed on the outline: {ay}");
+        assert!((ay - 100.0).abs() < 40.0, "anchor wandered too far: {ay}");
+    }
+
+    /// `rect_covers_line` is what the preference term reads: only a knockout
+    /// whose *center* is on the line counts (a mere crossing is fine), and
+    /// only where the knockout actually spans the edge's extent.
+    #[test]
+    fn rect_covers_line_tests_the_center_only() {
+        let edge = (true, 100.0, 0.0, 200.0); // horizontal, y=100, x ∈ [0,200]
+        // Centered on the line, spanning it: covered.
+        assert!(rect_covers_line((50.0, 91.0, 40.0, 18.0), edge));
+        // Same rect pushed clear of the line's x-extent: not covered.
+        assert!(!rect_covers_line((300.0, 91.0, 40.0, 18.0), edge));
+        // Crossing the line but centered well above it: not covered (this is
+        // the M13.1 look the rule deliberately keeps).
+        assert!(!rect_covers_line((50.0, 70.0, 40.0, 18.0), edge));
+        // A vertical edge, mirrored.
+        let edge = (false, 100.0, 0.0, 200.0);
+        assert!(rect_covers_line((91.0, 50.0, 18.0, 40.0), edge));
+        assert!(!rect_covers_line((91.0, 300.0, 18.0, 40.0), edge));
+    }
+
+    /// The M20.5 title-clearance consistency: the placement engine scores
+    /// against the *routing* obstacle (the measured glyph box grown by the
+    /// viewer-fallback margin), so a knockout is kept clear of the space the
+    /// search already reserves — not just the bare glyph box.
+    #[test]
+    fn label_keeps_clear_of_the_routing_title_obstacle() {
+        // A long title, so the fallback margin is wide, and a vertical run
+        // passing just past the measured text's right edge: the bare glyph
+        // box would allow the knockout there, the grown obstacle does not.
+        let title = "Kubernetes Node Group";
+        let frame = (0.0, 0.0, 400.0, 300.0);
+        let glyphs = title_text_rect(frame, title);
+        let grown = title_obstacle_rect(glyphs, title);
+        assert!(grown.2 > glyphs.2, "the grown obstacle must be wider");
+        // A run down the strip that only the grown obstacle covers.
+        let x = glyphs.0 + glyphs.2 + (grown.2 - glyphs.2) / 2.0;
+        let paths = vec![vec![(x, 0.0), (x, 120.0)], Vec::new()];
+        let labels = [Some("sync"), None];
+        let world = LabelWorld {
+            nodes: Vec::new(),
+            frames: vec![grown],
+            frame_edges: Vec::new(),
+            arrows: Vec::new(),
+        };
+        let anchors = place_labels(&labels, &paths, &world);
+        let (ax, ay) = anchors[0].expect("anchor");
+        let r = label_rect((ax, ay), label_box("sync"));
+        assert!(
+            rect_overlap_area(r, grown) <= 0.0,
+            "knockout {r:?} still overlaps the routing title obstacle {grown:?}"
+        );
+    }
+
+    /// M20.5's sample-wide gate: on every example, each labeled edge's
+    /// anchor lies on one of its polyline's *visual runs* — the run the
+    /// whole-path router actually drew, not a fragment of it — and no
+    /// knockout is centered on a group frame's outline. This is the
+    /// contract the M20.4 polylines put at risk: they carry a waypoint per
+    /// designated frame crossing, so a label bound to raw segments could sit
+    /// on a piece that is not where the eye reads the line.
+    #[test]
+    fn labels_ride_visual_runs_and_clear_frame_outlines_on_the_samples() {
+        for src in [
+            include_str!("../examples/finance.dgmr"),
+            include_str!("../examples/infra.dgmr"),
+            include_str!("../examples/subdirection.dgmr"),
+            include_str!("../examples/sides.dgmr"),
+            include_str!("../examples/cluster.dgmr"),
+            include_str!("../examples/tencent.dgmr"),
+        ] {
+            let (d, l) = lay_final(src);
+            for (i, e) in d.edges.iter().enumerate() {
+                let Some(label) = e.label.as_deref() else {
+                    continue;
+                };
+                let p = &l.edges[i];
+                let (ax, ay) = p.label_at.expect("labeled edge has an anchor");
+                let size = label_box(label);
+                let r = label_rect((ax, ay), size);
+                let runs = visual_runs(&p.points);
+                assert!(
+                    !runs.is_empty(),
+                    "{}->{}: no visual run to place {label:?} on",
+                    e.from,
+                    e.to
+                );
+                // (1) The anchor is on some run, within the knockout's own
+                // reach across the line (an on-line tap or a graze).
+                let reach = (size.0.max(size.1) / 2.0).max(LABEL_ON_LINE);
+                assert!(
+                    runs.iter().any(|(a, b)| {
+                        let len = (b.0 - a.0).hypot(b.1 - a.1);
+                        if len < 1e-3 {
+                            return false;
+                        }
+                        let t = ((ax - a.0) * (b.0 - a.0) + (ay - a.1) * (b.1 - a.1)) / (len * len);
+                        if !(-1e-3..=1.0 + 1e-3).contains(&t) {
+                            return false;
+                        }
+                        let tc = t.clamp(0.0, 1.0);
+                        let proj = (a.0 + (b.0 - a.0) * tc, a.1 + (b.1 - a.1) * tc);
+                        (ax - proj.0).hypot(ay - proj.1) <= reach
+                    }),
+                    "{}->{}: label {label:?} at ({ax:.1},{ay:.1}) is on no visual run of {:?}",
+                    e.from,
+                    e.to,
+                    p.points
+                );
+                // (2) It is not centered on a frame's drawn outline.
+                for s in &l.groups {
+                    let (x, y, w, h) = (s.x, s.y, s.w, s.h);
+                    for edge in [
+                        (true, y, x, x + w),
+                        (true, y + h, x, x + w),
+                        (false, x, y, y + h),
+                        (false, x + w, y, y + h),
+                    ] {
+                        assert!(
+                            !rect_covers_line(r, edge),
+                            "{}->{}: label {label:?} is centered on a frame outline of #{}",
+                            e.from,
+                            e.to,
+                            s.index
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -10523,3 +10871,5 @@ B --> C
         }
     }
 }
+
+

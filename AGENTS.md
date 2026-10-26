@@ -101,6 +101,8 @@ UPDATE_SNAPSHOTS=1 cargo test         # regenerate golden .svg files (commit the
 cargo run -p gen-metrics-table       # regenerate src/metrics_table.rs (font changes; commit it)
 cargo run -- examples/infra.dgmr -o out.svg   # render one diagram
 cargo run -- examples/infra.dgmr               # print a validation summary
+cargo clippy --all-targets            # must be warning-free (dead_code = deny)
+cargo doc --no-deps                   # must be warning-free (rustdoc links)
 ```
 
 **The snapshot harness is non-obvious:** `src/render/svg.rs` zips each diagram
@@ -146,6 +148,14 @@ as the host UID:GID. See `build/README.md`.
   DejaVu-first (that would make Linux viewers see ~10% wider text than
   Windows/macOS ones). Measurement stays DejaVu-first (below), the wider
   font, so boxes never under-size for any stack member.
+- **No dead code, and no `#[allow(dead_code)]`.** `Cargo.toml` sets
+  `[lints.rust] dead_code = "deny"`; a crate-root `#![allow(dead_code)]` in
+  `main.rs` (removed at M20.6) had hidden five milestones of orphaned
+  scaffolding, so an unused `fn`/`struct`/field now fails the build instead
+  of warning. Don't add an allow to dodge it — delete the code, or wire it
+  up. Field-level allows are equally discouraged. Likewise, production code
+  carries **no env-driven debug switches**; the only sanctioned ones are the
+  `#[ignore]`d inspection tests (which read `DIAG_SRC`).
 - **Deterministic output.** `fmt()` formats floats to exactly 2 decimals; text
   is measured against the baked metrics of the **embedded** DejaVu Sans
   Regular (`src/metrics_table.rs`), never a system font. Snapshots are byte-stable across
@@ -323,11 +333,13 @@ breaks geometry):
 
 - `src/render/svg.rs` — unit checks + golden snapshots (`assert_snapshot`).
 - `src/layout.rs` — geometry/alignment/cross-boundary tests (the bulk).
-  Two `#[ignore]`d inspection tests dump a layout (`--ignored --nocapture`):
-  `_dump_infra_for_inspection` reads `DIAG_SRC` (path to a `.dgmr` file) to
-  dump an arbitrary source, `_dump_labels_for_inspection` reports edge-label
-  anchor coverage on the samples. These are the only env-driven debug
-  switches; production code has none.
+  Three `#[ignore]`d inspection helpers dump a layout (`--ignored
+  --nocapture`): `_dump_infra_for_inspection` reads `DIAG_SRC` (path to a
+  `.dgmr` file) to dump an arbitrary source, `_dump_labels_for_inspection`
+  reports edge-label anchor coverage on the samples, and `_trace_m18_stress`
+  prints the phase-2 negotiation trace for `DIAG_SRC`. These are the only
+  env-driven debug switches; production code has none (M20.6 deleted the one
+  that had crept in — a `DIAG_Q` block in `whole_path_candidate`).
 - `src/resolve.rs` — validation + error-case tests.
 - `src/text.rs` — measurement sanity tests + `font_verification` (proves the
   baked table ≡ live font lookups, exhaustively over all Unicode codepoints;

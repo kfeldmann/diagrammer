@@ -5,9 +5,9 @@
 //!
 //! The parser is written as plain functions `fn(&mut &str) -> ModalResult<T>`
 //! composed with winnow combinators. The top-level [`parse_diagram`] drives
-//! the whole grammar via [`Parser::parse`], which yields a [`ParseError`]
-//! carrying both a byte offset and accumulated context labels — these become
-//! the user-facing error message and line number.
+//! the whole grammar, and winnow's parse error carries both a byte offset and
+//! accumulated context labels — these become the user-facing error message
+//! and line number.
 
 use winnow::ascii::line_ending;
 use winnow::combinator::{cut_err, opt, peek, preceded, repeat};
@@ -178,7 +178,6 @@ fn nodespec(i: &mut &str, base: usize) -> ModalResult<RawNodeDecl> {
 
 fn edge(i: &mut &str, base: usize) -> ModalResult<RawEdgeDecl> {
     lexer::ws(i)?;
-    let off = here(i, base);
     "--".parse_next(i)?; // backtrack if there is no edge here
     let (style, label, attrs) = cut_err(|i: &mut &str| {
         if i.starts_with('>') {
@@ -202,7 +201,6 @@ fn edge(i: &mut &str, base: usize) -> ModalResult<RawEdgeDecl> {
         style,
         label,
         attrs,
-        offset: off,
     })
 }
 
@@ -231,7 +229,6 @@ fn nodelist(i: &mut &str, base: usize) -> ModalResult<RawNodeList> {
 
 fn group(i: &mut &str, base: usize) -> ModalResult<RawGroup> {
     lexer::ws(i)?;
-    let off = here(i, base);
     keyword(i, "group")?;
     lexer::ws(i)?;
     let direction = opt(direction_soft).parse_next(i)?;
@@ -261,7 +258,6 @@ fn group(i: &mut &str, base: usize) -> ModalResult<RawGroup> {
                 title,
                 attrs,
                 statements,
-                offset: off,
             });
         }
         if peek_keyword(i, "group") {
@@ -284,7 +280,6 @@ fn diagram(i: &mut &str, base: usize) -> ModalResult<RawDiagram> {
         .context(StrContext::Label("diagram header"))
         .parse_next(i)?;
     lexer::ws(i)?;
-    let dir_off = here(i, base);
     let dir = direction_required(i)?;
     lexer::ws(i)?;
     cut_err(lexer::eol)
@@ -315,7 +310,6 @@ fn diagram(i: &mut &str, base: usize) -> ModalResult<RawDiagram> {
     }
     Ok(RawDiagram {
         direction: dir,
-        direction_offset: dir_off,
         statements,
     })
 }

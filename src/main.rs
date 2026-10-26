@@ -9,7 +9,6 @@
 //! text-color attribute on nodes, edges, and groups.
 //! See [`docs/grammar.md`](../docs/grammar.md) and the milestone plan in
 //! [`docs/milestones.md`](../docs/milestones.md).
-#![allow(dead_code)]
 
 mod ast;
 mod error;

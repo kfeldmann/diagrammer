@@ -3,6 +3,13 @@ name = "diagrammer"
 version = "0.1.0"
 edition = "2024"
 
+# Keep dead code from accumulating again. M20 deleted the rep model and its
+# scaffolding; the crate-root `#![allow(dead_code)]` that used to hide the
+# leftovers (unread fields, orphaned helpers, a production `DIAG_Q` debug
+# block) is gone, so a regression must fail the build rather than warn.
+[lints.rust]
+dead_code = "deny"
+
 [workspace]
 members = ["tools/gen-metrics-table"]
 

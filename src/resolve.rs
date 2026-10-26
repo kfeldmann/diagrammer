@@ -51,8 +51,6 @@ struct GroupInfo {
     /// Enclosing group index; `None` = top level. Captured when the
     /// group is opened so the resolved model can express nesting.
     parent: Option<usize>,
-    #[allow(dead_code)]
-    offset: usize,
 }
 
 struct Ctx {
@@ -73,32 +71,21 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
         ctx.process_statement(stmt, None)?;
     }
 
-    let groups: Vec<Group> = ctx
+    let mut groups: Vec<Group> = ctx
         .groups
         .iter()
-        .enumerate()
-        .map(|(idx, sg)| {
-            let members: Vec<String> = ctx
-                .nodes
-                .iter()
-                .filter(|n| n.membership == Some(idx))
-                .map(|n| n.id.clone())
-                .collect();
-            Group {
-                title: sg.title.clone(),
-                direction: sg.direction,
-                members,
-                children: Vec::new(),
-                parent: sg.parent,
-                color: sg.color.clone(),
-                fill: sg.fill.clone(),
-                line: sg.line,
-                text: sg.text.clone(),
-            }
+        .map(|sg| Group {
+            title: sg.title.clone(),
+            direction: sg.direction,
+            children: Vec::new(),
+            parent: sg.parent,
+            color: sg.color.clone(),
+            fill: sg.fill.clone(),
+            line: sg.line,
+            text: sg.text.clone(),
         })
         .collect();
     // Populate each group's direct children (by parent link) in index order.
-    let mut groups = groups;
     for (idx, sg) in ctx.groups.iter().enumerate() {
         if let Some(p) = sg.parent {
             groups[p].children.push(idx);
@@ -167,7 +154,6 @@ impl Ctx {
             line,
             text,
             parent,
-            offset: sg.offset,
         });
         for stmt in &sg.statements {
             self.process_statement(stmt, Some(idx))?;
@@ -444,6 +430,18 @@ mod tests {
         })
     }
 
+    /// The ids of a group's direct members, derived from the nodes'
+    /// membership (the model's single source of truth: `Node::group`). A
+    /// group's members are the nodes whose `group` is this index, in
+    /// declaration order.
+    fn members(d: &Diagram, group: usize) -> Vec<&str> {
+        d.nodes
+            .iter()
+            .filter(|n| n.group == Some(group))
+            .map(|n| n.id.as_str())
+            .collect()
+    }
+
     #[test]
     fn basic_counts() {
         let d = ok(include_str!("../examples/infra.dgmr"));
@@ -452,7 +450,7 @@ mod tests {
         assert_eq!(d.edges.len(), 10);
         assert_eq!(d.groups.len(), 1);
         assert_eq!(d.groups[0].title.as_deref(), Some("Kubernetes Cluster"));
-        assert_eq!(d.groups[0].members, ["api1", "api2"]);
+        assert_eq!(members(&d, 0), ["api1", "api2"]);
     }
 
     #[test]
@@ -512,7 +510,7 @@ mod tests {
              a\n\
              end\n");
         assert_eq!(node(&d, "a").group, Some(0));
-        assert_eq!(d.groups[0].members, ["a"]);
+        assert_eq!(members(&d, 0), ["a"]);
     }
 
     #[test]
@@ -542,7 +540,7 @@ mod tests {
              end\n");
         assert_eq!(node(&d, "bus").group, Some(0));
         assert_eq!(node(&d, "queue").group, Some(0));
-        assert_eq!(d.groups[0].members, ["bus", "queue"]);
+        assert_eq!(members(&d, 0), ["bus", "queue"]);
         assert_eq!(d.groups[0].direction, Some(Direction::LeftRight));
         assert_eq!(d.edges.len(), 1);
     }
@@ -553,7 +551,7 @@ mod tests {
              group left-right \"S\"\n\
              a --> b\n\
              end\n");
-        assert_eq!(d.groups[0].members, ["a", "b"]);
+        assert_eq!(members(&d, 0), ["a", "b"]);
     }
 
     #[test]
@@ -569,7 +567,7 @@ mod tests {
              queue \"Queue\"\n");
         assert_eq!(node(&d, "bus").group, Some(0));
         assert_eq!(node(&d, "queue").group, Some(0));
-        assert_eq!(d.groups[0].members, ["bus", "queue"]);
+        assert_eq!(members(&d, 0), ["bus", "queue"]);
         assert_eq!(node(&d, "bus").label, "Event Bus");
         assert_eq!(node(&d, "queue").label, "Queue");
     }
@@ -589,8 +587,8 @@ mod tests {
              end\n");
         assert_eq!(node(&d, "a").group, Some(0));
         assert_eq!(node(&d, "b").group, Some(1));
-        assert_eq!(d.groups[0].members, ["a"]);
-        assert_eq!(d.groups[1].members, ["b"]);
+        assert_eq!(members(&d, 0), ["a"]);
+        assert_eq!(members(&d, 1), ["b"]);
         assert_eq!(d.edges.len(), 1);
     }
 
@@ -609,8 +607,8 @@ mod tests {
              end\n");
         assert_eq!(node(&d, "x").group, Some(0));
         assert_eq!(node(&d, "a").group, Some(1));
-        assert_eq!(d.groups[0].members, ["x"]);
-        assert_eq!(d.groups[1].members, ["a"]);
+        assert_eq!(members(&d, 0), ["x"]);
+        assert_eq!(members(&d, 1), ["a"]);
     }
 
     #[test]
@@ -629,8 +627,8 @@ mod tests {
         assert_eq!(d.groups[0].children, [1]);
         assert_eq!(d.groups[1].parent, Some(0));
         assert!(d.groups[1].children.is_empty());
-        assert_eq!(d.groups[0].members, Vec::<String>::new());
-        assert_eq!(d.groups[1].members, ["a"]);
+        assert!(members(&d, 0).is_empty());
+        assert_eq!(members(&d, 1), ["a"]);
     }
 
     // ---- error cases ----
@@ -844,7 +842,7 @@ mod tests {
              b\n\
              end\n");
         assert_eq!(d.groups[0].direction, Some(Direction::LeftRight));
-        assert_eq!(d.groups[0].members, ["a", "b"]);
+        assert_eq!(members(&d, 0), ["a", "b"]);
     }
 
     // ---- M11: edge side attributes (`from=` / `to=`) ----

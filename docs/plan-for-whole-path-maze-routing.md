@@ -1,5 +1,11 @@
 # Plan: Option A — whole-path maze routing (M20 series)
 
+> **Status: complete.** M20.1–M20.6 all landed; see `milestones.md` for the
+> per-milestone record. This document is the original plan, kept as the
+> design rationale — the shipped implementation matches it except where a
+> milestone records a measured deviation (notably M20.4's rejection of
+> grounding forced sides on the search).
+
 ## Design summary
 
 M20 replaces the candidate-ladder regime with a single regime: **every edge is routed by one whole-path A* search from source port to target port over a track graph, against one obstacle model.** Frame-crossing topology is a search output. Candidate generators, the rep model, and the coupled/decoupled duality are deleted. M16's soft occupancy + bounded rip-up loop survives unchanged in spirit and is re-grounded on the new router.

@@ -9,12 +9,13 @@ how the remaining work depends on itself.
 **Current position:** M0–M7.5, M9–M15, M16, M17, M18, and M19 are
 complete (M12 was absorbed by M11.5), plus the post-M13 hardening pass
 below and the post-M17 routing hardening (escape-stub spikes) recorded
-under M17. M20.1 (whole-path maze routing: foundation), M20.2 (whole-path
-search for direct internal edges), M20.3 (whole-path search for
-cross-boundary edges; rep model deleted), M20.4 (frame-crossing fan;
-pockets and the repair loop re-grounded), and M20.5 (labels re-tuned for
-the router's polylines) are complete.
-**M8 (CLI polish) and M20.6 (the M20 deletion & doc pass) remain open.**
+under M17. The whole **M20 series** is complete — M20.1 (foundation),
+M20.2 (whole-path search for direct internal edges), M20.3 (whole-path
+search for cross-boundary edges; rep model deleted), M20.4 (frame-crossing
+fan; pockets and the repair loop re-grounded), M20.5 (labels re-tuned for
+the router's polylines), and M20.6 (the deletion & doc pass) — so every
+edge is routed by the one whole-path search over the one obstacle model.
+**M8 (CLI polish) is the only open milestone.**
 
 ---
 
@@ -1575,9 +1576,16 @@ for every stub kind, including the ones M18 does not touch.
 **Blocked by:** M18 (proves the geometry it generalizes). **Blocks:**
 nothing; M8 remains the last open milestone.
 
-## ☐ M20 — Whole Path Maze Routing
+## ✅ M20 — Whole Path Maze Routing
 
-See ./plan-for-whole-path-maze-routing.md
+See ./plan-for-whole-path-maze-routing.md. Complete: one whole-path A\*
+search from source port to target port is *the* router for every unforced
+edge, over one obstacle model (node interiors, crossable ancestor-frame
+bands, solid unrelated frames, solid group titles). The rep model is gone;
+the containment tree's only routing role is the ancestor/solid
+classification. The M9/M20.4 separation pre-passes (port fan, lane
+assignment, frame-crossing fan) feed the search preferences, and M16's
+soft-occupancy rip-up loop is re-grounded on whole-path reroutes.
 
 ### ✅ M20.1 — Solid/ancestor classifier + track-graph region widening (foundation, no behavior change)
 
@@ -2053,4 +2061,104 @@ arrowhead and no group title. What changed is what the pass *sees*.
 
 **Blocked by:** nothing. **Blocks:** M20.6 (the deletion/doc pass).
 
-### [ ] M20.6 — Deletion & doc pass.
+### ✅ M20.6 — Deletion & doc pass
+
+The plan's last milestone: remove what M20.3–M20.5 orphaned, and record the
+architecture. The headline finding is that the deletions were **invisible**:
+a crate-root `#![allow(dead_code)]` in `main.rs` (plus three field-level
+`#[allow(dead_code)]` attributes) had been suppressing every dead-code warning
+in the crate, so five milestones' worth of orphaned scaffolding sat in the
+tree silently. Removing that allow surfaced the whole list at once. Nothing
+here changes routing, layout, or rendering: all twelve golden snapshots are
+**byte-identical**, and the suite is the same 226 tests, green.
+
+- [x] **Dead production surface, deleted.** Everything the compiler named
+      once the allow was lifted:
+      - `FrameClassKind` (the enum) and `FrameClass::of_frame` — the
+        two-way classifier's *reporter*; only tests read it. The
+        classification itself (`ancestors` / `solid`) is the live contract and
+        stays.
+      - `FrameClass::chains_disjoint` — a boolean no production path read
+        (only test assertions). Its seven classifier tests now pin the
+        surviving contract (`ancestors` / `solid`), which is what the router
+        actually consumes.
+      - `EdgeFrameWorld::{clear, seg_clear, cross_cost}` — a duplicate
+        clearance/cost implementation that only tests called. The tests now
+        exercise the **real** production functions instead: `seg_clear_border`
+        / `seg_clear_solid` for clearance and `Obstacles::push_cross_bands` +
+        `Obstacles::cross_cost` for the crossing penalty. This removes a second
+        copy of the frame-world rules that could silently drift from the
+        router's.
+      - `LaneGeom` — a struct never constructed (a dead sibling of
+        `LaneEdge` from the M9 lane pass).
+      - `EdgeCtx::{implicit_from, implicit_to, rep_to}` — `implicit_*` were
+        folded into `from_side` / `to_side` at construction and never read
+        again; `rep_to`'s only reader was the rep model. `rep_from` survives
+        (it still selects the lane group's peer band).
+      - `LaneEdge::{rep_from, rep_to}` — same story at the lane-pass level.
+      - `PortEnd.frame` — a boolean the deleted M16 rep-crossing fan set to
+        `true`; every construction site has passed `false` since M20.3, so the
+        branch that read it (`if ends[i].frame { 0.0 } else { cover }`) was
+        dead. Removed with the field.
+      - `FlatEdgeOut` — a three-field struct whose `from` / `to` were never
+        read; the flat engine's output is now plainly `Vec<Vec<(f32, f32)>>`
+        (parallel to the caller's edge list, which is how it was used).
+      - `ast`: `Shape::as_str`, `Style::as_str`, `EdgeSide::as_str` (no
+        callers; `Direction::as_str` stays — the CLI summary prints it),
+        `Group::members` (a denormalization of `Node::group` that only tests
+        read — the fifteen membership tests now derive the same list from the
+        single source of truth via a test helper), and the `offset` fields on
+        `RawDiagram` / `RawEdgeDecl` / `RawGroup` + `GroupInfo` that were
+        threaded through but never read (direction and attribute errors carry
+        their own offsets; a bad direction already reports the right line via
+        winnow's own parse offset).
+- [x] **A production debug block, deleted.** `whole_path_candidate` carried
+      a `std::env::var("DIAG_Q")` branch (keyed to a fixture id `s2`) that
+      `eprintln!`-dumped a hard-coded "ideal" route and its scores. That
+      violates the "production code has no env-driven debug switches"
+      invariant (the only sanctioned ones are the two `#[ignore]`d
+      `_dump_*_inspection` helpers). Gone. The two sanctioned inspection
+      helpers are untouched.
+- [x] **Dead test scaffolding, deleted.** `left_detour_setup`,
+      `frame_top_entry_x`, and `title_rect` were helpers for the deleted
+      M10 title-detour tests; nothing referenced them.
+- [x] **A guard so it cannot recur.** The crate-root `#![allow(dead_code)]`
+      is gone, and `Cargo.toml` now carries `[lints.rust] dead_code = "deny"`.
+      Verified it bites for private *and* `pub` items in this binary crate
+      (a throwaway unused `fn`/`struct` fails the build), so the next
+      orphaned helper fails CI instead of hiding.
+- [x] **Doc pass.** The two broken rustdoc links (`[`orthogonalize`]`,
+      `[`ParseError`]` — both long-deleted names) are fixed, so
+      `cargo doc` is warning-free. Comments that described live behaviour in
+      deleted vocabulary were repointed at what the code now does: the
+      port-fan construction's around-target paragraph, `pocket_rects`'s
+      "around-target / M14 decoupled bends" aside, `record_border_crossings`'s
+      "the around-target route is the one generator that still needs it"
+      (now: the search's collinear collapse), the forced-side `(M14)` aside,
+      and the module doc's orthogonal-routing paragraph (the flat waypoints
+      are the ladder's fallback shape, not what a direct edge is drawn from).
+      Historical references that explain *why* something is the way it is
+      ("the deleted title detour hand-placed its jog here") are kept — they
+      are the architecture story. `grammar-tooling` (`contrib/vim`,
+      `contrib/vscode`, `docs/grammar.md`) is untouched: no grammar changed.
+- [x] **`docs/milestones.md` architecture story.** This entry; the M20 series
+      heading is now closed; the "Current position" header and the "Blocks"
+      lines are updated.
+- **Deliverable:** suite green (226 tests + 7 ignored inspection helpers —
+      same count as M20.5, since this milestone deletes code, not coverage).
+      `cargo build`, `cargo clippy --all-targets`, and `cargo doc` are all
+      **warning-free**; the CLI also no longer leaks compiler warnings to
+      stderr (they were riding along on every `cargo run`). All twelve
+      snapshots byte-identical (md5-verified before and after), and every
+      example re-renders byte-stably across runs. Net: **~196 lines deleted
+      across `src/`** (`layout.rs` −159, `ast.rs` −28, `parser.rs` −6,
+      `resolve.rs` −2, `main.rs` −1; `cargo fmt` reflows the rest, and the
+      crate is `cargo fmt --check` clean). The source diff is deletions plus
+      doc rewording; the one non-deletion change is that the tests which pinned
+      the *deleted duplicates* were **repointed at the live functions**
+      (`EdgeFrameWorld::seg_clear`/`cross_cost` → `seg_clear_border` /
+      `seg_clear_solid` / `Obstacles::cross_cost`; `Group::members` →
+      `Node::group`), so the coverage describes the code that actually runs.
+
+**Blocked by:** nothing. **Blocks:** nothing — this closes M20. **M8** (CLI
+polish) remains the only open milestone.

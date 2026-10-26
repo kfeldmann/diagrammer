@@ -109,11 +109,12 @@
 //! ## Orthogonal edge routing (M7)
 //!
 //! Every polyline is axis-aligned. The whole-path search emits orthogonal
-//! routes directly (it walks a track graph); the flat engine's waypoints for
-//! a direct edge are passed through [`ortho_chain`], which turns each
-//! diagonal segment into a right-angle "Z" at the segment's flow midpoint.
-//! The arrowhead keeps its `orient="auto"` marker, which the axis-aligned
-//! final segment orients along a clean cardinal direction.
+//! routes directly (it walks a track graph); where a route falls back to the
+//! ladder, the flat engine's waypoints for a direct edge pass through
+//! [`ortho_chain`], which turns each diagonal segment into a right-angle "Z"
+//! at the segment's flow midpoint. The arrowhead keeps its `orient="auto"`
+//! marker, which the axis-aligned final segment orients along a clean
+//! cardinal direction.
 //!
 //! ## Edge labels (M13)
 //!
@@ -361,18 +362,12 @@ struct FlatEdge {
 struct FlatResult {
     /// Per item: `(x, y, w, h)` in the requested direction's final orientation.
     rects: Vec<(f32, f32, f32, f32)>,
-    /// Per input edge: waypoints in the final orientation, running `from` → `to`.
-    edges: Vec<FlatEdgeOut>,
+    /// Per input edge: waypoints in the final orientation, running `from` → `to`
+    /// (parallel to the caller's edge list — the caller re-pairs them with
+    /// the global edge indices it passed in).
+    edges: Vec<Vec<(f32, f32)>>,
     width: f32,
     height: f32,
-}
-
-struct FlatEdgeOut {
-    #[allow(dead_code)]
-    from: usize,
-    #[allow(dead_code)]
-    to: usize,
-    points: Vec<(f32, f32)>,
 }
 
 // ---- Compound-layout support ----
@@ -582,25 +577,20 @@ struct EdgeCtx {
     lca: Option<usize>,
     flow: FlowAxis,
     /// Forced page-space sides (`from=` / `to=`); `None` keeps the implicit
-    /// choice (M11). The request applies to the endpoint **node** only
-    /// (M14): the group frames the edge crosses keep their own implicit
-    /// sides, so a forced side never drags a frame crossing with it.
+    /// choice (M11). The request applies to the endpoint **node** only: the
+    /// group frames the edge crosses keep their own implicit sides, so a
+    /// forced side never drags a frame crossing with it.
     forced_from: Option<Side>,
     forced_to: Option<Side>,
-    /// The implicit side choice (what the flat engine / [`sides_along`] pick)
-    /// — geometrically the side facing the other representative.
-    implicit_from: Side,
-    implicit_to: Side,
     /// The effective node sides (forced override applied — literal
     /// semantics): where the endpoint nodes' ports sit.
     from_side: Side,
     to_side: Side,
-    /// The endpoints' representatives at the LCA level. The rep *ports* are
-    /// gone (M20.3 — the search routes port to port), but the
-    /// representatives still identify an edge's lane group (which LCA-level
-    /// gap it crosses).
+    /// The *source* endpoint's representative at the LCA level. The rep
+    /// *ports* are gone (M20.3 — the search routes port to port), but the
+    /// source rep still identifies an edge's lane group (which LCA-level gap
+    /// it crosses, i.e. which peers sit in the band its jog runs through).
     rep_from: ItemRef,
-    rep_to: ItemRef,
     /// The flat engine's waypoints (direct edges only; empty otherwise).
     raw: Vec<(f32, f32)>,
     /// Filled after the separation pre-passes: the endpoint nodes'
@@ -695,12 +685,9 @@ fn edge_context(geom: &Geometry, edge_infos: &[EdgeInfo], ei: usize) -> EdgeCtx 
         flow: FlowAxis::from_direction(lca_dir),
         forced_from,
         forced_to,
-        implicit_from,
-        implicit_to,
         from_side,
         to_side,
         rep_from: info.map(|i| i.rep_from).unwrap_or(ItemRef::Node(fi)),
-        rep_to: info.map(|i| i.rep_to).unwrap_or(ItemRef::Node(ti)),
         raw,
         from_port: (0.0, 0.0),
         to_port: (0.0, 0.0),
@@ -816,7 +803,6 @@ fn assemble(
             edge: ctx.ei,
             is_from: true,
             node_idx: ctx.fi,
-            frame: false,
             node_rect: ctx.from_rect,
             side: ctx.from_side,
             other_cross: cross_of(center(ctx.to_rect), ctx.from_side),
@@ -824,17 +810,13 @@ fn assemble(
             from_id: ctx.from_id.clone(),
             to_id: ctx.to_id.clone(),
         });
-        // An around-target-frame edge enters its target from a perpendicular
-        // side, so its own side node port is unused — but it is still
-        // assigned here (its detoured-fallback path needs a port of its
-        // own): the around-router reads the node geometry directly, so
-        // fanning this port neither moves the around-entry nor suppresses
-        // the around-route.
+        // The target end is gathered on the same terms: every node-side port
+        // the search may use is fanned, so two edges sharing a target side
+        // never collapse onto one coordinate.
         port_ends.push(PortEnd {
             edge: ctx.ei,
             is_from: false,
             node_idx: ctx.ti,
-            frame: false,
             node_rect: ctx.to_rect,
             side: ctx.to_side,
             other_cross: cross_of(center(ctx.from_rect), ctx.to_side),
@@ -859,8 +841,8 @@ fn assemble(
         .collect();
 
     // ---- Fill the per-edge (possibly fanned) ports from the pre-pass ------
-    // The ports come first (M14): the rep crossings — and with them the lane
-    // geometry — resolve from them.
+    // The node ports come first: the lane geometry resolves from them (their
+    // cross-coordinates are the cross-interval each cross-run spans).
     for ctx in ctxs.iter_mut() {
         let fc = sep.get(&(ctx.ei, true)).copied();
         let tc = sep.get(&(ctx.ei, false)).copied();
@@ -923,9 +905,7 @@ fn assemble(
             .collect();
         lane_edges.push(LaneEdge {
             edge: ctx.ei,
-            rep_from: ctx.rep_from,
             from_side: ctx.from_side,
-            rep_to: ctx.rep_to,
             // Flow coordinates of the two node ports (the edge's real ends).
             from_flow: cross_flow(ctx.from_port, ctx.flow).1,
             to_flow: cross_flow(ctx.to_port, ctx.flow).1,
@@ -1026,9 +1006,8 @@ fn assemble(
             .collect();
         // Deterministic order (the map's iteration order is not): sort by
         // frame index, then side, then coordinate.
-        ctx.crossing_rows.sort_by(|a, b| {
-            (a.0, a.1 as u8, a.2.to_bits()).cmp(&(b.0, b.1 as u8, b.2.to_bits()))
-        });
+        ctx.crossing_rows
+            .sort_by_key(|a| (a.0, a.1 as u8, a.2.to_bits()));
     }
 
     // ---- Routing phase: the global routing pass (M16) ---------------------
@@ -1423,19 +1402,6 @@ const LANE_ROW_SLACK: f32 = 24.0;
 /// bar: a blocked crossing row loses to a clean alternative.
 const CROSSING_DRIFT_COST: f32 = 40.0;
 
-/// The class of one group frame for one edge (M20.1), as
-/// [`FrameClass::of_frame`] reports it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum FrameClassKind {
-    /// On an endpoint's ancestor-or-self chain: perpendicular crossing
-    /// legal (a search output, M20.2+), parallel riding barred.
-    Ancestor,
-    /// Neither endpoint's ancestor: fully solid — interior and border
-    /// band; nothing may touch it. (A corridor *between* two solid frames
-    /// is open space and legal.)
-    Solid,
-}
-
 /// The per-edge frame classification (M20.1): a pure function of the
 /// containment tree and the two endpoint node indices. The containment
 /// tree's only remaining routing role in the whole-path regime (live for
@@ -1459,13 +1425,6 @@ struct FrameClass {
     ancestors: Vec<usize>,
     /// Every other group frame: fully solid, sorted by index.
     solid: Vec<usize>,
-    /// True when the two endpoints' chain heads are *disjoint* subtrees
-    /// (neither group is an ancestor-or-self of the other) — the
-    /// genuinely cross-boundary shape. False when one chain contains the
-    /// other (one endpoint nests inside the other's group) or when either
-    /// endpoint is top-level (`None` — the top level contains every
-    /// group, so no group-vs-group disjointness applies).
-    chains_disjoint: bool,
 }
 
 /// Does the ancestor-or-self chain of `node_group` (innermost first)
@@ -1505,24 +1464,7 @@ impl FrameClass {
         }
         ancestors.sort_unstable();
         solid.sort_unstable();
-        Self {
-            ancestors,
-            solid,
-            chains_disjoint: fg.is_some()
-                && tg.is_some()
-                && fg != tg
-                && !chain_contains(groups, fg, tg.unwrap())
-                && !chain_contains(groups, tg, fg.unwrap()),
-        }
-    }
-
-    /// The class of one frame index.
-    fn of_frame(&self, g: usize) -> FrameClassKind {
-        if self.ancestors.binary_search(&g).is_ok() {
-            FrameClassKind::Ancestor
-        } else {
-            FrameClassKind::Solid
-        }
+        Self { ancestors, solid }
     }
 }
 
@@ -1556,43 +1498,6 @@ impl EdgeFrameWorld {
             class,
         }
     }
-
-    /// Is the polyline clear of the *frame* world alone: every ancestor
-    /// band (designated-crossing semantics, [`seg_clear_border`]) and
-    /// every solid frame rect (full [`ROUTE_PAD`] clearance,
-    /// [`seg_clear_solid`], like a node interior)? The routing phase adds
-    /// peer occupancy on top; this predicate is the frame contribution the
-    /// whole-path search (M20.2+) scores against.
-    fn clear(&self, pts: &[(f32, f32)]) -> bool {
-        pts.windows(2).all(|w| self.seg_clear(w[0], w[1]))
-    }
-
-    /// One segment against the frame world alone.
-    fn seg_clear(&self, p0: (f32, f32), p1: (f32, f32)) -> bool {
-        self.ancestor_bands
-            .iter()
-            .all(|&b| seg_clear_border(p0, p1, b))
-            && self.solid.iter().all(|&r| seg_clear_solid(p0, p1, r))
-    }
-
-    /// The routing cost of a polyline against the frame world: a
-    /// [`FRAME_CROSS_PENALTY`] per mid-segment perpendicular crossing of
-    /// an ancestor band. A segment *ending* on a band's centerline is a
-    /// designated crossing (a port or a recorded waypoint), not a mid-run
-    /// transversal, and is free — matching [`seg_clear_border`]'s
-    /// designated-crossing exemption.
-    fn cross_cost(&self, pts: &[(f32, f32)]) -> f32 {
-        pts.windows(2)
-            .map(|w| {
-                self.ancestor_bands
-                    .iter()
-                    .filter(|&&b| band_crossing(w[0], w[1], b).is_some())
-                    .count() as f32
-                    * FRAME_CROSS_PENALTY
-            })
-            .sum()
-    }
-
 }
 
 /// The widened region a whole-path search routes in (M20.1): the frame
@@ -1900,18 +1805,6 @@ fn whole_path_candidate(
         rows
     };
     let search = whole_path_route(a, b, &fw, &wj, esc, &nodes, canvas);
-    if std::env::var("DIAG_Q").is_ok() && ctx.from_id == "s2" {
-        let ideal = [(a.0, a.1), (a.0, 95.75), (160.92911, 95.75), (160.92911, 129.5), (160.92911, 155.5), (b.0, 155.5), (b.0, b.1)];
-        eprintln!("[q] ideal clear={} score={}", wj.clear(&ideal), route_score(&ideal, &wj));
-        eprintln!("[q] found clear={} score={} pts={:?}", wj.clear(&search), route_score(&search, &wj), search);
-        eprintln!("[q] jog={:?} lane={:?} cross={:?}", wj.jog_rows, wj.lane_row, wj.crossing_rows);
-        let region = around_region(&fw, &nodes, canvas);
-        eprintln!("[q] region={region:?}");
-        // reachability of the crossing corner
-        for &(x, y) in &[(160.92911f32, 95.75f32), (160.92911, 129.5f32), (160.92911, 155.5f32)] {
-            eprintln!("[q] ({x:.2},{y:.2}) clear-from-source? seg(150.93,95.75)->({x:.2},{y:.2})={}", wj.seg_clear((150.92911,95.75),(x,y)));
-        }
-    }
     if search.is_empty() || !world.clear(&search) {
         return None;
     }
@@ -2453,10 +2346,10 @@ fn layout_level(
     // waypoints (in this level's local space). Cross-boundary edges (whose
     // reps include a compound) are skipped here and drawn later as straight
     // lines in `assemble`.
-    for (j, fe) in flat.edges.iter().enumerate() {
+    for (j, pts) in flat.edges.iter().enumerate() {
         let gi = edge_global[j];
         if edge_infos[gi].is_direct {
-            out.edges.push((gi, fe.points.clone()));
+            out.edges.push((gi, pts.clone()));
         }
     }
 
@@ -2706,8 +2599,9 @@ fn segment_rect_interval(
 
 /// Which page-space axis an edge flows along — the rank axis after the
 /// direction transform. Vertical for top-down / bottom-up, horizontal for
-/// left-right / right-left. [`orthogonalize`] uses it to orient bends along
-/// the flow axis so the perpendicular jog lands between ranks (or in a frame's
+/// left-right / right-left. The routing vocabulary ([`cross_flow`] /
+/// [`with_flow`], lane rows, jog rows) reads it to orient bends along the
+/// flow axis so a perpendicular jog lands between ranks (or in a frame's
 /// padding), clear of node interiors.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum FlowAxis {
@@ -3353,11 +3247,10 @@ fn rides_exactly(p0: (f32, f32), p1: (f32, f32), r: (f32, f32, f32, f32)) -> boo
 /// endpoint — the swept rect of the *actual* terminal approach segment
 /// (first and last, truncated to [`PORT_RIGHT_OF_WAY`] and grown by
 /// [`PORT_CORRIDOR_PAD`]). Derived from the route itself, not the nominal
-/// side, so an edge whose real entry is perpendicular (an around-target
-/// route, M14's decoupled bends) reserves the corridor it actually uses and
-/// never blocks a sibling's straight approach through its unused nominal
-/// port. Hard for peers (no parallel riding inside), invisible to the
-/// edge's own route.
+/// side, so an edge whose real entry is perpendicular to its nominal side
+/// reserves the corridor it actually uses and never blocks a sibling's
+/// straight approach through its unused nominal port. Hard for peers (no
+/// parallel riding inside), invisible to the edge's own route.
 fn pocket_rects(pts: &[(f32, f32)]) -> Vec<(f32, f32, f32, f32)> {
     if pts.len() < 2 {
         return Vec::new();
@@ -3663,10 +3556,11 @@ fn in_band(p: (f32, f32), b: (f32, f32, f32, f32)) -> bool {
 /// Insert waypoints where an axis-aligned segment crosses a frame band's
 /// centerline transversally mid-segment, so the crossing is a designated
 /// waypoint the clearance check exempts (M11.5: crossing a frame is
-/// intentional and recorded — the within-frame stub builders already do
-/// this via `line_rect_exit` clipping; the around-target route is the one
-/// generator that still needs it). Crossings already marked by an endpoint
-/// on the centerline are left alone.
+/// intentional and recorded). The whole-path search needs it because
+/// [`track_route`]'s collinear collapse can fold a straight hop across a
+/// band into one segment *through* the band, which the clearance check would
+/// otherwise bar. Crossings already marked by an endpoint on the centerline
+/// are left alone.
 fn record_border_crossings(pts: &[(f32, f32)], bands: &[(f32, f32, f32, f32)]) -> Vec<(f32, f32)> {
     let mut out: Vec<(f32, f32)> = Vec::with_capacity(pts.len() + bands.len());
     for w in pts.windows(2) {
@@ -3904,17 +3798,6 @@ fn side_of_port(node: (f32, f32, f32, f32), p: (f32, f32)) -> Side {
     }
 }
 
-/// One cross-boundary edge's LCA geometry gathered for the lane pass.
-struct LaneGeom {
-    edge: usize,
-    rep_from: ItemRef,
-    rep_to: ItemRef,
-    from_side: Side,
-    to_side: Side,
-    rep_from_rect: (f32, f32, f32, f32),
-    rep_to_rect: (f32, f32, f32, f32),
-}
-
 /// A port-separation endpoint: one side of one edge that touches one node.
 struct PortEnd {
     edge: usize,
@@ -3929,11 +3812,6 @@ struct PortEnd {
     /// side carries ([`side_label_cover`]; 0 when unlabeled) — the fan gap
     /// grows with it (see [`label_pair_sep`]).
     cover: f32,
-    /// Whether this end sits on a rep *frame's* border (the M16 frame
-    /// rep-crossing fan) rather than on a node's side. Frame crossings host
-    /// no label knockout (labels anchor at node ports and lane runs), so
-    /// their fan gaps stay at plain [`FAN_SEP`].
-    frame: bool,
     /// M17: the owning edge's endpoint ids — a content key for sorting, so
     /// tie-breaks never fall back to the declaration order (permuting the
     /// edges must permute nothing).
@@ -4003,10 +3881,7 @@ fn separate_ports(ends: &[PortEnd]) -> std::collections::HashMap<(usize, bool), 
         // proportionally — deterministic best effort, and (unlike the old
         // push-and-clamp) never collapses two ports onto one coordinate (which
         // would stack their segments collinearly).
-        let covers: Vec<f32> = order
-            .iter()
-            .map(|&i| if ends[i].frame { 0.0 } else { ends[i].cover })
-            .collect();
+        let covers: Vec<f32> = order.iter().map(|&i| ends[i].cover).collect();
         let mut seps: Vec<f32> = (0..covers.len().saturating_sub(1))
             .map(|k| label_pair_sep(covers[k], covers[k + 1], FAN_SEP, Some(FAN_LABEL_CAP)))
             .collect();
@@ -4136,16 +4011,10 @@ fn separate_frame_crossings(
         }
         let mut order: Vec<usize> = idxs.clone();
         order.sort_by(|&a, &b| {
-            crosses[a]
-                .want
-                .total_cmp(&crosses[b].want)
-                .then_with(|| {
-                    (
-                        crosses[a].from_id.as_str(),
-                        crosses[a].to_id.as_str(),
-                    )
-                        .cmp(&(crosses[b].from_id.as_str(), crosses[b].to_id.as_str()))
-                })
+            crosses[a].want.total_cmp(&crosses[b].want).then_with(|| {
+                (crosses[a].from_id.as_str(), crosses[a].to_id.as_str())
+                    .cmp(&(crosses[b].from_id.as_str(), crosses[b].to_id.as_str()))
+            })
         });
         let mut assigned: Vec<f32> = order
             .iter()
@@ -4183,7 +4052,10 @@ fn separate_frame_crossings(
             *v = v.clamp(usable_lo, usable_hi);
         }
         for (k, &i) in order.iter().enumerate() {
-            out.insert((crosses[i].edge, crosses[i].frame, crosses[i].side), assigned[k]);
+            out.insert(
+                (crosses[i].edge, crosses[i].frame, crosses[i].side),
+                assigned[k],
+            );
         }
     }
     out
@@ -4210,11 +4082,7 @@ fn dist_to_rect(p: (f32, f32), r: (f32, f32, f32, f32)) -> f32 {
 /// along the dominant axis": a wide frame (a whole row of groups) can have
 /// its centre far from the edge's own column, so a centre comparison picks a
 /// vertical side for an edge that plainly enters through the top.
-fn frame_entry_side(
-    frame: (f32, f32, f32, f32),
-    from: (f32, f32),
-    to: (f32, f32),
-) -> Option<Side> {
+fn frame_entry_side(frame: (f32, f32, f32, f32), from: (f32, f32), to: (f32, f32)) -> Option<Side> {
     let (x, y, w, h) = frame;
     let (x1, y1) = (x + w, y + h);
     let (dx, dy) = (to.0 - from.0, to.1 - from.1);
@@ -4222,7 +4090,11 @@ fn frame_entry_side(
     // keeping only those whose meeting point lies within the side's span.
     let mut hits: Vec<(f32, Side)> = Vec::new();
     let mut try_hit = |t: f32, p: (f32, f32), side: Side| {
-        if t > 1e-6 && t < 1.0 - 1e-6 && p.0 >= x - 1e-2 && p.0 <= x1 + 1e-2 && p.1 >= y - 1e-2
+        if t > 1e-6
+            && t < 1.0 - 1e-6
+            && p.0 >= x - 1e-2
+            && p.0 <= x1 + 1e-2
+            && p.1 >= y - 1e-2
             && p.1 <= y1 + 1e-2
         {
             hits.push((t, side));
@@ -4243,16 +4115,17 @@ fn frame_entry_side(
         }
     }
     // The earliest meeting point is the side the edge meets first.
-    hits.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| (a.1 as u8).cmp(&(b.1 as u8))));
+    hits.sort_by(|a, b| {
+        a.0.total_cmp(&b.0)
+            .then_with(|| (a.1 as u8).cmp(&(b.1 as u8)))
+    });
     hits.first().map(|&(_, side)| side)
 }
 
 /// One cross-boundary edge's data for lane assignment.
 struct LaneEdge {
     edge: usize,
-    rep_from: ItemRef,
     from_side: Side,
-    rep_to: ItemRef,
     from_flow: f32,
     to_flow: f32,
     /// The (separated) source port's cross-coordinate, for lane ordering.
@@ -4756,9 +4629,7 @@ fn track_search(
         let y = hts[j];
         let cost = |x1: f32, y1: f32| {
             let seg = [(x, y), (x1, y1)];
-            obs.soft_cost_seg((x, y), (x1, y1))
-                + obs.cross_cost(&seg)
-                + obs.recross_cost(&seg)
+            obs.soft_cost_seg((x, y), (x1, y1)) + obs.cross_cost(&seg) + obs.recross_cost(&seg)
         };
         if j + 1 < nh && clear(x, y, x, hts[j + 1]) {
             out.push((i, j + 1, 2, (hts[j + 1] - y).abs(), cost(x, hts[j + 1])));
@@ -5370,11 +5241,7 @@ fn layout_flat(
             .iter()
             .map(|&(px, py)| transform_point((px, py), direction, canon_h))
             .collect();
-        edges_out.push(FlatEdgeOut {
-            from: e.from,
-            to: e.to,
-            points: tpts,
-        });
+        edges_out.push(tpts);
     }
 
     let (width, height) = target_dims(canon_w, canon_h, direction);
@@ -7621,7 +7488,7 @@ n3 -- dotted --> n2 -- dotted --> n1
         }
         assert_all_finite(&l);
     }
-    // ================= M10 — title-detour robustness =================
+    // ================= M10 — title fallback-margin robustness ==========
 
     #[test]
     fn title_clear_gap_grows_with_title_length() {
@@ -7678,38 +7545,6 @@ end"#,
         text::measure("A Very Long Group Title Indeed", FRAME_TITLE_FONT_SIZE).width
     }
 
-    /// A wide-titled single-frame group with one small child `a`, plus a
-    /// cross-boundary edge `src --> a`. The frame's width is determined by
-    /// the title (the child is too narrow to widen it), and `a` sits under
-    /// the title's left half — the shape of the M10 left-side detour.
-    fn left_detour_setup() -> (crate::ast::Diagram, Layout) {
-        lay_final(
-            r#"diagram top-down
-src
-group "A Very Long Group Title Indeed"
-a
-end
-src --> a
-"#,
-        )
-    }
-
-    /// The `x` at which the `src -> a` edge crosses the frame's top edge.
-    fn frame_top_entry_x(l: &Layout, s: &GroupRect, to: &str) -> f32 {
-        let e = edge_path(l, "src", to);
-        e.points
-            .iter()
-            .find(|p| (p.1 - s.y).abs() < 1e-2)
-            .unwrap_or_else(|| panic!("no connection point on the frame top: {:?}", e.points))
-            .0
-    }
-
-    /// The title text rect of a titled frame (top band, starting at
-    /// [`FRAME_TITLE_X`], the measured width wide, glyph height tall).
-    fn title_rect(s: &GroupRect, title: &str) -> (f32, f32, f32, f32) {
-        let tw = text::measure(title, FRAME_TITLE_FONT_SIZE).width;
-        (s.x + FRAME_TITLE_X, s.y + 2.0, tw, FRAME_TITLE_H - 6.0)
-    }
     // ================= M5.5 — centered block alignment =================
 
     /// Horizontal center of a node rect.
@@ -8806,11 +8641,11 @@ src -- to="bottom" --> t
         );
     }
 
-    /// A forced side keeps M11/M14 semantics: the port lands on the
-    /// requested side and the edge is routed by the M11 ladder, whose escape
-    /// geometry the search's free-choice port model would overwrite. The
-    /// search is therefore scoped to *unforced* direct edges until M20.4
-    /// re-grounds port selection.
+    /// A forced side keeps M11 semantics: the port lands on the requested
+    /// side and the edge is routed by the M11 escape-and-ladder, whose
+    /// outward escape the search's free-choice port model cannot express.
+    /// The search is therefore scoped to *unforced* edges (M20.4 measured the
+    /// alternative and rejected it — see the module docs).
     #[test]
     fn whole_path_search_leaves_forced_sides_to_the_ladder() {
         let (d, l) = lay_final(include_str!("../examples/sides.dgmr"));
@@ -8830,10 +8665,6 @@ src -- to="bottom" --> t
         assert!((p[0].1 - a.y).abs() < 1e-2, "port not on the forced side");
         assert!(p[1].1 < p[0].1, "the port must escape outward");
     }
-
-
-
-
 
     // ============ M20.4 — frame-crossing fan ==========================
 
@@ -8909,20 +8740,14 @@ src -- to="bottom" --> t
                     // A horizontal side (top/bottom) is crossed by a vertical
                     // segment at an x inside the side's span, with the segment
                     // spanning the side's coordinate.
-                    if (p0.0 - p1.0).abs() > 1e-3
-                        || p0.0 < g.x - 1e-2
-                        || p0.0 > g.x + g.w + 1e-2
-                    {
+                    if (p0.0 - p1.0).abs() > 1e-3 || p0.0 < g.x - 1e-2 || p0.0 > g.x + g.w + 1e-2 {
                         continue;
                     }
                     if p0.1.min(p1.1) <= coord + 1e-2 && p0.1.max(p1.1) >= coord - 1e-2 {
                         crosses.push(p0.0);
                     }
                 } else {
-                    if (p0.1 - p1.1).abs() > 1e-3
-                        || p0.1 < g.y - 1e-2
-                        || p0.1 > g.y + g.h + 1e-2
-                    {
+                    if (p0.1 - p1.1).abs() > 1e-3 || p0.1 < g.y - 1e-2 || p0.1 > g.y + g.h + 1e-2 {
                         continue;
                     }
                     if p0.0.min(p1.0) <= coord + 1e-2 && p0.0.max(p1.0) >= coord - 1e-2 {
@@ -8958,7 +8783,12 @@ src -- to="bottom" --> t
         // Both frames are unrelated to one of the edges, so each edge has
         // exactly one ancestor frame — no shared side, no fan.
         for e in &l.edges {
-            assert!(is_orthogonal(&e.points), "{}->{} not orthogonal", e.from, e.to);
+            assert!(
+                is_orthogonal(&e.points),
+                "{}->{} not orthogonal",
+                e.from,
+                e.to
+            );
         }
         assert_all_finite(&l);
     }
@@ -9432,10 +9262,7 @@ src -- to="bottom" --> t
         let pts = [(0.0, 10.0), (0.0, 40.0), (25.0, 40.0), (60.0, 40.0)];
         assert_eq!(
             visual_runs(&pts),
-            vec![
-                ((0.0, 10.0), (0.0, 40.0)),
-                ((0.0, 40.0), (60.0, 40.0)),
-            ]
+            vec![((0.0, 10.0), (0.0, 40.0)), ((0.0, 40.0), (60.0, 40.0)),]
         );
         // An out-and-back spike on a collinear stretch is *two* runs: merging
         // it would leave a zero-length or reversed run for a label to sit on.
@@ -9511,7 +9338,10 @@ src -- to="bottom" --> t
             "knockout centered on the frame outline at y=100: anchor y={ay}"
         );
         // Still on its own line, and still a near-midpoint tap.
-        assert!((ay - 100.0).abs() > 1.0, "anchor stayed on the outline: {ay}");
+        assert!(
+            (ay - 100.0).abs() > 1.0,
+            "anchor stayed on the outline: {ay}"
+        );
         assert!((ay - 100.0).abs() < 40.0, "anchor wandered too far: {ay}");
     }
 
@@ -9688,7 +9518,6 @@ src -- to="bottom" --> t
                     side: Side::Top,
                     other_cross: x,
                     cover,
-                    frame: false,
                     from_id: format!("f{k}"),
                     to_id: format!("t{k}"),
                 })
@@ -9727,9 +9556,7 @@ src -- to="bottom" --> t
                 .enumerate()
                 .map(|(k, &c)| LaneEdge {
                     edge: k,
-                    rep_from: ItemRef::Node(0),
                     from_side: Side::Bottom,
-                    rep_to: ItemRef::Node(1),
                     from_flow: 0.0,
                     to_flow: 100.0,
                     from_cross: k as f32,
@@ -10370,11 +10197,6 @@ B --> C
             "no ancestors for top-level endpoints"
         );
         assert_eq!(fc.solid, vec![0], "the only group is solid");
-        assert_eq!(fc.of_frame(0), FrameClassKind::Solid);
-        // Two top-level (`None`) endpoints share the level itself — the
-        // disjointness flag is about *group chains*, and neither endpoint
-        // has one.
-        assert!(!fc.chains_disjoint, "no group chains to be disjoint");
     }
 
     #[test]
@@ -10386,8 +10208,6 @@ B --> C
         let fc = FrameClass::of(m[0], m[1], &d.groups);
         assert_eq!(fc.ancestors, vec![0]);
         assert!(fc.solid.is_empty());
-        assert_eq!(fc.of_frame(0), FrameClassKind::Ancestor);
-        assert!(!fc.chains_disjoint, "same-group endpoints are not disjoint");
     }
 
     #[test]
@@ -10401,7 +10221,6 @@ B --> C
         // Outer=0, Inner=1 in declaration order.
         assert_eq!(fc.ancestors, vec![0, 1]);
         assert!(fc.solid.is_empty());
-        assert!(!fc.chains_disjoint, "nested endpoint shares a chain tail");
     }
 
     #[test]
@@ -10416,7 +10235,6 @@ B --> C
         let fc = FrameClass::of(m[0], m[1], &d.groups);
         assert_eq!(fc.ancestors, vec![0, 1]);
         assert!(fc.solid.is_empty());
-        assert!(fc.chains_disjoint);
     }
 
     #[test]
@@ -10431,7 +10249,6 @@ B --> C
         let fc = FrameClass::of(m[0], m[1], &d.groups);
         assert_eq!(fc.ancestors, vec![0]);
         assert_eq!(fc.solid, vec![1], "the unrelated nested frame is solid");
-        assert_eq!(fc.of_frame(1), FrameClassKind::Solid);
     }
 
     #[test]
@@ -10448,10 +10265,6 @@ B --> C
         // Root=0, L1=1, L2=2, L3=3, L2s=4.
         assert_eq!(fc.ancestors, vec![0, 1, 2, 3]);
         assert_eq!(fc.solid, vec![4]);
-        // `b` is top-level (`None`) — a top-level endpoint's chain is the
-        // empty group chain, so no group-vs-group containment applies;
-        // the sibling subtree is still solid for the edge.
-        assert!(!fc.chains_disjoint);
     }
 
     #[test]
@@ -10467,7 +10280,6 @@ B --> C
         // Root=0, Inner=1, S=2.
         assert_eq!(fc.ancestors, vec![0, 1]);
         assert_eq!(fc.solid, vec![2]);
-        assert!(!fc.chains_disjoint, "b's group contains a's group");
     }
 
     #[test]
@@ -10500,14 +10312,29 @@ B --> C
         assert_eq!(fw.class.solid, vec![2]);
         assert_eq!(fw.ancestor_bands.len(), 8, "4 bands per ancestor frame");
         assert_eq!(fw.solid, vec![(100.0, 200.0, 100.0, 100.0)]);
+        // The frame world's fields are what the router's clearance rules
+        // consume: every ancestor band obeys [`seg_clear_border`] (parallel
+        // riding barred, perpendicular crossing at a recorded waypoint
+        // legal) and every solid frame obeys [`seg_clear_solid`] (full
+        // [`ROUTE_PAD`] clearance, like a node interior).
+        let seg_clear = |p0: (f32, f32), p1: (f32, f32)| -> bool {
+            fw.ancestor_bands
+                .iter()
+                .all(|&b| seg_clear_border(p0, p1, b))
+                && fw.solid.iter().all(|&r| seg_clear_solid(p0, p1, r))
+        };
         // A route straight between the frames (a horizontal leg through
         // the open space between them) is clear of the frame world.
-        assert!(fw.seg_clear((100.0, 50.0), (200.0, 50.0)));
+        assert!(seg_clear((100.0, 50.0), (200.0, 50.0)));
         // A route riding the top band of G1 parallel is barred.
-        assert!(!fw.seg_clear((10.0, 0.0), (90.0, 0.0)));
+        assert!(!seg_clear((10.0, 0.0), (90.0, 0.0)));
         // A route through the solid frame's interior is barred.
-        assert!(!fw.seg_clear((150.0, 150.0), (150.0, 250.0)));
-        assert!(fw.cross_cost(&[(100.0, 50.0), (200.0, 50.0)]) < 1e-6);
+        assert!(!seg_clear((150.0, 150.0), (150.0, 250.0)));
+        // The ancestor bands, fed to the search as its crossable border
+        // field, cost nothing when merely crossed at a recorded waypoint.
+        let mut obs = Obstacles::empty();
+        obs.push_cross_bands(&fw.ancestor_bands);
+        assert!(obs.cross_cost(&[(100.0, 50.0), (200.0, 50.0)]) < 1e-6);
     }
 
     #[test]
@@ -10657,17 +10484,22 @@ B --> C
             level_items: std::collections::HashMap::new(),
         };
         let fw = EdgeFrameWorld::build(&geom, Some(0), None);
+        // The search's world: the ancestor bands as its crossable border
+        // field ([`Obstacles::push_cross_bands`]), which is exactly what
+        // [`edge_world`] builds and [`track_search`] costs.
+        let mut obs = Obstacles::empty();
+        obs.push_cross_bands(&fw.ancestor_bands);
         // One straight perpendicular crossing.
         let one = vec![(150.0, 50.0), (150.0, 250.0)];
         // Out-and-back: two crossings of the same band.
         let two = vec![(150.0, 50.0), (150.0, 250.0), (250.0, 250.0), (250.0, 50.0)];
-        assert!(fw.cross_cost(&one) < fw.cross_cost(&two) - FRAME_CROSS_PENALTY);
+        assert!(obs.cross_cost(&one) < obs.cross_cost(&two) - FRAME_CROSS_PENALTY);
         // And a designated-crossing end (endpoint on the centerline) is
         // free: `one` ends inside the frame, so score the same shape
         // split at the centerline — the cost counts only mid-segment
         // transversals.
         let touching = vec![(150.0, 50.0), (150.0, 150.0), (150.0, 250.0)];
-        assert!(fw.cross_cost(&touching) < fw.cross_cost(&two) - FRAME_CROSS_PENALTY);
+        assert!(obs.cross_cost(&touching) < obs.cross_cost(&two) - FRAME_CROSS_PENALTY);
     }
 
     // ---- M20.3: the search is the cross-boundary router ----
@@ -10871,5 +10703,3 @@ B --> C
         }
     }
 }
-
-

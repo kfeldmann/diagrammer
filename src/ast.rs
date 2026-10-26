@@ -52,13 +52,6 @@ impl Shape {
             _ => return None,
         })
     }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Shape::Box => "box",
-            Shape::Cylinder => "cylinder",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,15 +72,6 @@ impl Style {
             _ => return None,
         })
     }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Style::Solid => "solid",
-            Style::Dotted => "dotted",
-            Style::Dashed => "dashed",
-            Style::Thick => "thick",
-        }
-    }
 }
 
 // ---- Raw (syntactic) AST ----
@@ -95,7 +79,6 @@ impl Style {
 #[derive(Debug, Clone)]
 pub struct RawDiagram {
     pub direction: Direction,
-    pub direction_offset: usize,
     pub statements: Vec<RawStatement>,
 }
 
@@ -128,7 +111,6 @@ pub struct RawEdgeDecl {
     pub style: Option<Style>,
     pub label: Option<String>,
     pub attrs: Vec<RawAttr>,
-    pub offset: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +126,6 @@ pub struct RawGroup {
     pub title: Option<String>,
     pub attrs: Vec<RawAttr>,
     pub statements: Vec<RawStatement>,
-    pub offset: usize,
 }
 
 // ---- Resolved (validated) diagram ----
@@ -212,15 +193,6 @@ impl EdgeSide {
             _ => return None,
         })
     }
-
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            EdgeSide::Top => "top",
-            EdgeSide::Bottom => "bottom",
-            EdgeSide::Left => "left",
-            EdgeSide::Right => "right",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -229,9 +201,6 @@ pub struct Group {
     /// Per-group layout direction (M4). `None` means "inherit the
     /// effective direction of the enclosing level".
     pub direction: Option<Direction>,
-    /// Direct child node ids belonging to this group, in declaration
-    /// order. (Deeper descendants belong to their own, inner groups.)
-    pub members: Vec<String>,
     /// Indices of direct child groups, in declaration order.
     pub children: Vec<usize>,
     /// Enclosing group index; `None` means this group is top-level.

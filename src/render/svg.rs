@@ -404,7 +404,7 @@ fn shortened_points(path: &EdgePath) -> Vec<(f32, f32)> {
         let (lx, ly) = pts[n - 1];
         let dx = lx - px;
         let dy = ly - py;
-        let len = dx.hypot(dy);
+        let len = crate::layout::portable_hypot(dx, dy);
         if len > 1e-6 {
             let back = ARROW_BACKOFF.min(len - 1e-3).max(0.0);
             pts[n - 1].0 = lx - back * dx / len;
@@ -505,7 +505,7 @@ fn longest_segment_midpoint(points: &[(f32, f32)]) -> (f32, f32) {
     for (i, w) in points.windows(2).enumerate() {
         let (ax, ay) = w[0];
         let (bx, by) = w[1];
-        let l = (bx - ax).hypot(by - ay);
+        let l = crate::layout::portable_hypot(bx - ax, by - ay);
         if l > best_len {
             best_len = l;
             best_i = i;

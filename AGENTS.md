@@ -111,10 +111,18 @@ changes, regenerate with `UPDATE_SNAPSHOTS=1` and commit the updated `.svg`
 files (don't hand-edit them).
 
 **Release builds** are Docker-based and live in `build/`: one script per
-platform (`build-linux-glibc`, `build-linux-musl`, `build-mac`), sharing
-`build/debian.Dockerfile` (glibc + macOS cross via `cargo-zigbuild`) and
-`build/alpine.Dockerfile` (musl). Each mounts the project at `/work` and runs
-as the host UID:GID. See `build/README.md`.
+platform (`build-linux-glibc`, `build-linux-musl`, `build-mac`,
+`build-windows`), sharing `build/debian.Dockerfile` (glibc + macOS and Windows
+cross via `cargo-zigbuild`) and `build/alpine.Dockerfile` (musl). Each mounts
+the project at `/work` and runs as the host UID:GID. See `build/README.md`.
+
+Windows is `x86_64-pc-windows-gnu`, not `-msvc`: zig can't drive the MSVC
+linker (`/NOLOGO: unrecognized file extension`), and the gnu target
+statically links the MinGW runtime, so the `.exe` has no `libgcc_s_seh-1.dll`
+/ `libwinpthread-1.dll` beside it — its only imports are OS components. It is
+a console-subsystem PE32+ binary (stdout/stderr and exit codes work in
+`cmd`/PowerShell) and ships **unsigned**; `build/README.md` covers what that
+costs and the signing options.
 
 ## Invariants — don't break these
 
@@ -163,6 +171,40 @@ as the host UID:GID. See `build/README.md`.
   order leaking into output, system fonts). Edge-label placement (M13) is a
   fixed-order greedy pass plus one refinement pass over candidate anchors —
   keep it that way (no randomness, no iteration-order dependence).
+- **2-D distance goes through `portable_hypot`, never `f32::hypot`.** This is
+  the determinism invariant's sharpest edge: `f32::hypot` forwards to the
+  platform's libm `hypotf`, which Rust documents as "varies by platform, Rust
+  version, and can even differ within the same execution". musl computes
+  `z * sqrtf((double)x*x + (double)y*y)`; mingw-w64's narrows a double
+  `_hypot`. They differ by one ulp on ~13% of plausible layout deltas, and
+  because `fmt()` rounds to two decimals a 1-ulp difference flips a printed
+  coordinate about once per 1,500 samples — so a Windows or macOS build would
+  emit different SVGs than the Linux-built goldens while every test still
+  passed (text metrics are table-driven and never touch libm).
+  `portable_hypot` sums in `f64` and takes `f64::sqrt`, which IEEE-754
+  requires to be correctly rounded and hardware implements directly, so it is
+  bit-identical everywhere. **`f64::hypot` is not a fix** — it is libm too and
+  reproduces the same divergence. All twelve call sites go through it
+  (`layout.rs`'s edge lengths, port escapes and label-run selection, plus
+  `render/svg.rs`'s arrowhead backoff and label-segment pick — those two move
+  *drawn* coordinates). Pinned by `layout::tests::portable_hypot_*`, which
+  assert exact bit patterns for inputs where the libms disagree, and by
+  `layout::tests::no_production_code_calls_hypot`, a source-level guard that
+  fails on any `.hypot(` in production code. The guard matters because the
+  drift is invisible on any single machine — the snapshots still pass on the
+  machine that regenerated them.
+- **Input files are normalized at the read boundary (BOM + CRLF).**
+  `main::normalize_source` strips a leading UTF-8 BOM and rewrites `\r\n` to
+  `\n` — the two artifacts a Windows editor or PowerShell (`>` /
+  `Out-File`) leaves behind. The BOM matters for correctness: the lexer has no
+  rule for `U+FEFF`, so a BOM'd file otherwise dies with the useless
+  `error at line 1: diagram header`. The CRLF rewrite is not about the
+  grammar (`lexer::eol` already accepts `\r\n`); it keeps a literal `\r` from
+  a quoted `"a\r\nb"` label out of the SVG `<text>` and out of
+  `text::measure`'s width. Only a *leading* BOM is stripped (an interior
+  `U+FEFF` is label content) and a lone `\r` is left alone (the grammar never
+  sanctioned bare-CR line endings). Keep normalization here, at the one place
+  bytes become a `str`, rather than teaching the lexer about BOMs.
 - **The whole-path search is the router (M20.3).** Every *unforced*
   non-self-loop edge — direct (M20.2) and cross-boundary (M20.3) alike — is
   routed by one `whole_path_route` A* search from source node port to target
@@ -331,6 +373,9 @@ breaks geometry):
 
 ## Test layout
 
+- `src/main.rs` — `normalize_source` (BOM/CRLF) unit tests plus an end-to-end
+  check that the canonical sample parses identically in all four on-disk
+  spellings.
 - `src/render/svg.rs` — unit checks + golden snapshots (`assert_snapshot`).
 - `src/layout.rs` — geometry/alignment/cross-boundary tests (the bulk).
   Three `#[ignore]`d inspection helpers dump a layout (`--ignored

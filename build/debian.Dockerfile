@@ -1,13 +1,14 @@
 # syntax=docker/dockerfile:1
 #
-# Shared build image for the native x86_64 glibc build and the aarch64 macOS
-# cross build. Debian trixie (stable).
+# Shared build image for the native x86_64 glibc build and the macOS and
+# Windows cross builds. Debian trixie (stable).
 #
 # The build scripts select the target by passing the cargo command to
 # `docker run`:
 #
-#   build/build-linux-glibc -> cargo build    --target x86_64-unknown-linux-gnu
+#   build/build-linux-glibc -> cargo zigbuild --target x86_64-unknown-linux-gnu.2.26
 #   build/build-mac         -> cargo zigbuild --target aarch64-apple-darwin
+#   build/build-windows     -> cargo zigbuild --target x86_64-pc-windows-gnu
 #
 # The container is run with --user <host uid>:<host gid>, so nothing here
 # assumes a writable toolchain install; see build/README.md.
@@ -36,15 +37,16 @@ RUN apt-get update \
 # rustup rather than Debian's `rustc` package: the macOS cross build needs the
 # aarch64-apple-darwin std, and only rustup can add a target's std. The native
 # x86_64-unknown-linux-gnu target is listed for symmetry (it is the host's
-# default target, so adding it is a no-op).
+# default target, so adding it is a no-op). x86_64-pc-windows-gnu is the
+# Windows cross target (build/build-windows) — zig supplies the MinGW-w64 CRT
+# and import libraries, so no Windows SDK or mingw-w64 toolchain is needed.
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
       | sh -s -- -y --profile minimal --default-toolchain stable \
- && rustup target add x86_64-unknown-linux-gnu aarch64-apple-darwin
+ && rustup target add x86_64-unknown-linux-gnu aarch64-apple-darwin x86_64-pc-windows-gnu
 
 # cargo-zigbuild + Zig (via the ziglang wheel). Zig ships the libSystem stubs,
-# so no macOS SDK is needed to link this pure-Rust binary. Pin a version here
-# if you need byte-for-byte reproducible toolchains:
-#   RUN pip install --no-cache-dir --break-system-packages cargo-zigbuild==0.20.1
+# so no macOS SDK is needed to link this pure-Rust binary, and it ships the
+# MinGW-w64 CRT for the Windows cross build.
 RUN pip install --no-cache-dir --break-system-packages cargo-zigbuild
 
 WORKDIR /work

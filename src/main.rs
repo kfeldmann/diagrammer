@@ -47,13 +47,14 @@ fn main() -> ExitCode {
         }
     };
 
-    let source = match std::fs::read_to_string(&cli.input) {
+    let raw_source = match std::fs::read_to_string(&cli.input) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("error: cannot read {}: {e}", cli.input.display());
             return ExitCode::from(1);
         }
     };
+    let source = normalize_source(&raw_source);
 
     match run(&source, cli.output.as_deref()) {
         Ok(RunOutcome::Summary(s)) => {
@@ -77,6 +78,36 @@ fn main() -> ExitCode {
             eprintln!("io error: {e}");
             ExitCode::from(1)
         }
+    }
+}
+
+/// Normalize text-file artifacts a Windows editor or shell leaves behind, so a
+/// `.dgmr` written anywhere parses identically.
+///
+/// Two things get fixed, both cheap and both common enough to matter on the
+/// platform where they're produced:
+///
+/// - **A UTF-8 BOM.** Notepad and PowerShell 5.1 (`>` / `Out-File`) emit one.
+///   The lexer has no rule for `U+FEFF`, so without this a BOM'd file fails
+///   with the unhelpful `error at line 1: diagram header` — the single most
+///   likely first experience for a Windows user. (UTF-16 files are a different
+///   problem: `read_to_string` rejects them as invalid UTF-8, which is at least
+///   an honest error.)
+/// - **CRLF → LF.** `\r\n` already parses (the lexer's `eol` accepts it), so
+///   this is not a correctness fix for ordinary input; it's for the label
+///   escapes. A quoted `"a\r\nb"` keeps its literal `\r`, which then lands in
+///   the SVG `<text>` and in `text::measure`'s width, where a bare CR is not
+///   zero-width and is not normalized the way an XML parser normalizes it.
+///
+/// Normalizing here — at the one place bytes become a `str` — keeps the lexer
+/// honest about its own grammar while making line endings a non-issue for
+/// error offsets, too (`line_of` counts `\n`).
+fn normalize_source(s: &str) -> String {
+    let s = s.strip_prefix('\u{feff}').unwrap_or(s);
+    if s.contains('\r') {
+        s.replace("\r\n", "\n")
+    } else {
+        s.to_string()
     }
 }
 
@@ -159,4 +190,102 @@ fn usage(prog: &str) -> String {
          stdout; with `-o <output.svg>` it lays out the diagram and writes a\n\
          self-contained, GitHub-renderable SVG file.\n"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- Source normalization (BOM / CRLF) ----
+
+    #[test]
+    fn utf8_bom_is_stripped() {
+        assert_eq!(
+            normalize_source("\u{feff}diagram top-down\n"),
+            "diagram top-down\n"
+        );
+    }
+
+    #[test]
+    fn crlf_becomes_lf() {
+        assert_eq!(normalize_source("a\r\nb\r\n"), "a\nb\n");
+    }
+
+    #[test]
+    fn bom_and_crlf_together() {
+        assert_eq!(normalize_source("\u{feff}a\r\nb\r\n"), "a\nb\n");
+    }
+
+    #[test]
+    fn lone_cr_is_left_alone() {
+        // Classic-Mac line endings are not a Windows artifact and the lexer
+        // does not accept them; normalizing them here would silently invent
+        // line breaks the grammar never sanctioned.
+        assert_eq!(normalize_source("a\rb"), "a\rb");
+    }
+
+    #[test]
+    fn normalization_is_idempotent() {
+        for src in ["", "a\n", "a\r\n", "\u{feff}a\r\nb"] {
+            let once = normalize_source(src);
+            assert_eq!(normalize_source(&once), once, "not idempotent for {src:?}");
+        }
+    }
+
+    #[test]
+    fn only_a_leading_bom_is_stripped() {
+        // A U+FEFF *inside* the text is a (weird) label character, not a BOM;
+        // stripping it would corrupt the label rather than fix the file.
+        assert_eq!(normalize_source("a\u{feff}b"), "a\u{feff}b");
+    }
+
+    // ---- End-to-end: the artifacts that actually broke parsing ----
+
+    /// The canonical sample, in the four on-disk spellings a Windows user can
+    /// plausibly produce, must all parse and resolve to the same diagram.
+    #[test]
+    fn windows_file_encodings_all_parse() {
+        let lf = include_str!("../examples/infra.dgmr");
+        let crlf = lf.replace('\n', "\r\n");
+        let bom = format!("\u{feff}{lf}");
+        let bom_crlf = format!("\u{feff}{crlf}");
+        let expected =
+            summary(run(&normalize_source(lf), None).expect("the LF baseline must parse"));
+        for (name, variant) in [("crlf", crlf), ("bom", bom), ("bom+crlf", bom_crlf)] {
+            let got = summary(
+                run(&normalize_source(&variant), None)
+                    .unwrap_or_else(|e| panic!("{name} spelling failed to parse: {e:?}")),
+            );
+            assert_eq!(got, expected, "{name} spelling resolved differently");
+        }
+    }
+
+    /// A `\r\n` inside a quoted label used to leak a literal CR into the SVG
+    /// text (and into `text::measure`'s width). After normalization the label
+    /// is a clean two-line `<tspan>`.
+    #[test]
+    fn crlf_inside_a_label_does_not_leak_a_cr_into_the_svg() {
+        let src = normalize_source("diagram top-down\r\n\r\na \"L1\r\nL2\" --> b\r\n");
+        let svg = render(&src);
+        assert!(!svg.contains('\r'), "a CR survived into the SVG: {svg:?}");
+        assert!(
+            svg.contains(">L1<tspan") && svg.contains(">L2</tspan>"),
+            "the label did not become a clean two-line tspan: {svg}"
+        );
+    }
+
+    /// Render `src` the way `run` would with `-o`, without touching the disk.
+    fn render(src: &str) -> String {
+        let raw = crate::parser::parse_diagram(src).expect("parse");
+        let diagram = crate::resolve::resolve(&raw).expect("resolve");
+        let layout = crate::layout::layout(&diagram);
+        crate::render::svg::render_svg(&diagram, &layout)
+    }
+
+    fn summary(outcome: RunOutcome) -> String {
+        match outcome {
+            RunOutcome::Summary(s) => s,
+            RunOutcome::Wrote(p) => format!("wrote {}", p.display()),
+        }
+    }
 }

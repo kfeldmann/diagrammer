@@ -35,6 +35,7 @@ Docker-based cross-platform release builds live in [`build/`](build):
 build/build-linux-glibc   # x86_64 glibc (shared)
 build/build-linux-musl    # x86_64 musl (shared)
 build/build-mac           # aarch64 macOS
+build/build-windows       # x86_64 Windows (diagrammer.exe)
 ```
 
 See [`build/README.md`](build/README.md) for details.

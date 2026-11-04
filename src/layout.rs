@@ -3261,7 +3261,7 @@ fn pocket_rects(pts: &[(f32, f32)]) -> Vec<(f32, f32, f32, f32)> {
         // pocket needs reserving).
         let dx = prev.0 - port.0;
         let dy = prev.1 - port.1;
-        let len = (dx.hypot(dy)).max(1e-6);
+        let len = portable_hypot(dx, dy).max(1e-6);
         let d = PORT_RIGHT_OF_WAY.min(len);
         let q = (port.0 + dx / len * d, port.1 + dy / len * d);
         segment_rect(port, q, PORT_CORRIDOR_PAD)
@@ -4061,6 +4061,33 @@ fn separate_frame_crossings(
     out
 }
 
+/// Euclidean length of the vector `(x, y)` — the one 2-D distance primitive,
+/// used for edge lengths, port escapes, and label-run selection.
+///
+/// **Why not `f32::hypot`?** Because it is *not* portable, and this crate's
+/// output must be byte-identical across machines. `f32::hypot` is documented
+/// as "non-deterministic … varies by platform, Rust version, and can even
+/// differ within the same execution" — it forwards to the platform's libc
+/// `hypotf`, and the libms genuinely disagree. musl computes
+/// `z * sqrtf((double)x*x + (double)y*y)`; mingw-w64's `hypotf` narrows a
+/// `_hypot` (double) result. They differ by one ulp on roughly 13% of
+/// plausible layout deltas, and since the renderer's `fmt` rounds to two
+/// decimals, a 1-ulp difference flips a printed coordinate about once per
+/// 1,500 samples. That would break the determinism invariant for any Windows
+/// (or macOS) build while the Linux-built snapshots still passed, because text
+/// metrics are table-driven and never touch libm.
+///
+/// Computing the sum in `f64` and taking `f64::sqrt` is bit-identical on every
+/// target: IEEE-754 requires `sqrt` to be correctly rounded, and hardware
+/// provides it directly (`sqrtsd`/`fsqrt`), so no libm is consulted. The `f64`
+/// intermediate also keeps the sum from overflowing/underflowing for the
+/// pixel-scale magnitudes this crate works in. (`f64::hypot` would *not* do:
+/// it is libm too, and reproduces the same divergence.)
+pub(crate) fn portable_hypot(x: f32, y: f32) -> f32 {
+    let (x, y) = (x as f64, y as f64);
+    (x * x + y * y).sqrt() as f32
+}
+
 /// Is `p` inside rect `r` (inclusive of its boundary)?
 fn rect_contains_point(r: (f32, f32, f32, f32), p: (f32, f32)) -> bool {
     p.0 >= r.0 - 1e-2 && p.0 <= r.0 + r.2 + 1e-2 && p.1 >= r.1 - 1e-2 && p.1 <= r.1 + r.3 + 1e-2
@@ -4070,7 +4097,7 @@ fn rect_contains_point(r: (f32, f32, f32, f32), p: (f32, f32)) -> bool {
 fn dist_to_rect(p: (f32, f32), r: (f32, f32, f32, f32)) -> f32 {
     let dx = (r.0 - p.0).max(0.0).max(p.0 - (r.0 + r.2));
     let dy = (r.1 - p.1).max(0.0).max(p.1 - (r.1 + r.3));
-    dx.hypot(dy)
+    portable_hypot(dx, dy)
 }
 
 /// Which side of frame `frame` does the edge from `from` to `to` cross
@@ -6046,7 +6073,7 @@ fn rect_overlap_area(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> f32 {
 /// knockout placed there would cover of that line (Liang–Barsky via
 /// [`segment_rect_interval`]).
 fn segment_covered_len(p0: (f32, f32), p1: (f32, f32), r: (f32, f32, f32, f32)) -> f32 {
-    let len = (p1.0 - p0.0).hypot(p1.1 - p0.1);
+    let len = portable_hypot(p1.0 - p0.0, p1.1 - p0.1);
     match segment_rect_interval(p0, p1, r) {
         Some((t0, t1)) if t1 > t0 => (t1 - t0).min(1.0) * len,
         _ => 0.0,
@@ -6065,7 +6092,7 @@ fn arrowhead_rect(points: &[(f32, f32)]) -> Option<(f32, f32, f32, f32)> {
         return None;
     }
     let (tip, prev) = (points[n - 1], points[n - 2]);
-    let len = (tip.0 - prev.0).hypot(tip.1 - prev.1);
+    let len = portable_hypot(tip.0 - prev.0, tip.1 - prev.1);
     if len < 1e-3 {
         return None;
     }
@@ -6141,7 +6168,7 @@ fn label_candidates(points: &[(f32, f32)], size: (f32, f32)) -> Vec<((f32, f32),
     let mut segs: Vec<(usize, f32)> = runs
         .iter()
         .enumerate()
-        .map(|(i, (a, b))| (i, (b.0 - a.0).hypot(b.1 - a.1)))
+        .map(|(i, (a, b))| (i, portable_hypot(b.0 - a.0, b.1 - a.1)))
         .filter(|&(_, l)| l > 1e-3)
         .collect();
     segs.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(&b.0)));
@@ -6310,7 +6337,7 @@ fn fallback_label_anchor(points: &[(f32, f32)]) -> (f32, f32) {
     let mut best = (points[0], points[1.min(points.len() - 1)]);
     let mut best_len = -1.0_f32;
     for r in &runs {
-        let l = (r.1.0 - r.0.0).hypot(r.1.1 - r.0.1);
+        let l = portable_hypot(r.1.0 - r.0.0, r.1.1 - r.0.1);
         if l > best_len {
             best_len = l;
             best = *r;
@@ -6378,6 +6405,110 @@ mod tests {
     use crate::ast::Shape;
     use crate::parser;
     use crate::resolve;
+
+    // ---- portable_hypot: platform-independent 2-D distance --------------
+
+    /// `portable_hypot` must be the *correctly rounded* length, because that
+    /// is what makes it reproducible across platforms. `f32::hypot` is not —
+    /// it is the platform's libm `hypotf`, and musl's and mingw-w64's differ
+    /// by an ulp. These pin the exact bit patterns for inputs where the two
+    /// disagree, so a regression to `f32::hypot` (or to `f64::hypot`, which
+    /// is libm too) fails here rather than in a snapshot on someone else's
+    /// machine.
+    #[test]
+    fn portable_hypot_is_correctly_rounded_not_libm() {
+        // Each of these has a libm `hypotf` result one ulp away from the
+        // correctly rounded value on musl (measured, not invented).
+        for &(x, y, expected) in &[
+            (246.831_f32, 300.721_f32, 0x43c2_8632_u32),
+            (299.194_f32, 266.28_f32, 0x43c8_437d),
+            (536.543_f32, 187.543_f32, 0x440e_1809),
+            (530.713_f32, 736.706_f32, 0x4462_fd77),
+            (474.839_f32, 250.774_f32, 0x4406_3f72),
+            (32.235_f32, 12.971_f32, 0x420a_fcc1),
+        ] {
+            assert_eq!(
+                portable_hypot(x, y).to_bits(),
+                expected,
+                "portable_hypot({x}, {y}) drifted from its pinned bits"
+            );
+        }
+    }
+
+    /// The usual suspects: symmetry, zero, and the degenerate cases the
+    /// router actually produces (a straight run has a zero component).
+    #[test]
+    fn portable_hypot_matches_elementary_cases() {
+        assert_eq!(portable_hypot(0.0, 0.0), 0.0);
+        assert_eq!(portable_hypot(3.0, 4.0), 5.0);
+        assert_eq!(portable_hypot(-3.0, -4.0), 5.0);
+        assert_eq!(portable_hypot(0.0, -7.5), 7.5);
+        assert_eq!(portable_hypot(12.0, 0.0), 12.0);
+        // Symmetric: the formula squares both, so argument order is inert.
+        for &(x, y) in &[(246.831_f32, 300.721_f32), (0.5, 1234.25)] {
+            assert_eq!(
+                portable_hypot(x, y).to_bits(),
+                portable_hypot(y, x).to_bits()
+            );
+        }
+    }
+
+    /// It must be a pure function of its inputs — the property the whole
+    /// determinism invariant rests on. Repeated calls in one process agree
+    /// bit for bit.
+    #[test]
+    fn portable_hypot_is_deterministic() {
+        let mut seed = 0x1234_5678_u64;
+        let mut rnd = || {
+            seed = seed
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32) / (u32::MAX as f32 / 2.0)
+        };
+        for _ in 0..10_000 {
+            let (x, y) = (rnd() * 800.0, rnd() * 800.0);
+            let a = portable_hypot(x, y).to_bits();
+            let b = portable_hypot(x, y).to_bits();
+            assert_eq!(a, b, "portable_hypot({x}, {y}) is not stable");
+        }
+    }
+
+    /// No production code may call `f32::hypot`/`f64::hypot` directly — both
+    /// are platform libm and reintroduce the cross-platform drift
+    /// [`portable_hypot`] exists to prevent. This is a source-level guard
+    /// because the drift is *invisible* on any single machine: the snapshots
+    /// would still pass on the machine that regenerated them.
+    #[test]
+    fn no_production_code_calls_hypot() {
+        // Built at runtime so this test's own source can't match the needle.
+        let needle = format!(".{}(", "hypot");
+        let mut offenders = Vec::new();
+        for (name, src) in [
+            ("layout.rs", include_str!("layout.rs")),
+            ("render/svg.rs", include_str!("render/svg.rs")),
+            ("main.rs", include_str!("main.rs")),
+            ("text.rs", include_str!("text.rs")),
+            ("resolve.rs", include_str!("resolve.rs")),
+            ("parser.rs", include_str!("parser.rs")),
+            ("lexer.rs", include_str!("lexer.rs")),
+            ("ast.rs", include_str!("ast.rs")),
+            ("error.rs", include_str!("error.rs")),
+        ] {
+            // Stop at the test module: test code may legitimately exercise
+            // the distinction (the pinned-bits test names it in a message).
+            let production = src.split("\n#[cfg(test)]\n").next().unwrap_or(src);
+            for (lineno, line) in production.lines().enumerate() {
+                if line.contains(&needle) && !line.trim_start().starts_with("//") {
+                    offenders.push(format!("{name}:{}: {}", lineno + 1, line.trim()));
+                }
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "use portable_hypot instead of the platform-dependent hypot:\n{}",
+            offenders.join("\n")
+        );
+    }
 
     // ---- M20.1: solid/ancestor classifier + track-region widening ------
 
@@ -9435,7 +9566,7 @@ src -- to="bottom" --> t
                 let reach = (size.0.max(size.1) / 2.0).max(LABEL_ON_LINE);
                 assert!(
                     runs.iter().any(|(a, b)| {
-                        let len = (b.0 - a.0).hypot(b.1 - a.1);
+                        let len = portable_hypot(b.0 - a.0, b.1 - a.1);
                         if len < 1e-3 {
                             return false;
                         }
@@ -9445,7 +9576,7 @@ src -- to="bottom" --> t
                         }
                         let tc = t.clamp(0.0, 1.0);
                         let proj = (a.0 + (b.0 - a.0) * tc, a.1 + (b.1 - a.1) * tc);
-                        (ax - proj.0).hypot(ay - proj.1) <= reach
+                        portable_hypot(ax - proj.0, ay - proj.1) <= reach
                     }),
                     "{}->{}: label {label:?} at ({ax:.1},{ay:.1}) is on no visual run of {:?}",
                     e.from,

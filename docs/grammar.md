@@ -106,6 +106,14 @@ literal, e.g. `"API Server #1"`.
 
 `#` to end of line, ignored everywhere except inside strings.
 
+### File encoding and line endings
+
+Source files are **UTF-8**. A leading UTF-8 BOM (`EF BB BF`) is accepted and
+stripped, and both `LF` and `CRLF` line endings work — so a `.dgmr` written by
+Notepad or PowerShell parses the same as one written on Linux. A UTF-16 file is
+rejected as invalid UTF-8. Normalization happens once, when the file is read,
+not in the lexer; a lone `CR` is *not* a line ending.
+
 ## Reserved words
 
 Only `diagram`, `group`, and `end` are fully reserved as identifiers.

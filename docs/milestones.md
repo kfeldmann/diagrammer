@@ -17,6 +17,53 @@ the router's polylines), and M20.6 (the deletion & doc pass) — so every
 edge is routed by the one whole-path search over the one obstacle model.
 **M8 (CLI polish) is the only open milestone.**
 
+Also complete: the **Windows portability pass** (recorded in full below) —
+`build/build-windows` cross-compiles a self-contained `diagrammer.exe`, and
+two Windows-input/portability defects it surfaced are fixed (a
+platform-dependent `f32::hypot` in the geometry, and unnormalized BOM/CRLF
+source files).
+
+---
+
+## ✅ Windows portability pass
+
+Cross-compiling for Windows turned out to be the easy part; auditing *what
+the binary would compute* found a real determinism bug.
+
+- [x] **`build/build-windows`** — `x86_64-pc-windows-gnu` via `cargo
+      zigbuild` in the shared Debian image. Verified: console-subsystem
+      PE32+ x86_64, stripped, no `.pdb`, and **no MinGW runtime DLLs** beside
+      it (only OS imports: `KERNEL32`, `ntdll`, `WS2_32`, `USERENV`,
+      `bcryptprimitives`, `api-ms-win-crt-*`). `-gnu` rather than `-msvc`
+      because zig cannot drive the MSVC linker (`/NOLOGO: unrecognized file
+      extension`).
+- [x] **`f32::hypot` → `portable_hypot`.** The one platform-dependent thing
+      in the whole crate, and it silently broke the determinism invariant:
+      `f32::hypot` is the platform's libm `hypotf`, and musl's
+      (`z*sqrtf((double)x*x + (double)y*y)`) and mingw-w64's (a narrowed
+      `_hypot`) disagree by an ulp on ~13% of plausible layout deltas —
+      which, at `fmt`'s 2 decimals, flips a printed coordinate about once per
+      1,500 samples. Fixed by summing in `f64` and taking `f64::sqrt` (IEEE
+      correctly rounded, hardware-implemented, so identical everywhere).
+      **`f64::hypot` is not a fix** — it is libm too. Ten call sites in
+      `layout.rs` and two in `render/svg.rs` (the latter also affect drawn
+      coordinates: the arrowhead backoff and the label-segment pick).
+      Guarded by `no_production_code_calls_hypot`, a source-level test —
+      necessary because the drift is invisible on any one machine.
+- [x] **BOM + CRLF normalization** (`main::normalize_source`). A UTF-8 BOM —
+      what Notepad and PowerShell's `>` / `Out-File` emit — made every file
+      fail with the useless `error at line 1: diagram header`, since the
+      lexer has no `U+FEFF` rule. CRLF already parsed; the rewrite is for
+      label escapes, where a quoted label containing a CRLF leaked a literal
+      CR into the SVG `<text>` and into `text::measure`'s width. Only a
+      *leading* BOM is stripped and a lone `CR` is left alone.
+- [x] **Signing: deliberately unsigned.** Documented in `build/README.md`
+      (what it costs, and the SignPath/Azure/OV/EV options). Notably, EV
+      certs no longer bypass SmartScreen (2024 change), and any new signature
+      starts at zero reputation.
+- [x] Snapshots re-verified **byte-identical** after the `portable_hypot`
+      swap — the fix is a no-op on current output.
+
 ---
 
 ## ✅ M0 — Grammar spec

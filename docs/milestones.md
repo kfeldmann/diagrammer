@@ -15,7 +15,12 @@ search for cross-boundary edges; rep model deleted), M20.4 (frame-crossing
 fan; pockets and the repair loop re-grounded), M20.5 (labels re-tuned for
 the router's polylines), and M20.6 (the deletion & doc pass) — so every
 edge is routed by the one whole-path search over the one obstacle model.
-**M8 (CLI polish) is the only open milestone.**
+
+Two milestones are open, and they are independent of each other:
+**M21 (page furniture — border, title block, text blocks)**, the next one,
+and **M8 (CLI polish)**. M21 is a pure post-routing decoration pass: it
+adds no graph participant, touches no router, and leaves every existing
+diagram byte-identical.
 
 Also complete: the **Windows portability pass** (recorded in full below) —
 `build/build-windows` cross-compiles a self-contained `diagrammer.exe`, and
@@ -461,7 +466,234 @@ geometry is untouched.
 **Blocked by:** M3 (rendering), M6 (attribute pipeline). **Independent of:**
 M7 (orthogonal routing).
 
-## ⬜ M8 — CLI polish and extras *(the remaining milestone)*
+## ▶ M21 — Page furniture: border, title block, text blocks
+
+Grammar spec: [`grammar.md` § Page furniture](grammar.md#page-furniture).
+
+Three new statement types draw on the page *around* the diagram:
+`border` (a page frame), `titleblock` (a metadata table in the lower-right
+corner), and `textblock` (free text anchored to one of eight positions).
+They are **decoration only** — no block is a node, an edge endpoint, or a
+group member, and none joins the layout graph, the obstacle model, or the
+routing vocabulary. This is the property that keeps the milestone small: it
+is a post-routing pass over a finished [`Layout`], not a change to how
+anything is laid out.
+
+Decisions locked at design time (see the discussion this milestone came
+from):
+
+- **`border` is its own statement**, not implied by `titleblock`. "A frame
+  with no title block" is a real request, and decoupling keeps the two
+  features independent.
+- **A text block is never an edge endpoint.** That idea was dropped: an
+  anchored block is positioned from the finished canvas while an endpoint is
+  positioned by the layout engine, so the two would have needed a bounded
+  place→route→re-place loop and a new endpoint representation through
+  [`EdgeCtx`] / [`FrameClass`] / [`Obstacles`] / [`LabelWorld`]. The cheap
+  version of the same need is a `note` *node shape*, which ranks like any
+  node — a separate idea, not in this milestone.
+- **The page inset is a constant, not a consequence of `border`.** Content
+  keeps its existing ≥ [`MARGIN`] guarantee and the border sits outside it,
+  so adding or removing `border` changes no coordinate.
+- **A text block body is raw text**, not quoted strings: prose contains
+  double quotes far more often than it contains a line that is exactly
+  `end`.
+- **A duplicate anchor is an error** in this version (stacking at one anchor
+  is a later, backward-compatible relaxation).
+- **Anchors are compass words** (`top`, `upper-right`, …), mirroring
+  `group left-right`'s keyword slot and extending the `from=` / `to=` side
+  vocabulary with four corners.
+- **Title-block keys are open and verbatim** — a deliberate, documented
+  exception to "unknown attribute is an error", because a title block is a
+  metadata table whose keys the user chooses.
+
+### ☐ M21.1 — Grammar, AST, resolve, and tooling (no rendering change)
+
+The whole language change, landing with no output change at all: no
+existing diagram can contain these statements, so every snapshot stays
+byte-identical by construction.
+
+- [ ] **Lexer.** One new recognizer: a raw body line (take to the newline,
+      no `#` comment stripping, no tokenizing). Nothing else in
+      [`crate::lexer`] changes — the header and field lines reuse
+      [`crate::lexer::ident`] / `ws` / `string` unchanged.
+- [ ] **Parser.** Three statement forms at the top level, each dispatched by
+      the same `peek_keyword` pattern `group` already uses in
+      [`crate::parser::diagram`]:
+      - `border` — `keyword`, `attr*`, EOL. No body.
+      - `titleblock` — `keyword`, `attr*`, EOL; then per line `attr+` EOL
+        until `end`. Header and body share the `attr` rule, so the short
+        one-liner form (`titleblock Title="X" Company="Y"`) works and needs
+        no separate code path.
+      - `textblock` — `keyword`, `anchor`, `attr*`, EOL; then raw lines
+        until a line whose **trimmed** content is exactly `end`.
+      - `anchor` is a contextual keyword (a `peek`-then-consume on
+        [`crate::lexer::ident`] validated against the eight names), exactly
+        like [`direction_soft`] / [`shape_kw`] / [`style_kw`]. An unknown
+        anchor is a `cut_err` naming the eight legal values.
+      - A block opened but not closed (EOF before `end`) is a `cut_err`
+        naming the block, mirroring `expected \`end\` to close \`group\``.
+- [ ] **The group-body trap.** [`crate::parser::group`]'s body loop is
+      `peek_keyword("group") ? group : nodelist`, so today
+      `textblock` / `titleblock` / `border` in a group body parse as **bare
+      node declarations** (verified: `group "G"` + `textblock right` fails
+      with the unhelpful `error at line 3: end of line`, and
+      `border color="#333"` at top level is accepted as a *node*). Add an
+      explicit rejection in the group-body loop with a message that says why
+      ("`textblock` cannot be a group member"; "`border` is a page-level
+      statement"). This is the one place the new keywords must be
+      special-cased, and it is easy to miss.
+- [ ] **AST.** `RawBorder`, `RawTitleBlock` (fields as `Vec<RawAttr>`),
+      `RawTextBlock` (anchor + raw body lines), plus the matching resolved
+      `Border` / `TitleBlock` / `TextBlock` in [`crate::ast`]. `Diagram`
+      gains `border: Option<Border>`, `title_block: Option<TitleBlock>`,
+      `text_blocks: Vec<TextBlock>` — all `Option`/empty by default, so
+      nothing downstream is forced to care.
+- [ ] **Resolve.** Validation, all with offsets (the resolve layer's
+      contract):
+      - at most one `titleblock` and one `border` (duplicate → error);
+      - at most one text block per anchor (duplicate → error), and
+        `textblock lower-right` alongside a `titleblock` → error (the title
+        block owns that corner);
+      - title-block duplicate key → error; `color` / `fill` are style keys,
+        every other key is a field;
+      - `textblock` `width` must parse as a positive number;
+      - empty text-block body → error;
+      - `line` values validated against [`Style`] (as groups already do).
+- [ ] **Docs and tooling** (this is a grammar change, so all of it):
+      [`docs/grammar.md`](grammar.md) (§ Page furniture — done),
+      `contrib/vim/syntax/dgmr.vim`, and
+      `contrib/vscode/syntaxes/dgmr.tmLanguage.json`. Two things in the
+      existing highlighters need care rather than a keyword list:
+      - a **raw-body context** for the `textblock` body, so `#` is not
+        highlighted as a comment, `-->` is not highlighted as an arrow, and
+        the inline Markdown markers are not highlighted as operators;
+      - **`dgmrAttrErr` must be suppressed inside a `titleblock` body.**
+        Both highlighters flag *any* `id=` as an unknown attribute (`/\<[A-Za-z_][A-Za-z0-9_]*\ze\s*=/`
+        → `Error`). Title-block keys are open by design, so without this the
+        whole body lights up red — the tooling would contradict the spec.
+      Both files' header comments also name the reserved words
+      (`diagram`/`group`/`end`); they need the four new ones.
+- **Deliverable:** the three blocks parse and validate; rendering still
+  ignores them, so all twelve snapshots are byte-identical. Resolve tests
+  for every error above; parser tests for the raw body (a `#` line, a line
+  containing `-->`, a line containing a quoted string all survive verbatim)
+  and for the group-body rejection.
+
+**Blocked by:** nothing. **Blocks:** M21.2, M21.3.
+
+### ☐ M21.2 — Bold metrics (the cost of "**bold**")
+
+Inline bold cannot be measured with the existing table: DejaVu Sans Bold is
+materially wider than Regular. Measured from the bundled fonts (hmtx
+advance comparison over all glyphs, then whole-string ratios):
+
+| Sample | bold / regular |
+| --- | --- |
+| mixed prose (`The quick brown fox… 0123456789`) | **1.117** |
+| a title-block line (`Kubernetes Cluster — API Server 1 (replica)`) | **1.130** |
+| `iiii…` / `llll…` | **1.234** |
+
+So measuring a bold run with Regular metrics overflows a text block by
+12–23% — visible, not a rounding artifact.
+
+Italic is the opposite: DejaVu Sans Oblique has **identical** advances and
+ascent/descent to Regular for every ASCII and Latin-1 glyph except four
+(`« » Þ æ`, ≤1.4%), and ascent/descent match exactly (1901/−483), so line
+heights are unaffected. Italic therefore reuses the Regular table, which is
+consistent with the existing policy of measuring the widest plausible stack
+member — and it must be documented as a deliberate choice, not an oversight.
+
+- [ ] **Generator.** Extend `tools/gen-metrics-table` to emit **two** tables
+      (Regular and Bold) from `dejavu::sans::regular()` / `dejavu::sans::bold()`
+      (both already bundled by the `dejavu` crate). Same semantics, same
+      quirks — pixel scale `font_size / (ascent − descent)`, first horizontal
+      kerning subtable wins with zero-valued pairs treated as absent.
+      `src/metrics_table.rs` grows by ~100 KB (generated; commit it).
+- [ ] **Measurement.** A style-aware entry point in [`crate::text`]
+      (`measure_styled` over `(text, weight, slant)` runs, or a
+      `measure_run(&str, f32, Weight)` plus the existing `measure` kept
+      **bit-identical** for every current caller). Every existing call site
+      stays Regular — the node/frame/edge-label path must not move.
+- [ ] **Verification.** `font_verification` covers both tables, still
+      exhaustively over the Unicode range. Note the runtime cost: it is
+      already the slowest test in the suite (~20 s) and this doubles it —
+      acceptable, but say so rather than discovering it later.
+- **Deliverable:** `measure` byte-identical for Regular (asserted by the
+  existing bit-exact tests, which stay untouched); bold runs measurable to
+  the same standard.
+
+**Blocked by:** nothing (parallel with M21.1). **Blocks:** M21.3 (the text
+block layout needs it).
+
+### ☐ M21.3 — The `decorate` pass and the renderer
+
+A new post-routing stage. [`crate::layout::layout`] runs it after
+[`assemble`] has finished routing; it never runs before, so no block can
+influence a route.
+
+- [ ] **Band reservation.** For each occupied anchor, the block's extent
+      becomes an extra inset between the content bounding box and the page
+      border: `top`/`bottom`/`left`/`right` add to their side, a corner
+      takes from both, and a left/right band forces a minimum border height
+      (and a top/bottom band a minimum width) so a small diagram still has a
+      coherent frame. The canvas grows; content is translated uniformly.
+- [ ] **Title block geometry.** Row height = max line height + pad; label
+      column = widest key; value column = widest value; the table's bottom
+      and right edges snap to the page border. A `Title` field renders one
+      size up.
+- [ ] **Text block geometry.** Parse each raw line into inline runs
+      (`**`/`_`/`*`, nesting, `\*`/`\_`/`\\` escapes, word-boundary `_`),
+      a rule for `---`, and a paragraph gap for a blank line; measure with
+      the bold table where needed; wrap greedily to `width=` when given.
+- [ ] **`Layout` grows** `border: Option<Rect>`, `title_block: Option<Rect>`,
+      `text_blocks: Vec<BlockRect>` (rect + the placed lines/runs the
+      renderer needs). The **index-correspondence invariant** in
+      `AGENTS.md` extends to `text_blocks` ↔ `diagram.text_blocks`.
+- [ ] **Renderer draw order:** border → title block → text blocks → group
+      frames → edges → edge labels → nodes. (Blocks go under everything
+      else so a knockout or a node never gets covered; they never overlap
+      content by construction, so the order is belt-and-braces.)
+- [ ] **The empty-diagram path.** `layout_impl` early-returns when
+      `nodes.is_empty()`; the decoration must still run there, so a
+      `titleblock`-only file renders a border and a table. Needs a defined
+      minimum content region.
+- [ ] **Tests.**
+      - **Acceptance, the headline:** a diagram using none of the three
+        renders **byte-identical** — all twelve existing snapshots
+        unchanged, and `cargo test` proves it.
+      - New snapshots: `titleblock.svg`, `textblock.svg` (all eight
+        anchors), and one combined.
+      - Geometry: the border encloses every drawn object; no text block
+        overlaps a node, frame, edge waypoint, or label knockout; content
+        keeps its ≥ [`MARGIN`] clearance (the existing
+        `canvas_keeps_the_page_margin_clear_of_every_object` test gets a
+        targeted exemption for the border and title-block edges that sit
+        on the inset, and stays otherwise untouched);
+      - `border` present vs. absent produces identical coordinates for
+        everything else (the decoupling invariant, asserted directly);
+      - empty diagram with a title block; duplicate-anchor and
+        block-in-group errors surface with correct line numbers.
+- **Deliverable:** suite green, twelve old snapshots byte-identical, new
+  snapshots committed.
+
+**Blocked by:** M21.1 (grammar), M21.2 (bold measurement).
+**Blocks:** nothing.
+
+### ☐ M21.4 — Polish (optional, may fold into M21.3)
+
+- [ ] Stacking multiple blocks at one anchor (relaxes the duplicate-anchor
+      error — backward-compatible).
+- [ ] `AGENTS.md`: the pipeline line (`layout.rs → decorate`), the new
+      `Layout` fields, the page-inset constants shared with the renderer,
+      and the "unused ⇒ byte-identical" invariant.
+- [ ] `~/.clanky/skills/diagrammer/SKILL.md` — a "page furniture" section
+      (it documents the language for diagram authors).
+- [ ] CLI summary: append block counts only when present.
+
+**Blocked by:** M21.3.
+
+## ⬜ M8 — CLI polish and extras *(independent of M21)*
 
 - [ ] `--direction` flag to override the header.
 - [ ] Theme/style presets (reusable style classes — grammar slot is reserved).
@@ -1219,7 +1451,7 @@ ladder, one dispatch point — all kept).
       the port fans make rare.
 
 **Blocked by:** M11.5 (the unified regime it refines). **Blocks:** nothing
-new; M8 remains the only open milestone.
+new; M8 and M21 (added later) are the open milestones.
 
 ## ✅ M17 — Post-M16 review fixes (lane union-merge, permutation proof, #cleanup)
 
@@ -1621,7 +1853,7 @@ though the `chain.len() == 1` code shape is retired) and closes the class
 for every stub kind, including the ones M18 does not touch.
 
 **Blocked by:** M18 (proves the geometry it generalizes). **Blocks:**
-nothing; M8 remains the last open milestone.
+nothing; M8 and M21 (added later) are the open milestones.
 
 ## ✅ M20 — Whole Path Maze Routing
 
@@ -2207,5 +2439,5 @@ here changes routing, layout, or rendering: all twelve golden snapshots are
       `seg_clear_solid` / `Obstacles::cross_cost`; `Group::members` →
       `Node::group`), so the coverage describes the code that actually runs.
 
-**Blocked by:** nothing. **Blocks:** nothing — this closes M20. **M8** (CLI
-polish) remains the only open milestone.
+**Blocked by:** nothing. **Blocks:** nothing — this closes M20. The open
+milestones are now **M21** (page furniture) and **M8** (CLI polish).

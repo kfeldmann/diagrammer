@@ -39,13 +39,43 @@ group "Kubernetes Cluster"
 end
 ```
 
+A diagram may also carry page furniture — a border, a title block, and text
+blocks — none of which participate in layout or routing (see
+[Page furniture](#page-furniture)):
+
+```
+diagram top-down
+
+border color="#333"
+
+titleblock
+    Title   = "Finance: Network Architecture"
+    Company = "Big Corp, LLC"
+    Version = "0.1"
+end
+
+textblock right
+    Here is some text with _limited_ **Markdown** support.
+    Each line is a paragraph.
+    ---
+    Horizontal rules are supported.
+end
+```
+
 ## Grammar
 
 ```
 diagram     := "diagram" direction EOL statement*
 direction   := "top-down" | "bottom-up" | "left-right" | "right-left"
-statement   := nodelist | group | (blank)
-group       := "group" [direction] [string] [attr*] EOL statement* "end" EOL
+statement   := nodelist | group | border | titleblock | textblock | (blank)
+group       := "group" [direction] [string] [attr*] EOL (nodelist | group | (blank))* "end" EOL
+border      := "border" attr* EOL
+titleblock  := "titleblock" attr* EOL field* "end" EOL
+field       := attr+ EOL
+textblock   := "textblock" anchor attr* EOL rawline* "end" EOL
+anchor      := "top" | "upper-right" | "right" | "lower-right"
+             | "bottom" | "lower-left" | "left" | "upper-left"
+rawline     := <literal source line> EOL                # not tokenized
 nodelist    := nodespec ( edge nodespec )* EOL
 nodespec    := id [string] [ ":" shape ] [attr*]
 edge        := "-->" | "--" edgebody "-->"
@@ -73,6 +103,15 @@ comment     := '#' ... EOL                              # ignored outside string
 
 3. **Indentation is not significant.** Group bodies may be indented
    for readability; the parser ignores leading whitespace.
+
+4. **A block's body uses the rules its content needs.** Three blocks share
+   one frame (`keyword [header] … end`), but their bodies differ because
+   their content does: a `group` body is statements, a `titleblock` body is
+   key/value fields (the ordinary `attr` rule), and a `textblock` body is
+   raw text. Forcing one body syntax on all three is what would create
+   ambiguity — a title-block field written as a bare label is
+   lexically a node declaration, and prose tokenized as statements turns
+   `#` and `end` into landmines.
 
 ## Tokens
 
@@ -104,7 +143,9 @@ literal, e.g. `"API Server #1"`.
 
 ### Comments
 
-`#` to end of line, ignored everywhere except inside strings.
+`#` to end of line, ignored everywhere except inside strings — and inside a
+**text block body**, which is raw text (see [Text block](#text-block)), so
+`#` there is literal prose.
 
 ### File encoding and line endings
 
@@ -114,14 +155,32 @@ Notepad or PowerShell parses the same as one written on Linux. A UTF-16 file is
 rejected as invalid UTF-8. Normalization happens once, when the file is read,
 not in the lexer; a lone `CR` is *not* a line ending.
 
+This matters most for a **text block body**, which is copied verbatim into the
+drawing: normalization is what keeps a Windows-authored block free of stray
+`CR` characters in the rendered text (and in its measured width).
+
 ## Reserved words
 
-Only `diagram`, `group`, and `end` are fully reserved as identifiers.
-Everything else (`box`, `cylinder`, `solid`, `dotted`, `dashed`, `thick`,
-`top-down`, `left-right`, …) is **contextual**: it only has its special
-meaning in a specific syntactic position. `box` only means "shape" after
-a `:`, so a node may still be named `box`. This keeps the reserved list
-tiny and the language forgiving.
+Only `diagram`, `group`, `end`, `border`, `titleblock`, and `textblock` are
+fully reserved as identifiers. Everything else (`box`, `cylinder`, `solid`,
+`dotted`, `dashed`, `thick`, `top-down`, `left-right`, …) is **contextual**:
+it only has its special meaning in a specific syntactic position. `box` only
+means "shape" after a `:`, so a node may still be named `box`. This keeps the
+reserved list tiny and the language forgiving.
+
+The four page-furniture keywords are reserved **only at statement start**
+(the same position rule `group` and `end` already follow), because that is
+where the parser must choose between "a node declaration" and "a block". A
+node may still be named `border` or `textblock` as an edge endpoint
+(`a --> border` is a node), and an anchor word such as `right` or `top` is
+contextual — it only means "anchor" in the slot after `textblock`:
+
+```
+border                # the page border statement, not a node
+a --> border          # a node named `border`
+textblock right       # a text block anchored right
+right --> left        # nodes named `right` and `left`
+```
 
 ## Nodes
 
@@ -276,11 +335,24 @@ and **M11** (edge `from`/`to` side attributes; see
   otherwise: geometry, layout direction, and title placement are
   unchanged).
 
+- **Page furniture** (see [Page furniture](#page-furniture)):
+  - `border`: `color` (stroke; `""` draws nothing) and `line` (a quoted
+    border style, same set as a group's).
+  - `titleblock`: `color` and `fill` (table stroke and interior); every other
+    key is a displayed field, rendered verbatim in declaration order.
+  - `textblock`: `color` (border), `fill` (interior, default `"seashell"`),
+    `text` (text color, default `"sandybrown"`), and `width` (a maximum
+    content width in pixels, for word wrapping).
+
 **Unknown attributes are a parse error.** An attribute is valid only if it
 is recognized for the position it appears in (see the per-position lists
 above). This catches typos like `colr="#888"` early rather than silently
 ignoring them. The recognized attributes are fixed for v0; adding new ones
 later is a deliberate grammar change.
+
+The single exception is a **title block field key**, which is open by design
+(see [Title block](#title-block)) — a title block is a metadata table whose
+keys the user chooses, so an unrecognized key is data, not a typo.
 
 ## Groups
 
@@ -326,6 +398,172 @@ group "Kubernetes Cluster" color="#0a7" fill="#cfe" line="dashed" text="#005"
 end
 ```
 
+## Page furniture
+
+Three statement types draw on the page *around* the diagram instead of in it:
+`border`, `titleblock`, and `textblock`. They are **decoration only**. None
+of them is a node, an edge endpoint, or a group member; they never join the
+layout graph, never appear in `Layout::nodes` / `Layout::edges` /
+`Layout::groups`, and never act as an obstacle for routing. They are placed
+after routing, against the finished canvas.
+
+All three are **optional and independent**: any combination is legal, and a
+diagram that uses none of them renders exactly as it did before they
+existed.
+
+None of the three may appear inside a `group` body — a block there is a
+parse error (`titleblock` and `textblock` cannot be group members; `border`
+belongs to the page, not to a level).
+
+### The page inset
+
+The page reserves a fixed **inset** (28 px) between the canvas edge and the
+border. It exists whether or not a `border` statement is present: the
+border, the title block, and the text blocks are all positioned against it,
+so adding or removing `border` changes *no coordinate* — it only strokes the
+rectangle that was already reserved.
+
+Diagram content keeps its own guarantee unchanged: every node, frame, edge
+waypoint, and label knockout stays at least the page margin (20 px) clear of
+the canvas edge, and the border sits outside that margin.
+
+### Border
+
+```
+border [attr*]
+```
+
+At most one per diagram. `color` (stroke) and `line` (`solid`, `dotted`,
+`dashed`, `thick` — a quoted value, like a group's `line`) are supported;
+`color=""` draws no border. With no `border` statement nothing is stroked,
+but the inset is still reserved (so the title block and text blocks sit
+where they would anyway).
+
+The border is drawn *outside* the page margin, so it never crosses a node, a
+frame, or an edge — which is why `border` is purely decoration and can be
+added or removed without touching layout.
+
+### Title block
+
+```
+titleblock [attr*]
+    field*
+end
+```
+
+At most one per diagram. It draws a table in the **lower-right corner**, and
+its bottom and right edges snap to the page inset rectangle — the same
+rectangle `border` strokes, whether or not a `border` statement is present.
+Its body is a list of fields, one or more per line, written with the
+language's ordinary attribute syntax:
+
+```
+titleblock
+    Title   = "Finance: Network Architecture"
+    Company = "Big Corp, LLC"
+    Author  = "John Doe"
+    Version = "0.1"
+    Date    = "2026-11-04"
+end
+```
+
+Keys are **verbatim and open**: a title block is a metadata table, so any key
+is accepted and rendered exactly as written, in declaration order (`Version`,
+not `version` — the user owns capitalization, so an acronym like
+`API Gateway` survives). This is a deliberate, documented exception to the
+"unknown attribute is an error" rule: a mistyped key shows up as a mistyped
+label in the drawing, which is self-evident, whereas a silently ignored
+attribute would not be.
+
+`color` and `fill` are the two **style** keys (they are not fields), and a
+`Title` field is drawn one size larger than the rest — that single piece of
+hierarchy is what makes the table read as a title block rather than a list.
+A duplicate key is a resolve error.
+
+Fields may also be written on the header line, since header and body use the
+same rule — `titleblock Title="X" Company="Y"` followed by `end` is a
+complete, legal block.
+
+### Text block
+
+```
+textblock <anchor> [attr*]
+    rawline*
+end
+```
+
+Zero or more per diagram, each at a distinct anchor. The anchor is one of the
+eight positions around the content:
+
+```
+upper-left    top        upper-right
+left                     right
+lower-left    bottom     lower-right
+```
+
+Anchors are **page-space** — `top` always means the visual top, whatever the
+diagram's direction or any group's — and they mirror the vocabulary of the
+`from=` / `to=` edge sides, extended with the four corners. A second block at
+the same anchor is a resolve error (stacking at one anchor is deliberately
+not in this version).
+
+Attributes: `color` (border), `fill` (interior, default `"seashell"`),
+`text` (text color, default `"sandybrown"`), and `width` (a maximum content
+width in pixels; the body is word-wrapped to it).
+
+The body is **raw**: each line is taken literally up to the newline. In
+particular `#` is *not* a comment inside a block body (unlike everywhere else
+in the language), so prose containing `#`, `-->`, or anything else that looks
+like syntax is safe.
+
+The block ends at a line whose trimmed content is exactly `end`. Because
+`end` is a reserved word, a statement consisting of `end` is unwritable
+anyway, so the rule is consistent with the rest of the language rather than a
+new special case. (A line of prose that is only the word `end` is therefore
+not expressible; the same is true of a bare `end` statement today.)
+
+Within the body a small subset of Markdown is understood, applied **per
+line** (an inline run never spans a line break):
+
+| Markup | Meaning |
+| --- | --- |
+| `**text**` | bold |
+| `_text_` or `*text*` | italic |
+| `**bold _and italic_**` | nesting works — a run carries both |
+| `---` alone on a line | horizontal rule |
+| blank line | paragraph gap |
+
+Rules that make prose behave:
+
+- Leading indentation and trailing whitespace are stripped from every line.
+- `_` and `*` open a run only at a word boundary, so `snake_case_name` is
+  literal text. An underscore in the middle of a word never italicizes.
+- `\*`, `\_`, and `\\` are escapes, so literal markers are always writable.
+- An **unbalanced** marker is literal text, not an error (`a ** b` renders as
+  written). Prose is not code; the language is strict about syntax and
+  forgiving about typography.
+- An empty body is a resolve error.
+
+```
+textblock right
+    Here is some text with _limited_ **Markdown** support.
+    Each line is a paragraph.
+
+    A blank line above separates paragraphs.
+    ---
+    Horizontal rules are supported, as is a run that is **bold _and italic_**.
+end
+```
+
+Text blocks never overlap diagram content: each occupied side reserves a band
+between the content and the border, and the canvas grows if the content would
+otherwise be covered. A corner anchor takes its space from both of its sides.
+
+The title block is reserved first, since it owns the lower-right corner of the
+page. A `textblock lower-right` therefore conflicts with a `titleblock` (that
+is a resolve error), and a `right` or `bottom` block occupies the span that
+remains beside the title block rather than the full side.
+
 ## Direction
 
 ```
@@ -358,6 +596,15 @@ one inherits the direction of its enclosing level.
   automatically on their parents' centroid (see the layout engine); if that
   proves insufficient for complex diagrams, per-node pinning/alignment
   controls can be added later via the node `attr` slot.
+- **Page furniture that participates in the diagram.** A `textblock` cannot
+  be an edge endpoint, cannot be a group member, and is never a routing
+  obstacle; a `titleblock` is decoration only. Two text blocks cannot share
+  an anchor (stacking at one anchor is deferred). Markdown in a text block is
+  a closed subset: no headings, lists, links, code spans, or block quotes,
+  and an inline run never spans a line break. Text blocks do not wrap unless
+  `width=` is given.
+- **A border per group, or any border other than the page's.** `border` is a
+  page-level statement; group frames remain the only nested frames.
 
 These are all shaped for in the grammar (direction slot in `group`,
 `attr` slots on nodes and edges) so adding them later is additive, not a

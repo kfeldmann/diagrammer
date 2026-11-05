@@ -72,6 +72,16 @@ impl Style {
             _ => return None,
         })
     }
+
+    /// The grammar spelling, for error messages and the CLI summary.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Style::Solid => "solid",
+            Style::Dotted => "dotted",
+            Style::Dashed => "dashed",
+            Style::Thick => "thick",
+        }
+    }
 }
 
 // ---- Raw (syntactic) AST ----
@@ -86,6 +96,9 @@ pub struct RawDiagram {
 pub enum RawStatement {
     NodeList(RawNodeList),
     Group(RawGroup),
+    Border(RawBorder),
+    TitleBlock(RawTitleBlock),
+    TextBlock(RawTextBlock),
 }
 
 /// A line of the form `nodespec (edge nodespec)*`. With no edges this is a
@@ -128,6 +141,43 @@ pub struct RawGroup {
     pub statements: Vec<RawStatement>,
 }
 
+// ---- Raw page furniture (M21.1) ----
+//
+// Decoration only: no block is a node, an edge endpoint, or a group member,
+// and none joins the layout graph. The parser produces these; `resolve`
+// validates them and hands them to `Diagram`.
+
+/// `border attr* EOL` — the page frame.
+#[derive(Debug, Clone)]
+pub struct RawBorder {
+    pub attrs: Vec<RawAttr>,
+    pub offset: usize,
+}
+
+/// `titleblock attr* EOL field* end` — the metadata table.
+///
+/// The header's attrs and the body's fields share one ordered list, because
+/// they share the `attr` rule: `titleblock Title="X" Company="Y"` is a
+/// complete block, and a field written on the header line sits where it was
+/// written. `resolve` splits the style keys (`color`, `fill`) out of it.
+#[derive(Debug, Clone)]
+pub struct RawTitleBlock {
+    pub fields: Vec<RawAttr>,
+    pub offset: usize,
+}
+
+/// `textblock anchor attr* EOL rawline* end` — free text at a page anchor.
+///
+/// `body` holds the raw lines verbatim (no comment stripping, no tokenizing),
+/// in source order, including blank lines — which are paragraph gaps.
+#[derive(Debug, Clone)]
+pub struct RawTextBlock {
+    pub anchor: Anchor,
+    pub attrs: Vec<RawAttr>,
+    pub body: Vec<String>,
+    pub offset: usize,
+}
+
 // ---- Resolved (validated) diagram ----
 
 #[derive(Debug, Clone)]
@@ -136,6 +186,13 @@ pub struct Diagram {
     pub nodes: Vec<Node>,
     pub edges: Vec<Edge>,
     pub groups: Vec<Group>,
+    /// Page furniture (M21.1). Decoration only: these are not graph
+    /// participants, so `Layout`/the renderer ignore them until M21.3's
+    /// `decorate` pass. Absent/empty by default, so nothing downstream is
+    /// forced to care.
+    pub border: Option<Border>,
+    pub title_block: Option<TitleBlock>,
+    pub text_blocks: Vec<TextBlock>,
 }
 
 #[derive(Debug, Clone)]
@@ -195,6 +252,52 @@ impl EdgeSide {
     }
 }
 
+/// A text block's page-space anchor (M21.1). Anchors are **page-space** — the
+/// visual top stays the visual top whatever the diagram's or any group's
+/// direction — and they extend the `from=` / `to=` side vocabulary with the
+/// four corners.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Anchor {
+    Top,
+    UpperRight,
+    Right,
+    LowerRight,
+    Bottom,
+    LowerLeft,
+    Left,
+    UpperLeft,
+}
+
+impl Anchor {
+    pub fn from_ident(s: &str) -> Option<Self> {
+        Some(match s {
+            "top" => Anchor::Top,
+            "upper-right" => Anchor::UpperRight,
+            "right" => Anchor::Right,
+            "lower-right" => Anchor::LowerRight,
+            "bottom" => Anchor::Bottom,
+            "lower-left" => Anchor::LowerLeft,
+            "left" => Anchor::Left,
+            "upper-left" => Anchor::UpperLeft,
+            _ => return None,
+        })
+    }
+
+    /// The grammar spelling, for error messages.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Anchor::Top => "top",
+            Anchor::UpperRight => "upper-right",
+            Anchor::Right => "right",
+            Anchor::LowerRight => "lower-right",
+            Anchor::Bottom => "bottom",
+            Anchor::LowerLeft => "lower-left",
+            Anchor::Left => "left",
+            Anchor::UpperLeft => "upper-left",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Group {
     pub title: Option<String>,
@@ -218,4 +321,62 @@ pub struct Group {
     /// Color of the frame's title text (M7.5). `None` falls back to the
     /// renderer's default title color. Applies only when `title` is present.
     pub text: Option<String>,
+}
+
+// ---- Resolved page furniture (M21.1) ----
+//
+// The validated form of the three decoration statements. Style values are
+// carried here, not re-derived later: `resolve` is the layer that validates
+// them (and that owns offsets for the errors), so the model it hands on is the
+// single source of truth for what the user wrote.
+
+/// A page border.
+///
+/// Presence is the whole model: the border strokes the fixed page inset, so it
+/// has no geometry of its own and cannot move anything. `color=""` means "draw
+/// nothing" — a validated value, not an absent statement.
+#[derive(Debug, Clone)]
+pub struct Border {
+    /// Stroke color. `None` is the renderer's default; `Some("")` draws
+    /// nothing.
+    pub color: Option<String>,
+    /// Stroke line style. `None` is a plain solid line.
+    pub line: Option<Style>,
+}
+
+/// One title-block field: a key and its value, both verbatim.
+///
+/// The key is **open by design** (a title block is a metadata table whose keys
+/// the user chooses — the one documented exception to "unknown attribute is an
+/// error"), so it is kept exactly as written, capitalization included.
+#[derive(Debug, Clone)]
+pub struct Field {
+    pub key: String,
+    pub value: String,
+}
+
+/// A title block: its fields in declaration order, plus its style keys.
+///
+/// `color` and `fill` are the two **style** keys — they are not fields, so
+/// `resolve` splits them out of the field list.
+#[derive(Debug, Clone)]
+pub struct TitleBlock {
+    pub fields: Vec<Field>,
+    pub color: Option<String>,
+    pub fill: Option<String>,
+}
+
+/// A text block at one page anchor.
+#[derive(Debug, Clone)]
+pub struct TextBlock {
+    pub anchor: Anchor,
+    /// Raw body lines in source order, blank lines included (a blank line is
+    /// a paragraph gap). Never empty and never all-whitespace.
+    pub body: Vec<String>,
+    pub color: Option<String>,
+    pub fill: Option<String>,
+    pub text: Option<String>,
+    /// `width=` — a maximum content width in pixels, for word wrapping.
+    /// Always positive when present.
+    pub width: Option<f32>,
 }

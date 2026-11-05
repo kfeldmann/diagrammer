@@ -38,7 +38,22 @@ source string
 ```
 
 `ast.rs` holds both layers: the `Raw*` syntactic types and the resolved
-`Diagram`/`Node`/`Edge`/`Group`. `text.rs` measures labels against the baked
+`Diagram`/`Node`/`Edge`/`Group`, plus the page-furniture statements
+(`border`/`titleblock`/`textblock`, M21.1). The page furniture is
+**decoration only** — not a node, edge endpoint, or group member, absent from
+the layout graph, the obstacle model, and the routing vocabulary — so it
+resolves into `Diagram::{border, title_block, text_blocks}` and nothing
+downstream is forced to care. `resolve` validates it (uniqueness, the
+lower-right/title-block corner conflict, the open-but-duplicate-free
+title-block keys, a positive `textblock` `width`, a non-empty body, `line`
+against `Style`) and hands on the validated style values, which are the
+single source of truth for M21.3's `decorate` pass. Until then their only
+production reader is the CLI summary, which appends `; page: …` **only when
+something is present** — that is what keeps every pre-M21 summary (and every
+snapshot) byte-identical, and what keeps the fields live under
+`dead_code = "deny"`.
+
+`text.rs` measures labels against the baked
 DejaVu Sans metrics in `metrics_table.rs` — generated from the embedded font
 by `tools/gen-metrics-table` and verified against it by tests
 (deterministic across machines).
@@ -50,9 +65,11 @@ by `tools/gen-metrics-table` and verified against it by tests
 src/
   main.rs        CLI: arg parsing, run(), summary vs. -o SVG output
   lexer.rs       tokenizer
-  parser.rs      winnow parser → raw AST
+  parser.rs      winnow parser → raw AST (incl. the page-furniture blocks,
+                 the group-body rejection, and the one raw-body recognizer)
   ast.rs         Raw* + resolved Diagram/Node/Edge/Group + Shape/Style/Direction enums
-  resolve.rs     raw → validated Diagram (dedup, attrs, group membership)
+  resolve.rs     raw → validated Diagram (dedup, attrs, group membership,
+                 page-furniture validation)
   layout.rs      ★ biggest file: flat Sugiyama engine + component packing
                  (M15: edge-less items follow the scope's direction) +
                  compound (per-group direction) + M20 whole-path maze routing:
@@ -140,6 +157,20 @@ costs and the signing options.
   math that reasons about "up/down" must account for this (e.g. the cylinder
   cap radius and label shift are direction-agnostic because they live in
   rendered box space, not canonical space).
+- **Page furniture is decoration only, and unused ⇒ byte-identical (M21).**
+  `border`/`titleblock`/`textblock` are not graph participants: no block is a
+  node, an edge endpoint, or a group member, and none joins the layout graph,
+  the obstacle model, or the routing vocabulary. They live in `Diagram`
+  (`border`, `title_block`, `text_blocks`) and, from M21.3, in `Layout` as
+  rects drawn *after* routing against the finished canvas — never before, so
+  no block can influence a route. The acceptance property is that a diagram
+  using none of them renders **byte-identical**, which is why the model is
+  `Option`/empty by default and why the CLI summary only appends its
+  `; page: …` suffix when something is present. Don't make a block a layout
+  participant (that was considered and dropped for text blocks: an anchored
+  block is positioned from the finished canvas, so making it an endpoint
+  would need a bounded place→route→re-place loop and a new endpoint
+  representation through `EdgeCtx`/`FrameClass`/`Obstacles`/`LabelWorld`).
 - **GitHub-renderable output.** No `<script>`, no external references, no CSS,
   only inline attributes. This has already forced decisions: e.g. one
   arrowhead `<marker>` per distinct edge color with a hard-coded `fill`,
@@ -365,10 +396,19 @@ breaks geometry):
 - `contrib/vscode/` — VS Code extension (TextMate grammar) for `.dgmr` files,
   mirroring `contrib/vim/`. The syntax file mirrors `docs/grammar.md` (v0), including
   its contextuality: shapes only after `:`, edge styles only inside an edge
-  body, directions only after `diagram`/`group`, only `diagram`/`group`/`end`
-  reserved (and only at statement start). If the grammar changes — new
-  keywords, shapes, styles, attributes — update `contrib/vim/syntax/dgmr.vim`
-  and `contrib/vscode/syntaxes/dgmr.tmLanguage.json` alongside the parser and
+  body, directions only after `diagram`/`group`, text-block anchors only after
+  `textblock`. Two classes of reserved word: `diagram`/`group`/`end` are
+  **fully** reserved (so a mid-line occurrence is flagged), while
+  `border`/`titleblock`/`textblock` are reserved **only at statement start** —
+  `a --> border` is a node named `border`, so they must not be flagged
+  mid-line. Both `titleblock` and `textblock` are multi-line regions (the only
+  ones in the grammar) ending at a line whose trimmed content is exactly
+  `end`; the `titleblock` region suppresses the unknown-attribute flag
+  (its keys are open by design) and the `textblock` region is left unpainted
+  (its body is raw prose: `#` is not a comment, `-->` is not an arrow). If the
+  grammar changes — new keywords, shapes, styles, attributes — update
+  `contrib/vim/syntax/dgmr.vim` and
+  `contrib/vscode/syntaxes/dgmr.tmLanguage.json` alongside the parser and
   `docs/grammar.md`.
 
 ## Test layout

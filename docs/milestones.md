@@ -20,7 +20,11 @@ Two milestones are open, and they are independent of each other:
 **M21 (page furniture — border, title block, text blocks)**, the next one,
 and **M8 (CLI polish)**. M21 is a pure post-routing decoration pass: it
 adds no graph participant, touches no router, and leaves every existing
-diagram byte-identical.
+diagram byte-identical. Its language half — **M21.1** (grammar, AST,
+resolve, tooling) — is **done**: the three blocks parse and validate, and
+rendering still ignores them, so all twelve snapshots are byte-identical.
+What remains is the drawing half (M21.2 bold metrics, M21.3 the `decorate`
+pass).
 
 Also complete: the **Windows portability pass** (recorded in full below) —
 `build/build-windows` cross-compiles a self-contained `diagrammer.exe`, and
@@ -2255,17 +2259,19 @@ from):
   exception to "unknown attribute is an error", because a title block is a
   metadata table whose keys the user chooses.
 
-### ☐ M21.1 — Grammar, AST, resolve, and tooling (no rendering change)
+### ✅ M21.1 — Grammar, AST, resolve, and tooling (no rendering change)
 
 The whole language change, landing with no output change at all: no
 existing diagram can contain these statements, so every snapshot stays
-byte-identical by construction.
+byte-identical by construction. **Done** — 49 new tests (26 resolve, 16
+parser, 5 lexer, 2 CLI), 287 total green (up from 238), all twelve snapshots
+byte-identical, `cargo build`/`clippy`/`doc`/`fmt` clean.
 
-- [ ] **Lexer.** One new recognizer: a raw body line (take to the newline,
+- [x] **Lexer.** One new recognizer: a raw body line (take to the newline,
       no `#` comment stripping, no tokenizing). Nothing else in
       [`crate::lexer`] changes — the header and field lines reuse
       [`crate::lexer::ident`] / `ws` / `string` unchanged.
-- [ ] **Parser.** Three statement forms at the top level, each dispatched by
+- [x] **Parser.** Three statement forms at the top level, each dispatched by
       the same `peek_keyword` pattern `group` already uses in
       [`crate::parser::diagram`]:
       - `border` — `keyword`, `attr*`, EOL. No body.
@@ -2281,7 +2287,7 @@ byte-identical by construction.
         anchor is a `cut_err` naming the eight legal values.
       - A block opened but not closed (EOF before `end`) is a `cut_err`
         naming the block, mirroring `expected \`end\` to close \`group\``.
-- [ ] **The group-body trap.** [`crate::parser::group`]'s body loop is
+- [x] **The group-body trap.** [`crate::parser::group`]'s body loop is
       `peek_keyword("group") ? group : nodelist`, so today
       `textblock` / `titleblock` / `border` in a group body parse as **bare
       node declarations** (verified: `group "G"` + `textblock right` fails
@@ -2291,13 +2297,13 @@ byte-identical by construction.
       ("`textblock` cannot be a group member"; "`border` is a page-level
       statement"). This is the one place the new keywords must be
       special-cased, and it is easy to miss.
-- [ ] **AST.** `RawBorder`, `RawTitleBlock` (fields as `Vec<RawAttr>`),
+- [x] **AST.** `RawBorder`, `RawTitleBlock` (fields as `Vec<RawAttr>`),
       `RawTextBlock` (anchor + raw body lines), plus the matching resolved
       `Border` / `TitleBlock` / `TextBlock` in [`crate::ast`]. `Diagram`
       gains `border: Option<Border>`, `title_block: Option<TitleBlock>`,
       `text_blocks: Vec<TextBlock>` — all `Option`/empty by default, so
       nothing downstream is forced to care.
-- [ ] **Resolve.** Validation, all with offsets (the resolve layer's
+- [x] **Resolve.** Validation, all with offsets (the resolve layer's
       contract):
       - at most one `titleblock` and one `border` (duplicate → error);
       - at most one text block per anchor (duplicate → error), and
@@ -2308,7 +2314,7 @@ byte-identical by construction.
       - `textblock` `width` must parse as a positive number;
       - empty text-block body → error;
       - `line` values validated against [`Style`] (as groups already do).
-- [ ] **Docs and tooling** (this is a grammar change, so all of it):
+- [x] **Docs and tooling** (this is a grammar change, so all of it):
       [`docs/grammar.md`](grammar.md) (§ Page furniture — done),
       `contrib/vim/syntax/dgmr.vim`, and
       `contrib/vscode/syntaxes/dgmr.tmLanguage.json`. Two things in the
@@ -2327,6 +2333,73 @@ byte-identical by construction.
   for every error above; parser tests for the raw body (a `#` line, a line
   containing `-->`, a line containing a quoted string all survive verbatim)
   and for the group-body rejection.
+
+Implementation notes (decisions the plan left open, and one thing it got
+slightly wrong):
+
+- **The group-body trap is real, and one line wider than described.**
+  `border color="#333"` at *top level* is of course fine; the trap is that
+  without the check the three keywords fall through to `nodelist` **inside**
+  a body, where `border color="#333"` becomes a *node* named `border` with a
+  `color` attribute (silently wrong) and `textblock right` dies on the
+  trailing `right` with `end of line` (unhelpful). Both are now named
+  errors, and a test pins each.
+- **`RawTitleBlock` carries one ordered `Vec<RawAttr>`, not `fields` plus
+  header attrs.** Header and body already share the `attr` rule, so
+  concatenating them is what makes the one-liner form fall out for free —
+  and it keeps a header-written field in its written position. `resolve`
+  splits `color`/`fill` out.
+- **The lower-right / title-block conflict is decided once, at the end of
+  `resolve`, not at the `textblock` statement.** Either statement may come
+  first, so a per-statement check reports the error on whichever was written
+  *second*; a `textblock lower-right` followed by a `titleblock` would
+  otherwise blame line 6 instead of line 2. It always points at the text
+  block, because that is the statement that has to move (the title block is
+  the one reserved first). The text block's keyword offset rides along in
+  `Ctx` for exactly this.
+- **An empty `titleblock` is legal; an empty `textblock` is not.** The plan
+  only lists the latter. An empty title block is well-defined (the inset is
+  reserved, the table is empty — M21.3 decides how it draws), whereas an
+  empty text block would draw nothing, so it is a mistake. A body of only
+  blank lines counts as empty (it draws nothing either), which is one line
+  past the plan's "empty body" and the same message.
+- **`width` is parsed in `resolve`, not the lexer.** The value arrives as a
+  quoted string, so `"320"` must be parsed here; zero, negatives, `NaN`,
+  `inf`, and `1e999` (which parses to `inf`) are all rejected, so a
+  nonsensical width cannot reach the wrapper.
+- **Resolved blocks carry their validated style values** (`Border::color`/
+  `line`, `TitleBlock::color`/`fill`, `TextBlock::color`/`fill`/`text`/
+  `width`). `resolve` is the layer that validates them and owns the error
+  offsets, so it is the single source of truth; M21.3 then draws what it is
+  handed instead of re-deriving (and possibly disagreeing).
+- **Those fields needed a production reader to survive `dead_code = "deny"`**
+  — an unread `pub` field fails the build in this crate. The reader is the
+  CLI summary, which is M21.4's "append block counts only when present"
+  item folded forward: it prints `; page: …` only when something is
+  present, so every pre-M21 diagram keeps its summary byte-for-byte
+  (asserted by `summary_is_unchanged_when_no_page_furniture_is_used`). That
+  is a deliberate pull-forward, not scope creep: the alternative was
+  `#[allow(dead_code)]`, which the crate forbids.
+- **Tooling: the new keywords are statement-initial only in the
+  highlighters too.** Both files' mid-line "reserved word" rule
+  (`dgmrReservedErr` / `invalid.illegal.reserved`) keeps `diagram`/`group`/
+  `end` and does *not* gain the three new keywords, because
+  `docs/grammar.md` explicitly allows `a --> border` as a node. Adding them
+  there would flag legal code. Only the statement-start match gains them.
+- **`dgmrAttrErr` suppression is by region, not by lookahead.** The
+  `titleblock` region simply does not include the unknown-attribute rule and
+  claims every key with a `dgmrTitleKey` / `#title-key` match instead (with
+  `color`/`fill` still resolving to the style-attribute group, since
+  `dgmrAttrName` is listed first and wins the tie). That is more robust than
+  a lookbehind and matches how the vim file already structures edge bodies.
+- **The `textblock` body is unpainted, deliberately.** The plan says "so `#`
+  is not highlighted as a comment, `-->` not an arrow, Markdown markers not
+  operators" — which is achieved by the body match *containing* nothing.
+  Linking it to `String` would color prose as a string literal, which is
+  worse than leaving it plain, so `dgmrTextBody` / `meta.textblock.body`
+  have no highlight link. The vim region's body pattern is `^`-anchored so
+  it can only match whole body lines, never the tail of the `textblock`
+  header (verified with a real `synID` dump, not by inspection).
 
 **Blocked by:** nothing. **Blocks:** M21.2, M21.3.
 
@@ -2434,10 +2507,17 @@ influence a route.
       error — backward-compatible).
 - [ ] `AGENTS.md`: the pipeline line (`layout.rs → decorate`), the new
       `Layout` fields, the page-inset constants shared with the renderer,
-      and the "unused ⇒ byte-identical" invariant.
+      and the "unused ⇒ byte-identical" invariant. *(The **language half**
+      — the three statements, their attrs, `Anchor`, the reserved-word
+      position rule, and the open-title-block-key exception — landed in
+      `AGENTS.md` with M21.1; the `decorate`/`Layout` half is still owed.)*
 - [ ] `~/.clanky/skills/diagrammer/SKILL.md` — a "page furniture" section
       (it documents the language for diagram authors).
-- [ ] CLI summary: append block counts only when present.
+- [x] CLI summary: append block counts only when present. *(Pulled
+      forward into M21.1 — see its implementation notes: the resolved style
+      fields needed a production reader to survive `dead_code = "deny"`, and
+      "append only when present" is exactly what keeps every existing summary
+      byte-identical.)*
 
 **Blocked by:** M21.3.
 

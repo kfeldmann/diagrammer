@@ -124,11 +124,12 @@ fn run(source: &str, output: Option<&Path>) -> Result<RunOutcome, error::Error> 
     let diagram = resolve::resolve(&raw)?;
     match output {
         None => Ok(RunOutcome::Summary(format!(
-            "ok: {} nodes, {} edges, {} groups (direction {})",
+            "ok: {} nodes, {} edges, {} groups (direction {}){}",
             diagram.nodes.len(),
             diagram.edges.len(),
             diagram.groups.len(),
             diagram.direction.as_str(),
+            page_furniture_summary(&diagram),
         ))),
         Some(path) => {
             let layout = layout::layout(&diagram);
@@ -136,6 +137,71 @@ fn run(source: &str, output: Option<&Path>) -> Result<RunOutcome, error::Error> 
             std::fs::write(path, svg)?;
             Ok(RunOutcome::Wrote(path.to_path_buf()))
         }
+    }
+}
+
+/// A short page-furniture suffix for the CLI summary, empty when the diagram
+/// uses none of it — so every diagram written before M21 keeps its summary
+/// byte-for-byte.
+///
+/// The summary is a validation report, so it reports what `resolve` accepted:
+/// each block, its fields/body size, and the style values the author actually
+/// set. That also makes it the only production reader of the resolved
+/// decoration until M21.3's `decorate` pass draws it — which matters because
+/// the crate denies dead code rather than letting scaffolding accumulate.
+fn page_furniture_summary(diagram: &ast::Diagram) -> String {
+    /// `name`, then ` key=value` for each style that was set.
+    fn with_styles(name: &str, styles: &[(&str, Option<String>)]) -> String {
+        let mut out = name.to_string();
+        for (key, value) in styles {
+            if let Some(v) = value {
+                out.push_str(&format!(" {key}={v}"));
+            }
+        }
+        out
+    }
+
+    let mut parts: Vec<String> = Vec::new();
+    if let Some(b) = &diagram.border {
+        let line = b.line.map(|l| l.as_str().to_string());
+        parts.push(with_styles(
+            "border",
+            &[("line", line), ("color", b.color.clone())],
+        ));
+    }
+    if let Some(tb) = &diagram.title_block {
+        // Fields read as `Key="value"` pairs — the table's content, which is
+        // what a title block is for.
+        let fields: Vec<String> = tb
+            .fields
+            .iter()
+            .map(|f| format!("{}={:?}", f.key, f.value))
+            .collect();
+        parts.push(with_styles(
+            &format!("titleblock [{}]", fields.join(", ")),
+            &[("color", tb.color.clone()), ("fill", tb.fill.clone())],
+        ));
+    }
+    for block in &diagram.text_blocks {
+        let width = block.width.map(|w| w.to_string());
+        parts.push(with_styles(
+            &format!(
+                "textblock {} ({} lines)",
+                block.anchor.as_str(),
+                block.body.len()
+            ),
+            &[
+                ("width", width),
+                ("color", block.color.clone()),
+                ("fill", block.fill.clone()),
+                ("text", block.text.clone()),
+            ],
+        ));
+    }
+    if parts.is_empty() {
+        String::new()
+    } else {
+        format!("; page: {}", parts.join(", "))
     }
 }
 
@@ -272,6 +338,43 @@ mod tests {
             svg.contains(">L1<tspan") && svg.contains(">L2</tspan>"),
             "the label did not become a clean two-line tspan: {svg}"
         );
+    }
+
+    // ---- M21.1: page furniture in the summary ----
+
+    /// The invariant that keeps M21.1 output-neutral: a diagram using none of
+    /// the page furniture keeps its summary byte-for-byte.
+    #[test]
+    fn summary_is_unchanged_when_no_page_furniture_is_used() {
+        let out = summary(run(include_str!("../examples/infra.dgmr"), None).expect("parse"));
+        assert_eq!(out, "ok: 8 nodes, 10 edges, 1 groups (direction top-down)");
+        assert!(!out.contains("page:"), "no decoration, no suffix: {out}");
+    }
+
+    #[test]
+    fn summary_reports_page_furniture_when_present() {
+        let out = summary(
+            run(
+                "diagram top-down\n\
+                 border line=\"dashed\"\n\
+                 titleblock\nTitle = \"X\"\nCompany = \"Y\"\ncolor = \"#888\"\nend\n\
+                 textblock right width=\"320\"\nhello\nworld\nend\n",
+                None,
+            )
+            .expect("parse"),
+        );
+        assert!(
+            out.starts_with("ok: 0 nodes, 0 edges, 0 groups (direction top-down)"),
+            "{out}"
+        );
+        assert!(out.contains("page:"), "{out}");
+        assert!(out.contains("border line=dashed"), "{out}");
+        // `color` is a style key, so it is not one of the reported fields.
+        assert!(
+            out.contains("titleblock [Title=\"X\", Company=\"Y\"] color=#888"),
+            "{out}"
+        );
+        assert!(out.contains("textblock right (2 lines) width=320"), "{out}");
     }
 
     /// Render `src` the way `run` would with `-o`, without touching the disk.

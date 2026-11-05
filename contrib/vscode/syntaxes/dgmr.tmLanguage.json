@@ -4,8 +4,11 @@
   "fileTypes": [
     "dgmr"
   ],
-  "comment": "TextMate grammar for diagrammer's v0 DSL, matched against docs/grammar.md. Mirrors contrib/vim/syntax/dgmr.vim. The language is contextual: directions only follow 'diagram'/'group', shapes only follow ':', edge styles only appear inside an edge body, and the reserved words diagram/group/end are only reserved at statement start (a node may legally be named box, thick, or end-2). The rules below are positional for the same reason. Everything is single-line -- the grammar is line-oriented and strings cannot wrap -- so unterminated constructs are closed with a (?=\\n) end instead of running away across lines.",
+  "comment": "TextMate grammar for diagrammer's v0 DSL, matched against docs/grammar.md. Mirrors contrib/vim/syntax/dgmr.vim. The language is contextual: directions only follow 'diagram'/'group', shapes only follow ':', edge styles only appear inside an edge body, and the reserved words diagram/group/end are only reserved at statement start (a node may legally be named box, thick, or end-2). The page-furniture keywords border/titleblock/textblock are reserved ONLY at statement start for the same reason: a node may be named border (a --> border is a node), so they are statement matches and never flagged mid-line. The rules below are positional for the same reason. Everything is single-line -- the grammar is line-oriented and strings cannot wrap -- so unterminated constructs are closed with a (?=\\n) end instead of running away across lines. The two page-furniture blocks are the exception: they are multi-line regions that end at their own `end` line.",
   "patterns": [
+    {
+      "include": "#anchor"
+    },
     {
       "include": "#comment"
     },
@@ -20,6 +23,59 @@
     },
     {
       "include": "#statement"
+    },
+    {
+      "comment": "title block: a multi-line region from the statement keyword to its own `end` line. Fields are Key = \"value\" with open keys, so #attr-err is absent here and #title-key claims every key (with #attr-name winning the tie for color/fill, since it is listed first). The end pattern anchors $: a line whose trimmed content is exactly `end` closes the block, so 'end of the line' stays a field. (?=\\n) at the end of the file closes a block whose `end` is missing.",
+      "begin": "^[ \\t]*(titleblock)\\b(?!-)",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.dgmr"
+        }
+      },
+      "end": "^[ \\t]*end\\b(?!-)[ \\t]*$|(?=\\n)",
+      "endCaptures": {
+        "0": {
+          "name": "keyword.control.dgmr"
+        }
+      },
+      "name": "meta.titleblock.dgmr",
+      "patterns": [
+        {
+          "include": "#string"
+        },
+        {
+          "include": "#comment"
+        },
+        {
+          "include": "#attr-name"
+        },
+        {
+          "include": "#title-key"
+        }
+      ]
+    },
+    {
+      "comment": "text block: a multi-line region whose body is RAW prose -- `#` is not a comment, `-->` is not an arrow, and Markdown markers are not operators, so the body is captured as one plain text run and nothing else is included in the region's patterns. The header's anchor and attrs are matched by #anchor (which runs earlier, at the same line start) and #attr-name. The end pattern anchors $: a line whose trimmed content is exactly `end` closes the block, so prose containing 'end of the line' survives. (?=\\n) closes a block whose `end` is missing at end of file.",
+      "begin": "^[ \\t]*(textblock)\\b(?!-)[ \\t]+(?:top|upper-right|right|lower-right|bottom|lower-left|left|upper-left)\\b(?!-)[^\\n]*$",
+      "beginCaptures": {
+        "1": {
+          "name": "keyword.control.dgmr"
+        }
+      },
+      "end": "^[ \\t]*end\\b(?!-)[ \\t]*$|(?=\\n)",
+      "endCaptures": {
+        "0": {
+          "name": "keyword.control.dgmr"
+        }
+      },
+      "name": "meta.textblock.dgmr",
+      "patterns": [
+        {
+          "comment": "a whole body line, verbatim and UNPAINTED: the point is to block the comment/arrow/operator/string rules from firing, not to color the prose. Anchored with ^ so the header line's tail is never swallowed.",
+          "match": "^.*$",
+          "name": "meta.textblock.body.dgmr"
+        }
+      ]
     },
     {
       "include": "#shape"
@@ -134,8 +190,8 @@
       }
     },
     "statement": {
-      "comment": "reserved words at statement start (leading whitespace allowed, not significant).",
-      "match": "^[ \\t]*(diagram|group|end)\\b(?!-)",
+      "comment": "reserved words at statement start (leading whitespace allowed, not significant). border/titleblock/textblock are reserved only here: mid-line they are legal node ids, so they are deliberately absent from #reserved-err.",
+      "match": "^[ \\t]*(diagram|group|end|border|titleblock|textblock)\\b(?!-)",
       "captures": {
         "1": {
           "name": "keyword.control.dgmr"
@@ -152,8 +208,8 @@
       }
     },
     "attr-name": {
-      "comment": "known attribute names before '=' (nodes color/fill/text, edges color/text/from/to, groups color/fill/line/text). Listed before #attr-err so a known name wins the same position.",
-      "match": "\\b(color|fill|text|line|from|to)[ \\t]*(?==)",
+      "comment": "known attribute names before '=' (nodes color/fill/text, edges color/text/from/to, groups color/fill/line/text, border color/line, textblock color/fill/text/width). Listed before #attr-err so a known name wins the same position.",
+      "match": "\\b(color|fill|text|line|from|to|width)[ \\t]*(?==)",
       "captures": {
         "1": {
           "name": "entity.other.attribute-name.dgmr"
@@ -166,6 +222,27 @@
       "captures": {
         "1": {
           "name": "invalid.illegal.unknown-attr.dgmr"
+        }
+      }
+    },
+    "anchor": {
+      "comment": "text block anchors: the eight compass words, only in the slot right after 'textblock'. Contextual like directions: 'right --> left' is two nodes.",
+      "match": "^(\\s*)(textblock)\\b(?!-)[ \\t]+(top|upper-right|right|lower-right|bottom|lower-left|left|upper-left)\\b(?!-)",
+      "captures": {
+        "2": {
+          "name": "keyword.control.dgmr"
+        },
+        "3": {
+          "name": "constant.language.anchor.dgmr"
+        }
+      }
+    },
+    "title-key": {
+      "comment": "a title-block field key: an id before '='. Keys are OPEN by design (a metadata table whose keys the user chooses), so #attr-err is deliberately NOT part of the titleblock region's patterns -- it would light the whole table red. The two style keys (color/fill) are claimed by #attr-name, which is listed before this rule inside the region.",
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*(?:-[A-Za-z0-9_]+)*)[ \\t]*(?==)",
+      "captures": {
+        "1": {
+          "name": "entity.other.attribute-name.dgmr"
         }
       }
     }

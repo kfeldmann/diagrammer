@@ -58,6 +58,15 @@ struct Ctx {
     id_index: HashMap<String, usize>,
     edges: Vec<Edge>,
     groups: Vec<GroupInfo>,
+    /// Page furniture (M21.1). At most one of each; see
+    /// [`Ctx::process_border`] / [`Ctx::process_title_block`].
+    border: Option<Border>,
+    title_block: Option<TitleBlock>,
+    /// Each text block with the offset of its `textblock` keyword. The offset
+    /// rides along because one check — the lower-right / title-block conflict
+    /// — can only be decided once the whole diagram is read (either statement
+    /// may come first), and it still has to point at the text block.
+    text_blocks: Vec<(TextBlock, usize)>,
 }
 
 pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
@@ -66,6 +75,9 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
         id_index: HashMap::new(),
         edges: Vec::new(),
         groups: Vec::new(),
+        border: None,
+        title_block: None,
+        text_blocks: Vec::new(),
     };
     for stmt in &raw.statements {
         ctx.process_statement(stmt, None)?;
@@ -106,12 +118,43 @@ pub fn resolve(raw: &RawDiagram) -> Result<Diagram, Error> {
         })
         .collect();
 
+    check_corner_conflict(&ctx.title_block, &ctx.text_blocks)?;
+
     Ok(Diagram {
         direction: raw.direction,
         nodes,
         edges: ctx.edges,
         groups,
+        border: ctx.border,
+        title_block: ctx.title_block,
+        text_blocks: ctx.text_blocks.into_iter().map(|(b, _)| b).collect(),
     })
+}
+
+/// The title block owns the lower-right corner of the page, so a text block
+/// there has nowhere to go. Checked once, after every statement has been read,
+/// because either statement may be written first — and the error always points
+/// at the **text block**, since that is the statement that has to move (the
+/// title block is the one reserved first).
+fn check_corner_conflict(
+    title_block: &Option<TitleBlock>,
+    text_blocks: &[(TextBlock, usize)],
+) -> Result<(), Error> {
+    if title_block.is_none() {
+        return Ok(());
+    }
+    if let Some((_, offset)) = text_blocks
+        .iter()
+        .find(|(b, _)| b.anchor == Anchor::LowerRight)
+    {
+        return Err(Error::Resolve {
+            offset: *offset,
+            message: "`textblock lower-right` conflicts with `titleblock` \
+                      (the title block owns that corner)"
+                .to_string(),
+        });
+    }
+    Ok(())
 }
 
 impl Ctx {
@@ -123,7 +166,158 @@ impl Ctx {
         match stmt {
             RawStatement::NodeList(nl) => self.process_nodelist(nl, group),
             RawStatement::Group(sg) => self.process_group(sg, group),
+            // The parser rejects the page-furniture statements inside a group
+            // body (they are page-level), so reaching one here with a `group`
+            // would be a parser bug rather than user error.
+            RawStatement::Border(rb) => {
+                debug_assert!(group.is_none(), "a border is page-level");
+                self.process_border(rb)
+            }
+            RawStatement::TitleBlock(rt) => {
+                debug_assert!(group.is_none(), "a title block is page-level");
+                self.process_title_block(rt)
+            }
+            RawStatement::TextBlock(rt) => {
+                debug_assert!(group.is_none(), "a text block is page-level");
+                self.process_text_block(rt)
+            }
         }
+    }
+
+    // ---- page furniture (M21.1) ----
+    //
+    // Decoration only, so validation is all there is: no node, edge, or group
+    // state is touched. Everything here errors with an offset (the resolve
+    // layer's contract) so the CLI reports a line number.
+
+    /// `border attr*` — at most one per diagram.
+    fn process_border(&mut self, rb: &RawBorder) -> Result<(), Error> {
+        validate_attrs(&rb.attrs, &["color", "line"], "border")?;
+        let mut color = None;
+        let mut line = None;
+        for attr in &rb.attrs {
+            match attr.name.as_str() {
+                "color" => color = Some(attr.value.clone()),
+                // `line` takes the same four style names a group's does, so a
+                // typo like `line="wavy"` fails loudly instead of rendering
+                // solid.
+                "line" => {
+                    line = Some(parse_style_value(
+                        "border",
+                        "line",
+                        &attr.value,
+                        attr.offset,
+                    )?)
+                }
+                _ => unreachable!("validate_attrs ensures only known border attributes"),
+            }
+        }
+        if self.border.is_some() {
+            return Err(Error::Resolve {
+                offset: rb.offset,
+                message: "duplicate `border` (a diagram has at most one)".to_string(),
+            });
+        }
+        self.border = Some(Border { color, line });
+        Ok(())
+    }
+
+    /// `titleblock attr* field*` — at most one per diagram.
+    ///
+    /// `color` and `fill` are style keys; every other key is a **field** and is
+    /// open by design (a title block is a metadata table whose keys the user
+    /// chooses — the one documented exception to "unknown attribute is an
+    /// error"). Keys are verbatim and ordered, so `Version` and `API Gateway`
+    /// survive as written. A duplicate key is an error either way.
+    fn process_title_block(&mut self, rt: &RawTitleBlock) -> Result<(), Error> {
+        let mut seen: Vec<&str> = Vec::new();
+        let mut fields = Vec::new();
+        let mut color = None;
+        let mut fill = None;
+        for field in &rt.fields {
+            if seen.contains(&field.name.as_str()) {
+                return Err(Error::Resolve {
+                    offset: field.offset,
+                    message: format!("duplicate title block key `{}`", field.name),
+                });
+            }
+            seen.push(&field.name);
+            // The two style keys are not fields. They still occupy the key
+            // namespace (a duplicate `color` is caught above), but they are
+            // drawn as the table's stroke and interior, not as a row.
+            match field.name.as_str() {
+                "color" => color = Some(field.value.clone()),
+                "fill" => fill = Some(field.value.clone()),
+                _ => fields.push(Field {
+                    key: field.name.clone(),
+                    value: field.value.clone(),
+                }),
+            }
+        }
+        if self.title_block.is_some() {
+            return Err(Error::Resolve {
+                offset: rt.offset,
+                message: "duplicate `titleblock` (a diagram has at most one)".to_string(),
+            });
+        }
+        self.title_block = Some(TitleBlock {
+            fields,
+            color,
+            fill,
+        });
+        Ok(())
+    }
+
+    /// `textblock anchor attr* rawline*` — one per anchor.
+    fn process_text_block(&mut self, rt: &RawTextBlock) -> Result<(), Error> {
+        validate_attrs(&rt.attrs, &["color", "fill", "text", "width"], "textblock")?;
+        let mut color = None;
+        let mut fill = None;
+        let mut text = None;
+        let mut width = None;
+        for attr in &rt.attrs {
+            match attr.name.as_str() {
+                "color" => color = Some(attr.value.clone()),
+                "fill" => fill = Some(attr.value.clone()),
+                "text" => text = Some(attr.value.clone()),
+                "width" => width = Some(parse_width(&attr.value, attr.offset)?),
+                _ => unreachable!("validate_attrs ensures only known textblock attributes"),
+            }
+        }
+        // A body of only blank lines is empty as far as the page is
+        // concerned: it would draw nothing, so it is the same mistake as no
+        // body at all (and the same message).
+        if rt.body.iter().all(|line| line.trim().is_empty()) {
+            return Err(Error::Resolve {
+                offset: rt.offset,
+                message: format!("text block at `{}` has an empty body", rt.anchor.as_str()),
+            });
+        }
+        if let Some((existing, _)) = self.text_blocks.iter().find(|(b, _)| b.anchor == rt.anchor) {
+            return Err(Error::Resolve {
+                offset: rt.offset,
+                message: format!(
+                    "duplicate text block anchor `{}` (a text block at `{}` already exists)",
+                    rt.anchor.as_str(),
+                    existing.anchor.as_str()
+                ),
+            });
+        }
+        // The lower-right / title-block conflict is not checked here: either
+        // statement may come first, so it is decided in one pass at the end
+        // of `resolve` (see `check_corner_conflict`).
+        self.text_blocks.push((
+            TextBlock {
+                anchor: rt.anchor,
+                body: rt.body.clone(),
+                color,
+                fill,
+                text,
+                width,
+            },
+            rt.offset,
+        ));
+        Ok(())
     }
 
     fn process_group(&mut self, sg: &RawGroup, parent: Option<usize>) -> Result<(), Error> {
@@ -140,7 +334,14 @@ impl Ctx {
             match attr.name.as_str() {
                 "color" => color = Some(attr.value.clone()),
                 "fill" => fill = Some(attr.value.clone()),
-                "line" => line = Some(parse_line_style(&attr.value, attr.offset)?),
+                "line" => {
+                    line = Some(parse_style_value(
+                        "group",
+                        "line",
+                        &attr.value,
+                        attr.offset,
+                    )?)
+                }
                 "text" => text = Some(attr.value.clone()),
                 _ => unreachable!("validate_attrs ensures only known group attributes"),
             }
@@ -340,16 +541,39 @@ fn merge_attr(
     }
 }
 
-/// Parse the value of a group `line` attribute into a [`Style`]. The
-/// value is a quoted string (so `"dashed"`, not the bare contextual keyword
-/// an edge body uses), and must be one of the four style names; anything else
-/// is a resolve error so a typo like `line="wavy"` fails loudly instead of
-/// silently rendering as a solid frame.
-fn parse_line_style(value: &str, offset: usize) -> Result<Style, Error> {
+/// Parse a `line` attribute's value into a [`Style`]. The value is a quoted
+/// string (so `"dashed"`, not the bare contextual keyword an edge body uses),
+/// and must be one of the four style names; anything else is a resolve error
+/// so a typo like `line="wavy"` fails loudly instead of silently rendering as
+/// a solid frame. `owner` names the position in the message ("group",
+/// "border").
+fn parse_style_value(owner: &str, name: &str, value: &str, offset: usize) -> Result<Style, Error> {
     Style::from_ident(value).ok_or_else(|| Error::Resolve {
         offset,
-        message: format!("group `line` must be one of solid, dotted, dashed, thick; got `{value}`"),
+        message: format!(
+            "{owner} `{name}` must be one of solid, dotted, dashed, thick; got `{value}`"
+        ),
     })
+}
+
+/// Parse a text block's `width` attribute: a **positive** number of pixels.
+///
+/// The value arrives as a quoted string (`width="320"`), so it is parsed here
+/// rather than by the lexer. Zero and negatives are rejected — a width of zero
+/// would wrap every word onto its own line and a negative one has no meaning —
+/// and so is anything that is not a finite number, so `width="wide"` fails
+/// with a message that names the expected shape instead of silently rendering
+/// an unwrapped block.
+fn parse_width(value: &str, offset: usize) -> Result<f32, Error> {
+    let bad = || Error::Resolve {
+        offset,
+        message: format!("textblock `width` must be a positive number; got `{value}`"),
+    };
+    let w: f32 = value.trim().parse().map_err(|_| bad())?;
+    if !w.is_finite() || w <= 0.0 {
+        return Err(bad());
+    }
+    Ok(w)
 }
 
 /// Parse the value of an edge `from` / `to` attribute into an
@@ -893,6 +1117,309 @@ mod tests {
         assert!(
             matches!(e, Error::Resolve { ref message, .. } if message.contains("duplicate attribute `from`"))
         );
+    }
+
+    // ---- M21.1: page furniture (border / titleblock / textblock) ----
+
+    #[test]
+    fn page_furniture_absent_by_default() {
+        // The property that keeps M21.1 output-neutral: a diagram that uses
+        // none of it resolves to the same empty decoration as before.
+        let d = ok(include_str!("../examples/infra.dgmr"));
+        assert!(d.border.is_none());
+        assert!(d.title_block.is_none());
+        assert!(d.text_blocks.is_empty());
+    }
+
+    #[test]
+    fn border_resolves_with_its_style() {
+        let d = ok("diagram top-down\nborder color=\"#333\" line=\"dashed\"\n");
+        let b = d.border.as_ref().expect("border");
+        assert_eq!(b.color.as_deref(), Some("#333"));
+        assert_eq!(b.line, Some(Style::Dashed));
+        // Bare `border` is present with default styling.
+        let d = ok("diagram top-down\nborder\n");
+        let b = d.border.as_ref().expect("border");
+        assert_eq!(b.color, None);
+        assert_eq!(b.line, None);
+    }
+
+    #[test]
+    fn border_accepts_all_line_styles() {
+        for (s, want) in [
+            ("solid", Style::Solid),
+            ("dotted", Style::Dotted),
+            ("dashed", Style::Dashed),
+            ("thick", Style::Thick),
+        ] {
+            let d = ok(&format!("diagram top-down\nborder line=\"{s}\"\n"));
+            assert_eq!(d.border.expect("border").line, Some(want), "line=\"{s}\"");
+        }
+    }
+
+    #[test]
+    fn border_color_empty_string_is_a_value_not_an_error() {
+        // `color=""` draws nothing — a legal way to reserve the inset without
+        // stroking it.
+        let d = ok("diagram top-down\nborder color=\"\"\n");
+        assert_eq!(d.border.expect("border").color.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn duplicate_border_is_an_error() {
+        let (e, line) = err("diagram top-down\nborder\nborder\n");
+        assert_eq!(line, 3);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("duplicate `border`")));
+    }
+
+    #[test]
+    fn border_invalid_line_style_is_an_error() {
+        let (e, line) = err("diagram top-down\nborder line=\"wavy\"\n");
+        assert_eq!(line, 2);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("border `line` must be one of") && message.contains("wavy")));
+    }
+
+    #[test]
+    fn border_unknown_attribute_is_an_error() {
+        let (e, line) = err("diagram top-down\nborder bogus=\"x\"\n");
+        assert_eq!(line, 2);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("unknown border attribute `bogus`")));
+    }
+
+    #[test]
+    fn border_duplicate_attribute_is_an_error() {
+        let (e, _) = err("diagram top-down\nborder color=\"a\" color=\"b\"\n");
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("duplicate attribute `color`")));
+    }
+
+    #[test]
+    fn title_block_keeps_its_fields_in_order_and_verbatim() {
+        let d = ok("diagram top-down\ntitleblock\n\
+             Title   = \"Finance: Network Architecture\"\n\
+             Company = \"Big Corp, LLC\"\n\
+             API     = \"v2\"\n\
+             end\n");
+        let tb = d.title_block.as_ref().expect("title block");
+        let pairs: Vec<(&str, &str)> = tb
+            .fields
+            .iter()
+            .map(|f| (f.key.as_str(), f.value.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [
+                ("Title", "Finance: Network Architecture"),
+                ("Company", "Big Corp, LLC"),
+                // Keys are open by design: an unknown key is data, not a typo,
+                // and capitalization is the author's.
+                ("API", "v2"),
+            ]
+        );
+        assert_eq!(tb.color, None);
+        assert_eq!(tb.fill, None);
+    }
+
+    #[test]
+    fn title_block_style_keys_are_not_fields() {
+        let d = ok("diagram top-down\ntitleblock\n\
+             Title = \"X\"\n\
+             color = \"#888\"\n\
+             fill  = \"#eef\"\n\
+             end\n");
+        let tb = d.title_block.as_ref().expect("title block");
+        assert_eq!(tb.fields.len(), 1, "color/fill are style, not fields");
+        assert_eq!(tb.fields[0].key, "Title");
+        assert_eq!(tb.color.as_deref(), Some("#888"));
+        assert_eq!(tb.fill.as_deref(), Some("#eef"));
+    }
+
+    #[test]
+    fn title_block_style_keys_occupy_the_key_namespace() {
+        // `color` is not a field, but a repeated `color` is still a duplicate
+        // key (it would otherwise be a silently last-one-wins style).
+        let (e, line) =
+            err("diagram top-down\ntitleblock\ncolor = \"#111\"\ncolor = \"#222\"\nend\n");
+        assert_eq!(line, 4);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("duplicate title block key `color`")));
+    }
+
+    #[test]
+    fn title_block_one_liner_resolves() {
+        let d = ok("diagram top-down\ntitleblock Title=\"X\" Company=\"Y\"\nend\n");
+        let tb = d.title_block.as_ref().expect("title block");
+        assert_eq!(tb.fields.len(), 2);
+        assert_eq!(tb.fields[1].key, "Company");
+    }
+
+    #[test]
+    fn empty_title_block_is_legal() {
+        // Unlike a text block, an empty title block is well-defined: the
+        // inset is reserved and the table is empty (M21.3 decides how it
+        // draws). The grammar allows it, so resolve does too.
+        let d = ok("diagram top-down\ntitleblock\nend\n");
+        assert!(d.title_block.expect("title block").fields.is_empty());
+    }
+
+    #[test]
+    fn duplicate_title_block_key_is_an_error() {
+        let (e, line) = err("diagram top-down\ntitleblock\nTitle = \"X\"\nTitle = \"Y\"\nend\n");
+        assert_eq!(line, 4);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("duplicate title block key `Title`")));
+    }
+
+    #[test]
+    fn duplicate_title_block_is_an_error() {
+        let (e, line) = err("diagram top-down\ntitleblock\nTitle = \"X\"\nend\n\
+             titleblock\nCompany = \"Y\"\nend\n");
+        assert_eq!(line, 5);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("duplicate `titleblock`")));
+    }
+
+    #[test]
+    fn text_block_resolves_body_anchor_and_style() {
+        let d = ok("diagram top-down\n\
+             textblock upper-left width=\"320\" color=\"#333\" fill=\"#eef\" text=\"#005\"\n\
+             line one\n\
+             \n\
+             line two\n\
+             end\n");
+        assert_eq!(d.text_blocks.len(), 1);
+        let tb = &d.text_blocks[0];
+        assert_eq!(tb.anchor, Anchor::UpperLeft);
+        assert_eq!(tb.body, ["line one", "", "line two"]);
+        assert_eq!(tb.width, Some(320.0));
+        assert_eq!(tb.color.as_deref(), Some("#333"));
+        assert_eq!(tb.fill.as_deref(), Some("#eef"));
+        assert_eq!(tb.text.as_deref(), Some("#005"));
+    }
+
+    #[test]
+    fn every_anchor_may_hold_one_block() {
+        let d = ok("diagram top-down\n\
+             textblock top\na\nend\n\
+             textblock upper-right\nb\nend\n\
+             textblock right\nc\nend\n\
+             textblock lower-right\nd\nend\n\
+             textblock bottom\ne\nend\n\
+             textblock lower-left\nf\nend\n\
+             textblock left\ng\nend\n\
+             textblock upper-left\nh\nend\n");
+        assert_eq!(d.text_blocks.len(), 8);
+        assert_eq!(d.text_blocks[3].anchor, Anchor::LowerRight);
+    }
+
+    #[test]
+    fn duplicate_text_block_anchor_is_an_error() {
+        let (e, line) = err("diagram top-down\n\
+             textblock right\na\nend\n\
+             textblock right\nb\nend\n");
+        assert_eq!(line, 5);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("duplicate text block anchor `right`")));
+    }
+
+    #[test]
+    fn textblock_lower_right_conflicts_with_titleblock() {
+        // The title block owns the lower-right corner, and it is reserved
+        // first — so the conflict is reported on the text block whichever
+        // order they are written in.
+        let (e, line) = err("diagram top-down\n\
+             titleblock\nTitle = \"X\"\nend\n\
+             textblock lower-right\na\nend\n");
+        assert_eq!(line, 5);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("`textblock lower-right` conflicts with `titleblock`")));
+        let (e, line) = err("diagram top-down\n\
+             textblock lower-right\na\nend\n\
+             titleblock\nTitle = \"X\"\nend\n");
+        assert_eq!(line, 2);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("conflicts with `titleblock`")));
+    }
+
+    #[test]
+    fn empty_text_block_body_is_an_error() {
+        let (e, line) = err("diagram top-down\ntextblock right\nend\n");
+        assert_eq!(line, 2);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("text block at `right` has an empty body")));
+    }
+
+    #[test]
+    fn whitespace_only_text_block_body_is_empty() {
+        // A body of only blank lines would draw nothing, so it is the same
+        // mistake as no body at all.
+        let (e, line) = err("diagram top-down\ntextblock right\n   \n\t\nend\n");
+        assert_eq!(line, 2);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("has an empty body")));
+    }
+
+    #[test]
+    fn text_block_width_must_be_a_positive_number() {
+        for bad in ["0", "-10", "wide", "", "NaN", "inf", "1e999"] {
+            let src = format!("diagram top-down\ntextblock right width=\"{bad}\"\na\nend\n");
+            let (e, line) = err(&src);
+            assert_eq!(line, 2, "width=\"{bad}\"");
+            assert!(
+                matches!(e, Error::Resolve { ref message, .. }
+                    if message.contains("textblock `width` must be a positive number")),
+                "width=\"{bad}\" gave {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_block_width_accepts_a_fractional_number() {
+        let d = ok("diagram top-down\ntextblock right width=\"320.5\"\na\nend\n");
+        assert_eq!(d.text_blocks[0].width, Some(320.5));
+    }
+
+    #[test]
+    fn text_block_unknown_attribute_is_an_error() {
+        // The title block's keys are open; a text block's attributes are not
+        // (`color`/`fill`/`text`/`width` only), so a typo still fails loudly.
+        let (e, line) = err("diagram top-down\ntextblock right bogus=\"x\"\na\nend\n");
+        assert_eq!(line, 2);
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("unknown textblock attribute `bogus`")));
+    }
+
+    #[test]
+    fn text_block_duplicate_attribute_is_an_error() {
+        let (e, _) = err("diagram top-down\ntextblock right width=\"10\" width=\"20\"\na\nend\n");
+        assert!(matches!(e, Error::Resolve { ref message, .. }
+                if message.contains("duplicate attribute `width`")));
+    }
+
+    #[test]
+    fn page_furniture_does_not_perturb_the_graph() {
+        // Decoration only: adding all three changes no node, edge, group, or
+        // membership — which is what makes M21.1 output-neutral.
+        let plain = ok("diagram top-down\nweb --> lb\ngroup \"G\"\napi\nend\n");
+        let decorated = ok("diagram top-down\n\
+             border color=\"#333\"\n\
+             titleblock\nTitle = \"X\"\nend\n\
+             textblock right\nhello\nend\n\
+             web --> lb\ngroup \"G\"\napi\nend\n");
+        assert_eq!(decorated.nodes.len(), plain.nodes.len());
+        assert_eq!(decorated.edges.len(), plain.edges.len());
+        assert_eq!(decorated.groups.len(), plain.groups.len());
+        for (a, b) in decorated.nodes.iter().zip(&plain.nodes) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.group, b.group);
+            assert_eq!(a.label, b.label);
+        }
+        assert_eq!(decorated.edges[0].from, plain.edges[0].from);
+        assert_eq!(decorated.edges[0].to, plain.edges[0].to);
+        assert_eq!(decorated.direction, plain.direction);
     }
 
     #[test]

@@ -48,16 +48,30 @@ Run from this `contrib/vim` directory (or adjust `$PWD` accordingly).
 - the reserved words `diagram`, `group`, `end` at statement start; a
   mid-line occurrence sits where a bare id is allowed and the parser
   rejects it, so it is flagged too,
+- the page-furniture keywords `border`, `titleblock`, `textblock` at
+  statement start only — they are reserved *only* there, so a node may
+  legally be named `border` (`a --> border`) and is not flagged,
+- text-block anchors (`top`, `upper-right`, …) only in the slot right
+  after `textblock`; `right --> left` stays two plain nodes,
 - directions (`top-down`, …) only in the slot after `diagram`/`group`,
 - shapes (`box`, `cylinder`) only after `:`,
 - edge operators `--` / `-->`, and edge-body styles (`solid`, `dotted`,
   `dashed`, `thick`) only inside an edge body,
 - attribute names before `=`: known names (`color`, `fill`, `text`,
-  `line`, `from`, `to`) highlight as attributes, unknown ones are flagged.
+  `line`, `from`, `to`, `width`) highlight as attributes, unknown ones are
+  flagged — **except inside a `titleblock` body**, where keys are open by
+  design and every key highlights as an attribute name,
+- `titleblock` / `textblock` bodies: the `titleblock` region highlights
+  fields (`Key = "value"`) and `color`/`fill` as style keys; the
+  `textblock` region is left **unpainted** on purpose, because its body is
+  raw prose where `#` is not a comment, `-->` is not an arrow, and
+  Markdown markers are not operators. Both regions end at their own `end`
+  line (a line whose trimmed content is exactly `end`).
 
 Highlighting is contextual on purpose — the grammar reserves only
-`diagram`/`group`/`end`, so a node may legally be named `box` or `thick`
-and stays plain. Invalid positions the regexes cannot judge (wrong
+`diagram`/`group`/`end` as identifiers (plus the page-furniture keywords at
+statement start), so a node may legally be named `box`, `thick`, or
+`border` and stays plain. Invalid positions the regexes cannot judge (wrong
 attribute for the position, unknown `from`/`to` side, bad enum value) are
 left to `diagrammer`'s parser.
 

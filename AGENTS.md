@@ -54,9 +54,17 @@ snapshot) byte-identical, and what keeps the fields live under
 `dead_code = "deny"`.
 
 `text.rs` measures labels against the baked
-DejaVu Sans metrics in `metrics_table.rs` — generated from the embedded font
-by `tools/gen-metrics-table` and verified against it by tests
-(deterministic across machines).
+DejaVu Sans metrics in `metrics_table.rs` — generated from the embedded fonts
+by `tools/gen-metrics-table` and verified against them by tests
+(deterministic across machines). Since M21.2 the table carries **two** faces
+(Regular and Bold) behind one `Face` struct: `text::measure` is Regular and
+stays bit-identical for every pre-M21.2 caller, while `text::measure_run(text,
+size, Weight::Bold)` measures an inline bold run with the bold advances
+(12–23% wider — Regular metrics would overflow a text block). Italic has no
+table and no `Weight` variant: DejaVu Sans Oblique has Regular's advances and
+em box for ASCII and Latin-1 except four glyphs (≤1.4%), so it measures as
+Regular by design. Both faces share an em box, asserted at compile time, so
+`line_height` needs no weight term.
 `error.rs` is an offset-carrying `Error` enum → 1-based line numbers.
 
 ## src/ module map
@@ -98,9 +106,10 @@ src/
                  sort tie-breaks, so phase-1 routing is invariant under edge
                  permutation
                  → Layout
-  text.rs        label measurement against the baked metrics table
-  metrics_table.rs  GENERATED baked DejaVu metrics — never hand-edit;
-                 regenerate: cargo run -p gen-metrics-table
+  text.rs        label measurement against the baked metrics tables;
+                 `measure` = Regular, `measure_run(.., Weight)` for bold
+  metrics_table.rs  GENERATED baked DejaVu metrics (Regular + Bold faces) —
+                 never hand-edit; regenerate: cargo run -p gen-metrics-table
   error.rs       Error enum + line_of()
   render/
     mod.rs       `pub mod svg;`
@@ -197,7 +206,7 @@ costs and the signing options.
   `#[ignore]`d inspection tests (which read `DIAG_SRC`).
 - **Deterministic output.** `fmt()` formats floats to exactly 2 decimals; text
   is measured against the baked metrics of the **embedded** DejaVu Sans
-  Regular (`src/metrics_table.rs`), never a system font. Snapshots are byte-stable across
+  Regular and Bold faces (`src/metrics_table.rs`), never a system font. Snapshots are byte-stable across
   machines — don't introduce nondeterminism (random ids, hashmap iteration
   order leaking into output, system fonts). Edge-label placement (M13) is a
   fixed-order greedy pass plus one refinement pass over candidate anchors —
@@ -326,13 +335,27 @@ costs and the signing options.
   grown rect for the same reason.
 - **Measurement is baked and verified.** `src/metrics_table.rs` is *generated*
   — never hand-edit it; regenerate with `cargo run -p gen-metrics-table`
-  (and commit the result) when the bundled font changes. The
-  `font_verification` tests in `text.rs` prove the table is bit-identical to
-  live `ttf-parser` lookups over the whole Unicode range — keep them green.
-  Two load-bearing quirks (pinned by those tests): pixel scaling is
-  `font_size / (ascent − descent)` (the em box, **not** `units_per_em`), and
-  kerning is *first horizontal subtable wins* with zero-valued pairs treated
-  as absent.
+  (and commit the result) when the bundled font changes. It holds two faces
+  (M21.2): one `Face` struct with a `REGULAR` and a `BOLD` const, emitted by
+  the same generator code path, so the lookup semantics cannot drift between
+  them. `text::measure` is exactly `measure_run(.., Weight::Regular)` and
+  must stay **bit-identical** for every existing caller (node labels, frame
+  titles, edge labels are all Regular — the whole pre-M21 layout path); only
+  inline-bold text-block runs use `Weight::Bold`. **Italic is Regular, and
+  that is deliberate** — Oblique shares Regular's em box and, across ASCII
+  and Latin-1, its advances except for four glyphs (`« » Þ æ`, ≤1.4%), so a
+  third ~100 KB table would not pay for itself, and v0 already measures the
+  widest plausible stack member (a test pins the ASCII + Latin-1 claim). The
+  `font_verification` tests in `text.rs` prove **each** face is bit-identical
+  to live `ttf-parser` lookups over the whole Unicode range — keep them green
+  (they are the slowest tests in the suite; running both faces costs ~40 s
+  instead of ~20 s). Two load-bearing quirks (pinned by those tests): pixel
+  scaling is `font_size / (ascent − descent)` (the em box, **not**
+  `units_per_em`), and kerning is *first horizontal subtable wins* with
+  zero-valued pairs treated as absent. Both faces share an em box, which is
+  why `line_height`/`Metrics::height` carry no weight term — a compile-time
+  `const _` block in `text.rs` asserts it, so a regenerated table that
+  drifted fails the build.
 
 ## Shared constants across the layout/render boundary
 

@@ -20,11 +20,13 @@ Two milestones are open, and they are independent of each other:
 **M21 (page furniture — border, title block, text blocks)**, the next one,
 and **M8 (CLI polish)**. M21 is a pure post-routing decoration pass: it
 adds no graph participant, touches no router, and leaves every existing
-diagram byte-identical. Its language half — **M21.1** (grammar, AST,
-resolve, tooling) — is **done**: the three blocks parse and validate, and
-rendering still ignores them, so all twelve snapshots are byte-identical.
-What remains is the drawing half (M21.2 bold metrics, M21.3 the `decorate`
-pass).
+diagram byte-identical. Two of its four parts are **done**: **M21.1** (the
+grammar, AST, resolve, and tooling — the three blocks parse and validate
+while rendering ignores them) and **M21.2** (bold metrics — the baked table
+now carries a DejaVu Sans Bold face beside Regular, so an inline `**bold**`
+run can be measured to the same standard). All twelve snapshots are still
+byte-identical. What remains is the drawing half: **M21.3**, the `decorate`
+pass and the renderer.
 
 Also complete: the **Windows portability pass** (recorded in full below) —
 `build/build-windows` cross-compiles a self-contained `diagrammer.exe`, and
@@ -2403,7 +2405,7 @@ slightly wrong):
 
 **Blocked by:** nothing. **Blocks:** M21.2, M21.3.
 
-### ☐ M21.2 — Bold metrics (the cost of "**bold**")
+### ✅ M21.2 — Bold metrics (the cost of "**bold**")
 
 Inline bold cannot be measured with the existing table: DejaVu Sans Bold is
 materially wider than Regular. Measured from the bundled fonts (hmtx
@@ -2425,18 +2427,18 @@ heights are unaffected. Italic therefore reuses the Regular table, which is
 consistent with the existing policy of measuring the widest plausible stack
 member — and it must be documented as a deliberate choice, not an oversight.
 
-- [ ] **Generator.** Extend `tools/gen-metrics-table` to emit **two** tables
+- [x] **Generator.** Extend `tools/gen-metrics-table` to emit **two** tables
       (Regular and Bold) from `dejavu::sans::regular()` / `dejavu::sans::bold()`
       (both already bundled by the `dejavu` crate). Same semantics, same
       quirks — pixel scale `font_size / (ascent − descent)`, first horizontal
       kerning subtable wins with zero-valued pairs treated as absent.
       `src/metrics_table.rs` grows by ~100 KB (generated; commit it).
-- [ ] **Measurement.** A style-aware entry point in [`crate::text`]
+- [x] **Measurement.** A style-aware entry point in [`crate::text`]
       (`measure_styled` over `(text, weight, slant)` runs, or a
       `measure_run(&str, f32, Weight)` plus the existing `measure` kept
       **bit-identical** for every current caller). Every existing call site
       stays Regular — the node/frame/edge-label path must not move.
-- [ ] **Verification.** `font_verification` covers both tables, still
+- [x] **Verification.** `font_verification` covers both tables, still
       exhaustively over the Unicode range. Note the runtime cost: it is
       already the slowest test in the suite (~20 s) and this doubles it —
       acceptable, but say so rather than discovering it later.
@@ -2446,6 +2448,83 @@ member — and it must be documented as a deliberate choice, not an oversight.
 
 **Blocked by:** nothing (parallel with M21.1). **Blocks:** M21.3 (the text
 block layout needs it).
+
+**Done.** 7 new tests (294 total, up from 287), all twelve snapshots
+byte-identical, `build`/`clippy`/`doc`/`fmt` clean. `src/metrics_table.rs` is
+101,824 → 179,102 bytes (+77 KB; the plan's "~100 KB" was an estimate).
+
+Implementation notes (decisions the plan left open, and the two it got
+wrong):
+
+- **The generated file became one `Face` struct with two `const`s**, not two
+  parallel sets of `ASCENT`/`CHAR_RUNS`/`ADVANCES`/`KERN`. Both faces have
+  exactly the same shape, so `text` selects a `&'static Face` once and every
+  lookup helper (`glyph_id`, `h_advance_unscaled`, `kern_unscaled`,
+  `h_scale_factor`) takes it as a parameter. That is what keeps the two
+  faces from drifting: there is one implementation of the semantics, and the
+  generator emits the same code for each face (it is a `write_face(&mut
+  String, &Tables)` call, not a duplicated block). The Regular data is
+  **byte-identical** to the old file — verified field by field against the
+  pre-M21.2 table before committing the regeneration.
+- **`Weight` has two variants, not three.** The plan suggested
+  `measure_styled` over `(text, weight, slant)` runs. Slant has no entry
+  point at all: italic is measured as Regular *by design* (see below), so an
+  `Italic` variant would be a value with no table behind it and no way to be
+  wrong other than by being used. `Weight::{Regular, Bold}` plus
+  `measure_run(text, size, weight)` is the whole API; a caller that needs
+  italic passes `Regular`, which is a deliberate no-op rather than a lookup.
+  `font_verification` independently re-derives the regular advances from the
+  *Oblique* face for ASCII + Latin-1 and asserts they match Regular's, so the
+  four-glyph exception is checked against real font data, not the comment.
+- **Italic-is-Regular is documented, not merely omitted.** The module docs
+  spell out the measured reason (identical em box, and identical advances
+  across ASCII and Latin-1 except `« » Þ æ`, each ≤1.4%) *and* the policy
+  reason (v0 measures against the widest plausible stack member, so a third
+  ~100 KB table for a handful of rare codepoints would be a poor trade). The
+  claim is now pinned by
+  `oblique_matches_regular_across_ascii_and_latin1_except_four_glyphs`, so it
+  is a test rather than a comment. Bold italic (`***text***`) measures Bold:
+  Bold Oblique's advances equal Bold's on prose (ratio 1.0000) and exceed them
+  only on the same four Latin-1 glyphs (≤0.9%), while the weight itself is
+  12–23% wider — so the weight dominates.
+- **The em box is shared, so height is weight-independent — asserted at
+  compile time.** `line_height` is a function of the font size alone, and
+  `Metrics::height` therefore has no weight term. That is now a `const _`
+  block in `text.rs` that walks `Weight::ALL` and asserts
+  `ascent − descent` matches Regular's: a regenerated table that drifted
+  would fail the **build**, not quietly mis-space bold lines. The milestone's
+  claim "ascent/descent match exactly (1901/−483)" is thus enforced rather
+  than commented.
+- **`measure` is exactly `measure_run(.., Regular)`.** Kept as its own
+  function (not a re-export or an alias) so all 16 production call sites —
+  every node label, group title, and edge label — stay textually untouched,
+  and so `measure_is_regular_measure_run` can assert the two agree
+  **bit-for-bit** across sizes. The existing bit-exact font tests were
+  rewritten to iterate `Weight::ALL`; none of their assertions changed.
+- **The plan's ratio table is slightly off.** Re-measuring the bundled faces
+  (hmtx advances, em-box scaling, kerning) gives 1.1107 for the
+  ellipsis-prose sample (the plan's 1.117), 1.1339 for the title-block line
+  (plan: 1.130), and 1.2337 for `iiii`/`llll` (plan: 1.234). The order of
+  magnitude and the conclusion are unchanged; `bold_is_materially_wider_than_regular`
+  asserts the 1.10–1.25 band rather than a single value, so it pins the
+  *claim* (a second table is required) without pinning the third decimal.
+- **Verification cost, as predicted:** the exhaustive `font_verification`
+  suite went from ~20 s to ~40 s (full `cargo test` 82 s → 107 s). Worth
+  stating up front; the alternative is a table nobody re-proves.
+- **The generator now formats its own output.** The old generated file was
+  rustfmt-clean by luck (its advance array happened to fit); the doubled file
+  is not, so the generator pipes its text through `rustfmt --emit stdout`
+  before writing. Regeneration is therefore one command with no follow-up
+  `cargo fmt`, and `cargo fmt --check` stays clean — verified by regenerating
+  twice and diffing byte-for-byte.
+- **One non-obvious `dead_code = "deny"` interaction.** The crate denies
+  dead code, and `Weight::Bold` is constructed only by M21.3's text-block
+  layout — a whole milestone away. Two things keep it live *today* without
+  an `#[allow]`: `measure_run`'s `match`/`face()` covers both variants (a
+  variant named in a live `match` arm is not dead), and the `const _` block
+  reads `Weight::ALL`. If a future refactor makes the face selection
+  data-driven, keep that const block — it is what makes the build fail
+  loudly instead of the variant being deleted.
 
 ### ☐ M21.3 — The `decorate` pass and the renderer
 

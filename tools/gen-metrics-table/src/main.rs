@@ -1,4 +1,5 @@
-//! Regenerates `src/metrics_table.rs` from the bundled DejaVu Sans Regular.
+//! Regenerates `src/metrics_table.rs` from the bundled DejaVu Sans **Regular**
+//! and **Bold** faces.
 //!
 //! Run from the workspace root with:
 //!
@@ -6,7 +7,7 @@
 //! cargo run -p gen-metrics-table
 //! ```
 //!
-//! The generated table bakes exactly the font lookups `text::measure` needs
+//! The generated tables bake exactly the font lookups `text::measure_run` needs
 //! (char → glyph id, glyph advance, kerning, ascent/descent), replicating the
 //! lookup semantics of `ttf-parser` so measurement stays byte-identical:
 //!
@@ -18,6 +19,14 @@
 //! - kerning: first horizontal `kern` subtable containing the pair wins
 //!   (the former `find_map` semantics); pairs whose effective value is 0 are
 //!   omitted — a missing pair measures as 0 exactly like a zero value.
+//!
+//! **Both faces are emitted with identical semantics.** They are separate
+//! tables because DejaVu Sans Bold is materially wider than Regular (whole-
+//! string ratios of 1.12–1.23 on prose), so measuring a bold run with Regular
+//! advances would overflow its box. DejaVu Sans *Oblique* needs no table: its
+//! em box matches Regular's and, across ASCII and Latin-1, its advances do too
+//! except for four glyphs (see `text::Weight`), so italic measurement reuses
+//! the Regular table by design.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -25,9 +34,25 @@ use std::fmt::Write as _;
 use ttf_parser::kern::Format;
 use ttf_parser::{Face, GlyphId};
 
-fn main() {
-    let face = Face::parse(dejavu::sans::regular(), 0)
-        .expect("bundled DejaVu Sans Regular must parse as a valid font");
+/// One face's baked data, ready to emit.
+struct Tables {
+    /// Identifier of the emitted `const` (`REGULAR` / `BOLD`).
+    ident: &'static str,
+    /// Human name for the doc comment.
+    name: &'static str,
+    ascent: i16,
+    descent: i16,
+    /// char → glyph as `(char_start, gid_start, len)` runs.
+    runs: Vec<(u32, u16, u16)>,
+    /// Advance per glyph id, in font units.
+    advances: Vec<u16>,
+    /// `(pair, value)` with `pair = left_glyph << 16 | right_glyph`.
+    kern: Vec<(u32, i16)>,
+}
+
+fn extract(ident: &'static str, name: &'static str, data: &'static [u8]) -> Tables {
+    let face = Face::parse(data, 0)
+        .unwrap_or_else(|e| panic!("bundled DejaVu Sans {name} must parse: {e:?}"));
 
     // char -> glyph id. Authoritative `glyph_index` lookup per codepoint, so
     // subtable overlap/precedence is resolved exactly like the runtime did.
@@ -91,12 +116,139 @@ fn main() {
     }
     kern.retain(|_, v| *v != 0); // zero == absent for measurement purposes
 
-    let kern: Vec<(u32, i16)> = kern.into_iter().collect();
+    Tables {
+        ident,
+        name,
+        ascent: face.ascender(),
+        descent: face.descender(),
+        runs,
+        advances,
+        kern: kern.into_iter().collect(),
+    }
+}
+
+/// Emit one face as top-level data consts plus a `Face` that points at them.
+///
+/// The arrays are emitted at module scope (not nested inside the `Face`
+/// literal) so `rustfmt` can wrap them — the generated file is formatted like
+/// hand-written source and `cargo fmt --check` stays clean.
+fn write_face(out: &mut String, t: &Tables) {
+    let upper = t.ident;
+
+    writeln!(out, "// ---- DejaVu Sans {} ----", t.name).unwrap();
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        "/// char → glyph id runs for DejaVu Sans {}: `(char_start, gid_start, len)`\n\
+         /// — codepoint `char_start + i` maps to glyph `gid_start + i` for\n\
+         /// `i in 0..len`. Sorted by `char_start` for binary search; codepoints\n\
+         /// not covered map to glyph 0 (`.notdef`).\n\
+         ///\n\
+         /// ({} runs covering {} codepoints, {} glyphs in the font.)",
+        t.name,
+        t.runs.len(),
+        t.runs.iter().map(|r| r.2 as usize).sum::<usize>(),
+        t.advances.len(),
+    )
+    .unwrap();
+    writeln!(out, "const {upper}_CHAR_RUNS: &[(u32, u16, u16)] = &[").unwrap();
+    for (c, g, len) in &t.runs {
+        writeln!(out, "    ({c}, {g}, {len}),").unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        "/// Horizontal advance in font units, indexed by glyph id, for DejaVu\n\
+         /// Sans {}. ({} entries.)",
+        t.name,
+        t.advances.len()
+    )
+    .unwrap();
+    writeln!(out, "const {upper}_ADVANCES: &[u16] = &[").unwrap();
+    for chunk in t.advances.chunks(12) {
+        let line: Vec<String> = chunk.iter().map(|a| a.to_string()).collect();
+        writeln!(out, "    {},", line.join(", ")).unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out).unwrap();
+    writeln!(
+        out,
+        "/// Kerning in font units for DejaVu Sans {}, as `(pair, value)` where\n\
+         /// `pair` is `(left_glyph << 16) | right_glyph`. Sorted by `pair` for\n\
+         /// binary search; a missing pair kerns as 0. ({} pairs; zero-valued\n\
+         /// pairs are omitted.)",
+        t.name,
+        t.kern.len()
+    )
+    .unwrap();
+    writeln!(out, "const {upper}_KERN: &[(u32, i16)] = &[").unwrap();
+    for (pair, value) in &t.kern {
+        writeln!(out, "    ({pair}, {value}),").unwrap();
+    }
+    writeln!(out, "];").unwrap();
+    writeln!(out).unwrap();
+    writeln!(out, "/// Baked DejaVu Sans {} metrics.", t.name).unwrap();
+    writeln!(out, "pub const {upper}: Face = Face {{").unwrap();
+    writeln!(out, "    ascent: {},", t.ascent).unwrap();
+    writeln!(out, "    descent: {},", t.descent).unwrap();
+    writeln!(out, "    char_runs: {upper}_CHAR_RUNS,").unwrap();
+    writeln!(out, "    advances: {upper}_ADVANCES,").unwrap();
+    writeln!(out, "    kern: {upper}_KERN,").unwrap();
+    writeln!(out, "}};").unwrap();
+    writeln!(out).unwrap();
+}
+
+/// Run the workspace `rustfmt` over generated source, returning the formatted
+/// text.
+///
+/// Falls back to the unformatted text (with a warning) if `rustfmt` is not
+/// installed: the file is still correct, only its line wrapping differs, and
+/// failing the regeneration over a formatting tool would be worse than a
+/// noisy `cargo fmt --check` later.
+fn rustfmt(source: String, path: &std::path::Path) -> String {
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+
+    let child = Command::new("rustfmt")
+        .args(["--edition", "2024", "--emit", "stdout"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut child = match child {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("warning: could not run rustfmt ({e}); writing unformatted table");
+            return source;
+        }
+    };
+    child
+        .stdin
+        .as_mut()
+        .expect("piped stdin")
+        .write_all(source.as_bytes())
+        .expect("write to rustfmt");
+    let output = child.wait_with_output().expect("rustfmt runs");
+    if !output.status.success() {
+        eprintln!(
+            "warning: rustfmt failed on {} ({}); writing unformatted table",
+            path.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+        return source;
+    }
+    String::from_utf8(output.stdout).expect("rustfmt emits UTF-8")
+}
+
+fn main() {
+    let regular = extract("REGULAR", "Regular", dejavu::sans::regular());
+    let bold = extract("BOLD", "Bold", dejavu::sans::bold());
 
     let mut out = String::new();
     writeln!(
         out,
-        "//! Baked DejaVu Sans Regular metrics — GENERATED FILE, DO NOT EDIT."
+        "//! Baked DejaVu Sans metrics (Regular and Bold) — GENERATED FILE, DO NOT EDIT."
     )
     .unwrap();
     writeln!(out, "//!").unwrap();
@@ -112,83 +264,82 @@ fn main() {
     .unwrap();
     writeln!(
         out,
-        "//! are in font units (em = `ASCENT - DESCENT`); `text::measure` scales"
+        "//! are in font units (em = `ascent - descent`); `text::measure_run`"
     )
     .unwrap();
     writeln!(
         out,
-        "//! them to pixels. The `font_verification` tests prove this table"
+        "//! scales them to pixels. Both faces are baked with identical"
     )
     .unwrap();
     writeln!(
         out,
-        "//! matches live `ttf-parser` lookups against the bundled font byte for"
+        "//! semantics, from the two fonts the `dejavu` crate bundles; the"
     )
     .unwrap();
-    writeln!(out, "//! byte.").unwrap();
-    writeln!(out).unwrap();
-    writeln!(out, "/// `hhea` ascender, in font units.").unwrap();
-    writeln!(out, "pub const ASCENT: i16 = {};", face.ascender()).unwrap();
-    writeln!(out).unwrap();
-    writeln!(out, "/// `hhea` descender (negative), in font units.").unwrap();
-    writeln!(out, "pub const DESCENT: i16 = {};", face.descender()).unwrap();
+    writeln!(
+        out,
+        "//! `font_verification` tests prove each table matches live"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "//! `ttf-parser` lookups against its own font byte for byte."
+    )
+    .unwrap();
     writeln!(out).unwrap();
     writeln!(
         out,
-        "/// char → glyph id as `(char_start, gid_start, len)` runs: codepoint\n\
-         /// `char_start + i` maps to glyph `gid_start + i` for `i in 0..len`.\n\
-         /// Sorted by `char_start` for binary search; codepoints not covered map\n\
-         /// to glyph 0 (`.notdef`).\n\
-         ///\n\
-         /// ({} runs covering {} codepoints, {} glyphs in the font.)",
-        runs.len(),
-        runs.iter().map(|r| r.2 as usize).sum::<usize>(),
-        advances.len(),
+        "/// One face's baked metrics, in font units. `text::measure_run` scales"
     )
     .unwrap();
-    writeln!(out, "pub const CHAR_RUNS: &[(u32, u16, u16)] = &[").unwrap();
-    for (c, g, len) in &runs {
-        writeln!(out, "    ({c}, {g}, {len}),").unwrap();
-    }
-    writeln!(out, "];").unwrap();
-    writeln!(out).unwrap();
     writeln!(
         out,
-        "/// Horizontal advance in font units, indexed by glyph id.\n/// ({} entries.)",
-        advances.len()
+        "/// these to pixels at the requested font size; the two faces differ in"
     )
     .unwrap();
-    writeln!(out, "pub const ADVANCES: &[u16] = &[").unwrap();
-    for chunk in advances.chunks(12) {
-        let line: Vec<String> = chunk.iter().map(|a| a.to_string()).collect();
-        writeln!(out, "    {},", line.join(", ")).unwrap();
-    }
-    writeln!(out, "];").unwrap();
-    writeln!(out).unwrap();
     writeln!(
         out,
-        "/// Kerning in font units as `(pair, value)` where `pair` is\n\
-         /// `(left_glyph << 16) | right_glyph`. Sorted by `pair` for binary\n\
-         /// search; a missing pair kerns as 0. ({} pairs; zero-valued pairs\n\
-         /// are omitted.)",
-        kern.len()
+        "/// every field but the em box (they share `ascent - descent`, so line"
     )
     .unwrap();
-    writeln!(out, "pub const KERN: &[(u32, i16)] = &[").unwrap();
-    for (pair, value) in &kern {
-        writeln!(out, "    ({pair}, {value}),").unwrap();
-    }
-    writeln!(out, "];").unwrap();
+    writeln!(out, "/// heights are weight-independent).").unwrap();
+    writeln!(out, "pub struct Face {{").unwrap();
+    writeln!(out, "    /// `hhea` ascender.").unwrap();
+    writeln!(out, "    pub ascent: i16,").unwrap();
+    writeln!(out, "    /// `hhea` descender (negative).").unwrap();
+    writeln!(out, "    pub descent: i16,").unwrap();
+    writeln!(
+        out,
+        "    /// char → glyph id runs (see the emitted comment)."
+    )
+    .unwrap();
+    writeln!(out, "    pub char_runs: &'static [(u32, u16, u16)],").unwrap();
+    writeln!(out, "    /// Advance per glyph id.").unwrap();
+    writeln!(out, "    pub advances: &'static [u16],").unwrap();
+    writeln!(out, "    /// Kerning pairs, sorted by `pair`.").unwrap();
+    writeln!(out, "    pub kern: &'static [(u32, i16)],").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
+    write_face(&mut out, &regular);
+    write_face(&mut out, &bold);
 
-    std::fs::write(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/metrics_table.rs"),
-        out,
-    )
-    .expect("write workspace src/metrics_table.rs");
-    eprintln!(
-        "wrote src/metrics_table.rs: {} runs, {} advances, {} kern pairs",
-        runs.len(),
-        advances.len(),
-        kern.len()
-    );
+    // Emit the file already formatted. The advance arrays are long enough
+    // that rustfmt reflows them, and a generated file that fails
+    // `cargo fmt --check` makes every later `cargo fmt` produce a diff the
+    // author has to reason about. Formatting here keeps "regenerate" a
+    // single command with no follow-up step.
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../src/metrics_table.rs");
+    let out = rustfmt(out, &path);
+    std::fs::write(&path, out).expect("write workspace src/metrics_table.rs");
+    for t in [&regular, &bold] {
+        eprintln!(
+            "{}: {} runs, {} advances, {} kern pairs",
+            t.ident,
+            t.runs.len(),
+            t.advances.len(),
+            t.kern.len()
+        );
+    }
+    eprintln!("wrote src/metrics_table.rs");
 }

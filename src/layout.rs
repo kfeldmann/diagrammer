@@ -140,6 +140,7 @@
 
 use crate::ast::{Diagram, Direction, Group};
 use crate::text;
+use crate::text::Weight;
 
 // ---- Tunable constants (pixels) ----
 
@@ -157,13 +158,18 @@ const NODE_PAD_Y: f32 = FONT_SIZE;
 const NODE_SEP: f32 = 45.0;
 /// Minimum gap between two consecutive layers (edge to edge).
 const RANK_GAP: f32 = 67.5;
-/// Page margin around the whole drawing (top level only) — and the minimum
+/// The page margin around the whole drawing (top level only) — and the minimum
 /// clear space the canvas fit in [`assemble`] guarantees between any drawn
 /// geometry (node rect, frame rect, edge waypoint, label knockout) and every
 /// canvas edge. Strokes and arrowheads paint within a few px of that geometry
 /// (round caps ~1 px; an arrowhead's perpendicular spread is at most 5 px at
 /// its base), so the visible gap never closes.
-const MARGIN: f32 = 20.0;
+///
+/// With page furniture present (M21.3) the same clearance is measured against
+/// the page border rectangle instead of the canvas edge: the border sits
+/// outside the margin, and every block sits outside the margin too, so content
+/// keeps its guarantee.
+pub const MARGIN: f32 = 20.0;
 /// Smallest node size, so even tiny labels get a visible box. Match the
 /// per-node sizing: three font heights, wide and tall.
 const MIN_NODE_W: f32 = 3.0 * FONT_SIZE;
@@ -276,6 +282,67 @@ pub struct Layout {
     pub groups: Vec<GroupRect>,
     pub width: f32,
     pub height: f32,
+    /// Page furniture (M21.3). Decoration only: produced by [`crate::decorate::decorate`]
+    /// *after* routing has finished, so no block can influence a route.
+    /// `None`/empty unless the diagram uses the corresponding statement, which
+    /// is what keeps every pre-M21 rendering byte-identical.
+    pub border: Option<Rect>,
+    pub title_block: Option<Rect>,
+    /// One rect per resolved [`crate::ast::TextBlock`], in declaration order —
+    /// the index-correspondence invariant extends here: `text_blocks[i]`
+    /// describes `diagram.text_blocks[i]` (the renderer zips them).
+    pub text_blocks: Vec<BlockRect>,
+}
+
+/// A plain axis-aligned rectangle in page coordinates (`x`/`y` is the
+/// top-left corner), used for the page border and the title-block table.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Rect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+}
+
+/// A placed text block: its frame rect plus the laid-out lines the renderer
+/// draws. Index-corresponds to `diagram.text_blocks`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockRect {
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// The block's lines, top to bottom: a blank source line (a paragraph
+    /// gap) is `None`; a `---` line is `BlockLine::Rule`; anything else is a
+    /// line of styled runs.
+    pub lines: Vec<BlockLine>,
+    /// Baseline-to-baseline step for the block's body text.
+    pub line_height: f32,
+}
+
+/// One line of a text block's placed body (M21.3).
+#[derive(Debug, Clone, PartialEq)]
+pub enum BlockLine {
+    /// A paragraph gap (a blank source line). Draws nothing.
+    Gap,
+    /// A horizontal rule (a source line that is exactly `---`): its baseline
+    /// `y`, and the `x`/`w` span it is drawn across.
+    Rule { y: f32, x: f32, w: f32 },
+    /// A line of inline runs, with its baseline `y` and the `x` its first run
+    /// starts at.
+    Text { y: f32, x: f32, runs: Vec<TextRun> },
+}
+
+/// One inline run of a text-block line: its text, weight, slant, and drawn
+/// width. Concatenating a line's runs gives the line's text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextRun {
+    pub text: String,
+    pub weight: Weight,
+    pub italic: bool,
+    /// Rendered width in pixels (measured with the matching face, or the
+    /// Regular face for italic — see [`crate::text`]).
+    pub width: f32,
 }
 
 /// A node's axis-aligned rectangle. `x`/`y` is the top-left corner.
@@ -443,7 +510,13 @@ fn cyl_height(shape: crate::ast::Shape, text_height: f32) -> f32 {
 /// Lay out a resolved [`Diagram`], honoring group containment and
 /// per-group direction.
 pub fn layout(diagram: &Diagram) -> Layout {
-    layout_impl(diagram, false, None)
+    let mut l = layout_impl(diagram, false, None);
+    // M21.3: the page-furniture decoration pass. It runs *after* routing has
+    // finished, against the finished canvas, so no block can influence a
+    // route. A diagram using none of the three statements is left
+    // byte-identical.
+    crate::decorate::decorate(diagram, &mut l);
+    l
 }
 
 /// Test hook: stop after the M16 routing pass's phase 1, so tests can
@@ -1309,6 +1382,13 @@ fn assemble(
         groups: groups_out,
         width,
         height,
+        // M21.3: the page furniture is a *post-routing* decoration pass. It
+        // runs here, against the finished canvas, and never before, so no
+        // block can influence a route. With nothing declared it is a no-op
+        // that leaves every field `None`/empty and every coordinate alone.
+        border: None,
+        title_block: None,
+        text_blocks: Vec::new(),
     }
 }
 
@@ -8328,6 +8408,221 @@ src --> t
         }
     }
 
+    // ================= M21.3 — page furniture =================
+
+    /// Every drawn object's rect (node, frame, edge point, label knockout), as
+    /// `(what, x, y, w, h)`.
+    fn drawn_objects(d: &crate::ast::Diagram, l: &Layout) -> Vec<(String, f32, f32, f32, f32)> {
+        let mut out: Vec<(String, f32, f32, f32, f32)> = Vec::new();
+        for n in &l.nodes {
+            out.push((format!("node {}", n.id), n.x, n.y, n.w, n.h));
+        }
+        for s in &l.groups {
+            out.push(("frame".to_string(), s.x, s.y, s.w, s.h));
+        }
+        for e in &l.edges {
+            for &(px, py) in &e.points {
+                out.push(("edge point".to_string(), px, py, 0.0, 0.0));
+            }
+        }
+        for (i, edge) in d.edges.iter().enumerate() {
+            if edge.label.is_some() && l.edges[i].label_at.is_some() {
+                let (x, y, w, h) = label_knockout_of(d, l, i);
+                out.push(("edge label".to_string(), x, y, w, h));
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn page_furniture_absent_renders_byte_identically() {
+        // The headline M21.3 acceptance property: a diagram using none of the
+        // three statements is untouched. `decorate` early-returns, so the
+        // layout equals the pre-M21 one — the snapshots pin the SVG bytes, and
+        // this pins the invariant directly: no page fields, same canvas.
+        let (d, l) = lay_final(include_str!("../examples/infra.dgmr"));
+        assert!(d.border.is_none() && d.title_block.is_none() && d.text_blocks.is_empty());
+        assert!(l.border.is_none());
+        assert!(l.title_block.is_none());
+        assert!(l.text_blocks.is_empty());
+    }
+
+    #[test]
+    fn border_encloses_every_drawn_object() {
+        let (d, l) = lay_final(
+            "diagram top-down\n\
+             border\n\
+             a --> b\n\
+             group \"G\"\n c --> d\n end\n",
+        );
+        let b = l.border.expect("border");
+        for (what, x, y, w, h) in drawn_objects(&d, &l) {
+            assert!(
+                x >= b.x - 1e-2 && y >= b.y - 1e-2,
+                "{what} at ({x},{y}) outside the border {b:?}"
+            );
+            assert!(
+                x + w <= b.x + b.w + 1e-2 && y + h <= b.y + b.h + 1e-2,
+                "{what} at ({x},{y},{w},{h}) outside the border {b:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn content_keeps_the_page_margin_inside_the_border() {
+        // With page furniture present the MARGIN clearance is measured against
+        // the border rectangle instead of the canvas edge: the border sits
+        // outside the margin, and every drawn object stays MARGIN inside it.
+        let (d, l) = lay_final(
+            "diagram top-down\n\
+             border\n\
+             titleblock Title=\"T\" Company=\"C\"\nend\n\
+             textblock right\n a note\n end\n\
+             a -- \"hit\" --> b\n",
+        );
+        let b = l.border.expect("border");
+        for (what, x, y, w, h) in drawn_objects(&d, &l) {
+            assert!(
+                x >= b.x + MARGIN - 1e-2,
+                "{what}: left {x} inside the border margin {}",
+                b.x + MARGIN
+            );
+            assert!(
+                y >= b.y + MARGIN - 1e-2,
+                "{what}: top {y} inside the border margin"
+            );
+            assert!(
+                x + w <= b.x + b.w - MARGIN + 1e-2,
+                "{what}: right {} inside the border margin",
+                x + w
+            );
+            assert!(
+                y + h <= b.y + b.h - MARGIN + 1e-2,
+                "{what}: bottom {} inside the border margin",
+                y + h
+            );
+        }
+    }
+
+    #[test]
+    fn text_blocks_do_not_overlap_content() {
+        // No text block overlaps a node, frame, edge waypoint, or label
+        // knockout.
+        let (d, l) = lay_final(
+            "diagram top-down\n\
+             border\n\
+             titleblock Title=\"T\"\nend\n\
+             textblock top\n top note\n end\n\
+             textblock right\n right note\n end\n\
+             textblock lower-left\n ll note\n end\n\
+             a -- \"lab\" --> b\n b --> c\n",
+        );
+        assert_eq!(l.text_blocks.len(), 3);
+        let content = drawn_objects(&d, &l);
+        for (i, block) in l.text_blocks.iter().enumerate() {
+            for (what, x, y, w, h) in &content {
+                let overlap = block.x < x + w - 1e-2
+                    && *x < block.x + block.w - 1e-2
+                    && block.y < y + h - 1e-2
+                    && *y < block.y + block.h - 1e-2;
+                assert!(
+                    !overlap,
+                    "text block {i} ({block:?}) overlaps {what} at ({x},{y},{w},{h})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn border_presence_produces_identical_coordinates_for_everything_else() {
+        // The decoupling invariant, asserted directly: adding or removing
+        // `border` changes no coordinate.
+        let src = |border: &str| {
+            format!(
+                "diagram top-down\n{border}\
+                 titleblock Title=\"T\"\nend\n\
+                 textblock right\n note\n end\n\
+                 a -- \"x\" --> b\n b --> c\n"
+            )
+        };
+        let (_, with) = lay_final(&src("border\n"));
+        let (_, without) = lay_final(&src(""));
+        let coords = |l: &Layout| -> Vec<(f32, f32, f32, f32)> {
+            let mut v: Vec<(f32, f32, f32, f32)> =
+                l.nodes.iter().map(|n| (n.x, n.y, n.w, n.h)).collect();
+            v.extend(l.groups.iter().map(|g| (g.x, g.y, g.w, g.h)));
+            for e in &l.edges {
+                for &(x, y) in &e.points {
+                    v.push((x, y, 0.0, 0.0));
+                }
+            }
+            v
+        };
+        assert_eq!(coords(&with), coords(&without));
+        assert_eq!((with.width, with.height), (without.width, without.height));
+    }
+
+    #[test]
+    fn text_blocks_index_correspond_to_the_resolved_blocks() {
+        let (d, l) = lay_final(
+            "diagram top-down\n\
+             textblock top\n top\n end\n\
+             textblock left\n left\n end\n\
+             a --> b\n",
+        );
+        assert_eq!(l.text_blocks.len(), d.text_blocks.len());
+        // The blocks are placed at their anchors' sides: `top` above, `left`
+        // to the left, of the content.
+        let a = &l.nodes[0];
+        assert!(l.text_blocks[0].y + l.text_blocks[0].h <= a.y);
+        assert!(l.text_blocks[1].x + l.text_blocks[1].w <= a.x);
+    }
+
+    #[test]
+    fn empty_diagram_with_page_furniture_still_renders_it() {
+        // `layout_impl` early-returns on an empty diagram; the decoration must
+        // still run, so a title-block-only file renders a border and a table.
+        let (_, l) = lay_final(
+            "diagram top-down\n\
+             border\n\
+             titleblock Title=\"Only\" Company=\"Block\"\nend\n",
+        );
+        assert!(l.nodes.is_empty());
+        assert!(l.border.is_some(), "border on an empty diagram");
+        assert!(l.title_block.is_some(), "table on an empty diagram");
+        assert!(l.width > 0.0 && l.height > 0.0);
+        let b = l.border.unwrap();
+        let t = l.title_block.unwrap();
+        assert!(t.x >= b.x && t.y >= b.y);
+        assert!((t.x + t.w - (b.x + b.w)).abs() < 1e-3);
+        assert!((t.y + t.h - (b.y + b.h)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn page_furniture_does_not_perturb_routing() {
+        // Decoration is post-routing: an edge's polyline is identical with and
+        // without page furniture (translated uniformly, never rerouted).
+        let src =
+            |furniture: &str| format!("diagram top-down\n{furniture}a --> b\nb --> c\na --> c\n");
+        let (_, plain) = lay_final(&src(""));
+        let (_, decorated) = lay_final(&src(
+            "border\ntextblock top\n note\n end\ntitleblock Title=\"T\"\nend\n",
+        ));
+        let shift = |l: &Layout| -> (f32, f32) {
+            let p = l.edges[0].points[0];
+            let q = plain.edges[0].points[0];
+            (p.0 - q.0, p.1 - q.1)
+        };
+        let (dx, dy) = shift(&decorated);
+        for (a, b) in decorated.edges.iter().zip(&plain.edges) {
+            assert_eq!(a.points.len(), b.points.len(), "route shape changed");
+            for (p, q) in a.points.iter().zip(&b.points) {
+                assert!((p.0 - q.0 - dx).abs() < 1e-2, "x shifted unevenly");
+                assert!((p.1 - q.1 - dy).abs() < 1e-2, "y shifted unevenly");
+            }
+        }
+    }
+
     #[test]
     fn canvas_keeps_the_page_margin_clear_of_every_object() {
         // Whatever routes where — forced-side escapes past the margin,
@@ -8336,11 +8631,24 @@ src --> t
         // knockout) keeps at least [`MARGIN`] clear of every canvas edge.
         // (Strokes and arrowheads paint within a few px of the geometry
         // checked here; the margin absorbs that.)
-        let cases: [&str; 4] = [
+        //
+        // M21.3 adds a page-furniture case: the border and the title block sit
+        // on the page *inset* ([`crate::decorate::PAGE_INSET`]), which is
+        // outside [`MARGIN`], so they are exempt from this check by
+        // construction — and the content, which keeps MARGIN clear of the
+        // border, therefore clears the canvas margin by even more. No
+        // exemption is needed: every object checked here still clears
+        // [`MARGIN`] from the canvas edge.
+        let cases: [&str; 5] = [
             include_str!("../examples/sides.dgmr"),
             include_str!("../examples/infra.dgmr"),
             include_str!("../examples/finance.dgmr"),
             "diagram top-down\na -- \"hit\" from=\"left\" --> b\n",
+            "diagram top-down\n\
+             border\n\
+             titleblock Title=\"T\"\nend\n\
+             textblock right\n a note\n end\n\
+             a -- \"hit\" --> b\n",
         ];
         for src in cases {
             let (d, l) = lay_final(src);

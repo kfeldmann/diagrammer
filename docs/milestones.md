@@ -20,13 +20,13 @@ Two milestones are open, and they are independent of each other:
 **M21 (page furniture — border, title block, text blocks)**, the next one,
 and **M8 (CLI polish)**. M21 is a pure post-routing decoration pass: it
 adds no graph participant, touches no router, and leaves every existing
-diagram byte-identical. Two of its four parts are **done**: **M21.1** (the
-grammar, AST, resolve, and tooling — the three blocks parse and validate
-while rendering ignores them) and **M21.2** (bold metrics — the baked table
+diagram byte-identical. Three of its four parts are **done**: **M21.1** (the
+grammar, AST, resolve, and tooling), **M21.2** (bold metrics — the baked table
 now carries a DejaVu Sans Bold face beside Regular, so an inline `**bold**`
-run can be measured to the same standard). All twelve snapshots are still
-byte-identical. What remains is the drawing half: **M21.3**, the `decorate`
-pass and the renderer.
+run can be measured to the same standard), and **M21.3** (the `decorate` pass
+and the renderer — the three blocks are now drawn). All twelve pre-M21
+snapshots are still byte-identical, and three new furniture snapshots pin the
+drawing. What remains is **M21.4**, the optional polish pass.
 
 Also complete: the **Windows portability pass** (recorded in full below) —
 `build/build-windows` cross-compiles a self-contained `diagrammer.exe`, and
@@ -2526,72 +2526,169 @@ wrong):
   data-driven, keep that const block — it is what makes the build fail
   loudly instead of the variant being deleted.
 
-### ☐ M21.3 — The `decorate` pass and the renderer
+### ✅ M21.3 — The `decorate` pass and the renderer
 
-A new post-routing stage. [`crate::layout::layout`] runs it after
-[`assemble`] has finished routing; it never runs before, so no block can
-influence a route.
+A new post-routing stage, `src/decorate.rs`. [`crate::layout::layout`] runs it
+after [`assemble`] has finished routing; it never runs before, so no block can
+influence a route. **Done** — 345 tests green (up from 294 after M21.2): 25
+new unit tests in `decorate.rs`, 8 new geometry tests in `layout.rs` (plus the
+existing `canvas_keeps_the_page_margin_clear_of_every_object` gained a
+furniture case), 9 new renderer tests in `render/svg.rs` (including 3 new
+golden snapshots), and 4 new end-to-end tests in `main.rs`. All twelve pre-M21
+snapshots are **byte-identical** — re-verified against a **pre-change binary**
+(the committed `diagrammer-binaries-20261025.zip`), not just the goldens;
+`cargo build`/`clippy`/`doc`/`fmt` clean.
 
-- [ ] **Band reservation.** For each occupied anchor, the block's extent
+- [x] **Band reservation.** For each occupied anchor, the block's extent
       becomes an extra inset between the content bounding box and the page
-      border: `top`/`bottom`/`left`/`right` add to their side, a corner
-      takes from both, and a left/right band forces a minimum border height
-      (and a top/bottom band a minimum width) so a small diagram still has a
+      border: `top`/`bottom`/`left`/`right` add to their side, a corner takes
+      from both, and a left/right band forces a minimum border height (a
+      top/bottom band a minimum width) so a small diagram still gets a
       coherent frame. The canvas grows; content is translated uniformly.
-- [ ] **Title block geometry.** Row height = max line height + pad; label
-      column = widest key; value column = widest value; the table's bottom
-      and right edges snap to the page border. A `Title` field renders one
-      size up.
-- [ ] **Text block geometry.** Parse each raw line into inline runs
-      (`**`/`_`/`*`, nesting, `\*`/`\_`/`\\` escapes, word-boundary `_`),
-      a rule for `---`, and a paragraph gap for a blank line; measure with
-      the bold table where needed; wrap greedily to `width=` when given.
-- [ ] **`Layout` grows** `border: Option<Rect>`, `title_block: Option<Rect>`,
-      `text_blocks: Vec<BlockRect>` (rect + the placed lines/runs the
-      renderer needs). The **index-correspondence invariant** in
-      `AGENTS.md` extends to `text_blocks` ↔ `diagram.text_blocks`.
-- [ ] **Renderer draw order:** border → title block → text blocks → group
-      frames → edges → edge labels → nodes. (Blocks go under everything
-      else so a knockout or a node never gets covered; they never overlap
-      content by construction, so the order is belt-and-braces.)
-- [ ] **The empty-diagram path.** `layout_impl` early-returns when
-      `nodes.is_empty()`; the decoration must still run there, so a
-      `titleblock`-only file renders a border and a table. Needs a defined
-      minimum content region.
-- [ ] **Tests.**
-      - **Acceptance, the headline:** a diagram using none of the three
-        renders **byte-identical** — all twelve existing snapshots
-        unchanged, and `cargo test` proves it.
-      - New snapshots: `titleblock.svg`, `textblock.svg` (all eight
-        anchors), and one combined.
-      - Geometry: the border encloses every drawn object; no text block
-        overlaps a node, frame, edge waypoint, or label knockout; content
-        keeps its ≥ [`MARGIN`] clearance (the existing
-        `canvas_keeps_the_page_margin_clear_of_every_object` test gets a
-        targeted exemption for the border and title-block edges that sit
-        on the inset, and stays otherwise untouched);
-      - `border` present vs. absent produces identical coordinates for
-        everything else (the decoupling invariant, asserted directly);
-      - empty diagram with a title block; duplicate-anchor and
-        block-in-group errors surface with correct line numbers.
-- **Deliverable:** suite green, twelve old snapshots byte-identical, new
-  snapshots committed.
+- [x] **Title block geometry.** Row height = max line height + pad; label
+      column = widest key; value column = widest value; the table's bottom and
+      right edges snap to the page border. A `Title` field renders one size up.
+- [x] **Text block geometry.** Parse each raw line into inline runs
+      (`**`/`_`/`*`, nesting, `\*`/`\_`/`\\` escapes, word-boundary `_`), a
+      rule for `---`, and a paragraph gap for a blank line; measure with the
+      bold table where needed; wrap greedily to `width=` when given.
+- [x] **`Layout` grows** `border: Option<Rect>`, `title_block: Option<Rect>`,
+      `text_blocks: Vec<BlockRect>` (rect + the placed lines/runs the renderer
+      needs). The index-correspondence invariant extends to `text_blocks` ↔
+      `diagram.text_blocks`.
+- [x] **Renderer draw order:** border → title block → text blocks → group
+      frames → edges → edge labels → nodes.
+- [x] **The empty-diagram path.** `layout_impl` early-returns when
+      `nodes.is_empty()`; the decoration runs on the (empty) `Layout` too, so a
+      `titleblock`-only file renders a border and a table.
+- [x] **Tests.**
+      - Acceptance: all twelve existing snapshots byte-identical, plus a
+        direct `layout` assertion that no furniture ⇒ no page fields.
+      - New snapshots: `titleblock`, `textblock` (all eight anchors), and
+        `page_furniture` (combined).
+      - Geometry: the border encloses every drawn object; content keeps its
+        ≥ [`MARGIN`] clearance (measured against the border rect, which sits
+        outside the margin — the existing
+        `canvas_keeps_the_page_margin_clear_of_every_object` test gained a
+        furniture case and needed no exemption); no text block overlaps a
+        node, frame, edge waypoint, or label knockout;
+        `border` present-vs-absent produces identical coordinates for
+        everything else (asserted directly); empty diagram with a title block;
+        duplicate-anchor and block-in-group errors surface with correct line
+        numbers.
+
+**Deliverable:** suite green, twelve old snapshots byte-identical, three new
+snapshots committed.
+
+Implementation notes (decisions the plan left open, and one it got slightly
+wrong):
+
+- **`decorate` is its own module, not a section of `layout.rs`.** The pass is
+  pure post-processing over a finished [`Layout`] plus the resolved
+  `Diagram` — it shares no internal type with the Sugiyama engine or the
+  router — so it lives in `src/decorate.rs` and `layout()` calls
+  `crate::decorate::decorate(diagram, &mut layout)`. That keeps the (already
+  enormous) `layout.rs` from growing another subsystem and makes the
+  "decoration only" boundary a module boundary: nothing in `decorate.rs` can
+  reach a routing internal.
+- **The page inset is the plan's `28 px`, and the content's `MARGIN` is
+  untouched.** The border rectangle is `PAGE_INSET` in from the canvas edge;
+  the content is `MARGIN` (20) inside the border. So content keeps its
+  pre-M21 clearance guarantee *and* `border` present-vs-absent is a pure
+  no-coordinate-change (asserted by
+  `border_presence_produces_identical_coordinates_for_everything_else` and
+  `border_presence_does_not_move_any_block`). The plan's "the existing
+  `canvas_keeps_the_page_margin_clear_of_every_object` test gets a targeted
+  exemption for the border and title-block edges" turned out **unnecessary**:
+  that test only checks nodes/frames/edge points/label knockouts, all of which
+  stay ≥ `MARGIN` from the canvas edge by a wider margin than before (the
+  border is outside them), and the border/title-block rects are never among the
+  objects it walks. The test gained a furniture case instead of an exemption.
+- **The title block owns the lower-right corner, and a `right`/`bottom` block
+  centers on the span *beside* it.** The table's bottom and right edges snap to
+  the border rect; a `right` text block is centered on the vertical span above
+  the table (and below `upper-right`, if any), a `bottom` block on the
+  horizontal span left of it. The band minimums add those extents
+  (block + gap + table + gap) so a small diagram's border still contains both —
+  `small_diagram_gets_a_frame_tall_enough_for_a_side_block`,
+  `right_block_stacks_above_the_title_block`, and
+  `a_side_block_clears_the_corner_blocks_of_its_column` pin it.
+- **Title-block keys are drawn bold, and measured bold.** The plan says
+  "label column = widest key" without saying how a key is styled; drawing it
+  bold is what makes the table read as key/value, and since the column must fit
+  the drawn glyphs it is measured with `Weight::Bold` (`title_table`). This is
+  the second production consumer of the bold table after a `**bold**` text
+  run — worth noting because M21.2 predicted the text-block layout would be the
+  only one.
+- **An empty title block reserves the page but draws no table.** `resolve`
+  already allows an empty `titleblock` (only `textblock` rejects an empty
+  body); `decorate` filters an empty table out of the band reservation and the
+  `Layout::title_block` rect, so an empty block behaves like a bare `border`
+  — the inset is reserved, nothing is drawn. That is the "M21.3 decides how it
+  draws" note from M21.1, resolved as "it draws nothing".
+- **A `---` rule spans the block's *content* width, not the frame width.** It
+  is a hairline at the line's vertical center from `BLOCK_PAD` to the widest
+  text line's right edge, so it reads as a rule *inside* the text column rather
+  than touching the frame. A block whose only content is rules gets a
+  `MIN_RULE_W` floor so it still draws something.
+- **Wrapping flattens runs to characters before grouping words.** Splitting
+  each *run* on spaces would detach punctuation from a styled word:
+  `_italic_,` arrives as runs `italic` + `,`, which naively become two words
+  and render "italic ,". The wrapper flattens to `(char, bold, italic)`, groups
+  at spaces, then re-merges adjacent same-style characters — pinned by
+  `wrapped_styled_word_keeps_its_adjacent_punctuation`.
+- **SVG strips a text chunk's leading/trailing whitespace, so the renderer
+  never relies on a space glyph at a run boundary.** A wrapped line's space
+  lands at the *start* of the following run's text; emitting it verbatim lost
+  it (rendering "`**width=**when`"). The renderer draws each run's trimmed text
+  shifted past its leading spaces (`leading_space_width`) and advances by the
+  run's full width, so the gap comes from positioning. This is a renderer-only
+  fix — `decorate` still lays out the natural run text with its spaces.
+- **Line spacing: one `text::line_height` per text/rule line, half a line for
+  a paragraph gap.** A blank source line is a *paragraph break*, not an empty
+  line, so it consumes `0.5 · line_height` — enough to read as a break without
+  doubling the block's height. Leading/trailing blank lines are dropped (they
+  would only pad the frame).
+- **The band-minimum math is per band, not page-wide.** An early draft summed
+  every block's extent into a page-wide minimum and grew a two-node diagram to
+  a 1000 px frame; the shipped version computes a minimum per column (left,
+  right+title) and per row (top, bottom+title) and takes the max, so only the
+  band that actually holds a block is widened. Within a band everything
+  *stacks*: a corner block occupies its end of the column, so a `left` block
+  centered on the content can land on top of `upper-left` on a short page.
+  Placement therefore centers an edge block on the content's center **clamped
+  into the span the corner blocks leave free**, and the band minimum is the
+  sum of every block in that band plus a gap each — so the page grows instead
+  of the blocks colliding (`a_side_block_clears_the_corner_blocks_of_its_column`,
+  `all_eight_anchors_never_collide`).
+- **The renderer's page palette is separate from the geometry.** `PAGE_INSET`,
+  the block sizes, and the placed rects all come from `decorate`; the renderer
+  owns only the colors and stroke widths (`PAGE_STROKE`, `PAGE_FILL`,
+  `BLOCK_FILL`, `BLOCK_INK`, `PAGE_RADIUS`, `GRID_WIDTH`), so it can never
+  disagree with the layout about where a block is. `color=""` on a border is
+  resolved to `Layout::border == None` (nothing stroked, inset still reserved);
+  `color=""`/`fill=""` on a title block or text block becomes SVG `none`
+  (`furniture_paint`), never an invalid empty attribute that would inherit from
+  the enclosing group — the same treatment [`render_groups`] already gives a
+  frame.
 
 **Blocked by:** M21.1 (grammar), M21.2 (bold measurement).
 **Blocks:** nothing.
 
 ### ☐ M21.4 — Polish (optional, may fold into M21.3)
 
+Only the stacking item is left; the two doc items landed with M21.3.
+
 - [ ] Stacking multiple blocks at one anchor (relaxes the duplicate-anchor
       error — backward-compatible).
-- [ ] `AGENTS.md`: the pipeline line (`layout.rs → decorate`), the new
+- [x] `AGENTS.md`: the pipeline line (`layout.rs → decorate`), the new
       `Layout` fields, the page-inset constants shared with the renderer,
-      and the "unused ⇒ byte-identical" invariant. *(The **language half**
-      — the three statements, their attrs, `Anchor`, the reserved-word
-      position rule, and the open-title-block-key exception — landed in
-      `AGENTS.md` with M21.1; the `decorate`/`Layout` half is still owed.)*
-- [ ] `~/.clanky/skills/diagrammer/SKILL.md` — a "page furniture" section
-      (it documents the language for diagram authors).
+      and the "unused ⇒ byte-identical" invariant. *(Landed with M21.3 —
+      the pipeline gained a `decorate.rs` stage, the module map and test
+      layout describe it, the shared-constants section lists the page
+      geometry, and the decoration-only invariant now covers `Layout`.)*
+- [x] `~/.clanky/skills/diagrammer/SKILL.md` — a "page furniture" section.
+      *(Landed with M21.3.)*
 - [x] CLI summary: append block counts only when present. *(Pulled
       forward into M21.1 — see its implementation notes: the resolved style
       fields needed a production reader to survive `dead_code = "deny"`, and

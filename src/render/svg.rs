@@ -35,8 +35,11 @@
 //! arrow. The marker's `refX` is reduced by the same amount so the tip still
 //! lands on the target node's boundary.
 
-use crate::ast::{Diagram, Edge, Group, Node, Shape, Style};
-use crate::layout::{EDGE_LABEL_SIZE, EdgePath, GroupRect, LABEL_PAD, Layout, NodeRect};
+use crate::ast::{Diagram, Edge, Group, Node, Shape, Style, TextBlock, TitleBlock};
+use crate::decorate::{self, TB_COL_GAP, TB_PAD};
+use crate::layout::{
+    BlockLine, BlockRect, EDGE_LABEL_SIZE, EdgePath, GroupRect, LABEL_PAD, Layout, NodeRect, Rect,
+};
 use crate::text;
 
 /// Default stroke color for edges (and the default arrowhead fill).
@@ -85,6 +88,24 @@ const FONT_FAMILY: &str = "Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-
 /// background so the edge line is "broken" cleanly behind the text.
 const LABEL_KNOCKOUT: &str = "#fff";
 
+// Page furniture (M21.3). The geometry ([`PAGE_INSET`], the block sizes, and
+// the placed rects) comes from `decorate`; these are only the palette and the
+// stroke widths, so the renderer can never disagree with the layout about
+// where a block is.
+/// Default page-furniture stroke (the border, a text block's frame, the
+/// title-block table's grid).
+const PAGE_STROKE: &str = "#888";
+/// Default title-block interior.
+const PAGE_FILL: &str = "#fbfbfb";
+/// Default text-block interior.
+const BLOCK_FILL: &str = "#fdf6ec";
+/// Default text-block ink.
+const BLOCK_INK: &str = "#333";
+/// Page-furniture corner radius, in user units.
+const PAGE_RADIUS: f32 = 6.0;
+/// Hairline width for the title-block grid, text-block frames, and rules.
+const GRID_WIDTH: f32 = 1.0;
+
 // Group frame styling. Frames are deliberately lighter and thinner than
 // node boxes so the contained nodes read as the foreground.
 const FRAME_STROKE: &str = "#88BDA4";
@@ -121,6 +142,15 @@ pub fn render_svg(diagram: &Diagram, layout: &Layout) -> String {
     // defined (`id="arrow"`) even with no edges, keeping output stable.
     let edge_color_ids = collect_edge_color_ids(&diagram.edges);
     s.push_str(&defs(&edge_color_ids));
+
+    // Page furniture (M21.3) is drawn first, *under* everything else: it never
+    // overlaps content by construction (the decorate pass reserved a band for
+    // it), so the order is belt-and-braces — but it also means a knockout or a
+    // node can never be covered by a block. Omitted entirely when the diagram
+    // uses none of the three statements, keeping pre-M21 output byte-identical.
+    if layout.border.is_some() || layout.title_block.is_some() || !layout.text_blocks.is_empty() {
+        render_page_furniture(&mut s, diagram, layout);
+    }
 
     // Group frames go behind edges (so a cross-boundary edge pierces the
     // frame border cleanly) and behind the nodes they contain. Omitted
@@ -167,6 +197,216 @@ pub fn render_svg(diagram: &Diagram, layout: &Layout) -> String {
 
     s.push_str("</svg>\n");
     s
+}
+
+/// A page-furniture paint value: `None` is `default`, `Some("")` is SVG
+/// `none` (draw nothing — an empty attribute value is invalid SVG and would
+/// silently inherit from the enclosing `<g>`), and any other value is escaped
+/// and used as written. Mirrors how [`render_groups`] treats a frame's
+/// `color=""`/`fill=""`.
+fn furniture_paint(value: Option<&str>, default: &str) -> String {
+    match value {
+        Some("") => "none".to_string(),
+        Some(c) => escape_xml(c),
+        None => default.to_string(),
+    }
+}
+
+/// The rendered width of a run's *leading* spaces (M21.3). SVG strips a text
+/// chunk's leading/trailing whitespace, so the renderer draws a run's trimmed
+/// text shifted past its leading spaces rather than emitting them.
+fn leading_space_width(text: &str, weight: crate::text::Weight) -> f32 {
+    let lead: String = text.chars().take_while(|c| *c == ' ').collect();
+    if lead.is_empty() {
+        0.0
+    } else {
+        text::measure_run(&lead, decorate::TEXT_SIZE, weight).width
+    }
+}
+
+/// The page furniture (M21.3): the border, the title-block table, and every
+/// text block. Drawn *first*, so nothing in the decoration can cover a node, a
+/// frame, an edge, or a label — belt-and-braces, since the `decorate` pass
+/// reserved a band for every block and they therefore never overlap content by
+/// construction.
+fn render_page_furniture(s: &mut String, diagram: &Diagram, layout: &Layout) {
+    // ---- border ----
+    if let (Some(border), Some(rect)) = (&diagram.border, layout.border) {
+        let stroke = escape_xml(border.color.as_deref().unwrap_or(PAGE_STROKE));
+        let (width, dash) = frame_stroke(border.line);
+        s.push_str(&format!(
+            "  <g fill=\"none\" stroke-linejoin=\"round\">\n    <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{}\" ry=\"{}\" stroke=\"{stroke}\" stroke-width=\"{width}\"",
+            fmt(rect.x),
+            fmt(rect.y),
+            fmt(rect.w),
+            fmt(rect.h),
+            PAGE_RADIUS,
+            PAGE_RADIUS,
+        ));
+        if let Some(d) = dash {
+            s.push_str(&format!(" stroke-dasharray=\"{d}\""));
+        }
+        s.push_str("/>\n  </g>\n");
+    }
+
+    // ---- title block ----
+    if let (Some(tb), Some(rect)) = (&diagram.title_block, layout.title_block) {
+        render_title_block(s, tb, &rect);
+    }
+
+    // ---- text blocks ----
+    // Each block zips with its resolved statement by index (the
+    // index-correspondence invariant, extended to `text_blocks`).
+    for (block, placed) in diagram.text_blocks.iter().zip(&layout.text_blocks) {
+        render_text_block(s, block, placed);
+    }
+}
+
+/// One title-block table: the frame, the column rule, and every row (key in
+/// the label column, value in the value column), in declaration order.
+fn render_title_block(s: &mut String, tb: &TitleBlock, rect: &Rect) {
+    let table = decorate::title_table(tb);
+    if table.rows.is_empty() {
+        return;
+    }
+    let stroke = furniture_paint(tb.color.as_deref(), PAGE_STROKE);
+    let fill = furniture_paint(tb.fill.as_deref(), PAGE_FILL);
+    // A hairline grid: the table's own border, then one rule between the
+    // label and value columns and one between each pair of rows. The table's
+    // bottom and right edges *are* the page border rectangle, so the frame is
+    // stroked on all four sides and simply coincides with the border there.
+    let label_x = rect.x + TB_PAD;
+    let value_x = rect.x + TB_PAD + table.label_w + TB_COL_GAP;
+    let rule_x = rect.x + TB_PAD + table.label_w + TB_COL_GAP / 2.0;
+    s.push_str(&format!(
+        "  <g fill=\"none\" stroke=\"{stroke}\" stroke-width=\"{GRID_WIDTH}\">\n"
+    ));
+    s.push_str(&format!(
+        "    <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" fill=\"{fill}\"/>\n",
+        fmt(rect.x),
+        fmt(rect.y),
+        fmt(rect.w),
+        fmt(rect.h),
+    ));
+    s.push_str(&format!(
+        "    <line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>\n",
+        fmt(rule_x),
+        fmt(rect.y),
+        fmt(rule_x),
+        fmt(rect.y + rect.h),
+    ));
+    let mut row_y = rect.y + TB_PAD;
+    for row in &table.rows {
+        if row_y > rect.y + TB_PAD + 1e-3 {
+            s.push_str(&format!(
+                "    <line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"/>\n",
+                fmt(rect.x),
+                fmt(row_y),
+                fmt(rect.x + rect.w),
+                fmt(row_y),
+            ));
+        }
+        row_y += row.h;
+    }
+    s.push_str("  </g>\n");
+
+    // The text: each row's key in the label column and value in the value
+    // column, vertically centered in its row. A `Title` key is one size up.
+    s.push_str(&format!(
+        "  <g fill=\"{INK}\" font-family=\"{FONT_FAMILY}\">\n"
+    ));
+    let mut row_y = rect.y + TB_PAD;
+    for row in &table.rows {
+        let baseline = row_y + row.h / 2.0;
+        s.push_str(&format!(
+            "    <text x=\"{}\" y=\"{}\" font-size=\"{}\" font-weight=\"bold\" text-anchor=\"start\" dominant-baseline=\"central\">{}</text>\n",
+            fmt(label_x),
+            fmt(baseline),
+            fmt(row.size),
+            escape_xml(&row.key),
+        ));
+        s.push_str(&format!(
+            "    <text x=\"{}\" y=\"{}\" font-size=\"{}\" text-anchor=\"start\" dominant-baseline=\"central\">{}</text>\n",
+            fmt(value_x),
+            fmt(baseline),
+            fmt(row.size),
+            escape_xml(&row.value),
+        ));
+        row_y += row.h;
+    }
+    s.push_str("  </g>\n");
+}
+
+/// One text block: its frame (border + interior), then its lines. A text line
+/// is emitted as one `<text>` per run, each positioned at the running x where
+/// the previous run ended, so bold and italic runs sit on one baseline.
+fn render_text_block(s: &mut String, block: &TextBlock, placed: &BlockRect) {
+    let stroke = furniture_paint(block.color.as_deref(), PAGE_STROKE);
+    let fill = furniture_paint(block.fill.as_deref(), BLOCK_FILL);
+    s.push_str(&format!(
+        "  <g fill=\"none\" stroke=\"{stroke}\" stroke-width=\"{GRID_WIDTH}\">\n    <rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\" rx=\"{}\" ry=\"{}\" fill=\"{fill}\"/>\n  </g>\n",
+        fmt(placed.x),
+        fmt(placed.y),
+        fmt(placed.w),
+        fmt(placed.h),
+        PAGE_RADIUS,
+        PAGE_RADIUS,
+    ));
+    let ink = escape_xml(block.text.as_deref().unwrap_or(BLOCK_INK));
+    s.push_str(&format!(
+        "  <g fill=\"{ink}\" font-family=\"{FONT_FAMILY}\" font-size=\"{}\">\n",
+        fmt(decorate::TEXT_SIZE)
+    ));
+    for line in &placed.lines {
+        match line {
+            BlockLine::Gap => {}
+            BlockLine::Rule { y, x, w } => {
+                // A horizontal rule: a hairline across the block's content
+                // width, at the line's vertical center.
+                s.push_str(&format!(
+                    "    <line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\" stroke=\"{ink}\" stroke-width=\"{GRID_WIDTH}\"/>\n",
+                    fmt(*x),
+                    fmt(*y),
+                    fmt(x + w),
+                    fmt(*y),
+                ));
+            }
+            BlockLine::Text { y, x, runs } => {
+                let mut cx = *x;
+                for run in runs {
+                    // SVG strips a text chunk's leading and trailing
+                    // whitespace, so a run whose space sits at its *start*
+                    // (the word that follows a style change carries the gap)
+                    // would lose it. Draw only the trimmed text, shifted past
+                    // the leading spaces, and advance by the run's full width
+                    // — the gap then comes from positioning, not from a space
+                    // glyph, and reads identically.
+                    let lead_w = leading_space_width(&run.text, run.weight);
+                    let text = run.text.trim_matches(' ');
+                    if !text.is_empty() {
+                        s.push_str(&format!(
+                            "    <text x=\"{}\" y=\"{}\" text-anchor=\"start\" dominant-baseline=\"central\"{}{}>{}</text>\n",
+                            fmt(cx + lead_w),
+                            fmt(*y),
+                            if run.weight == crate::text::Weight::Bold {
+                                " font-weight=\"bold\""
+                            } else {
+                                ""
+                            },
+                            if run.italic {
+                                " font-style=\"italic\""
+                            } else {
+                                ""
+                            },
+                            escape_xml(text),
+                        ));
+                    }
+                    cx += run.width;
+                }
+            }
+        }
+    }
+    s.push_str("  </g>\n");
 }
 
 /// The `<defs>` block: one arrowhead `<marker>` per distinct edge color, each
@@ -1315,6 +1555,172 @@ mod tests {
         }
     }
 
+    // ---- M21.3: page furniture drawing ----
+
+    #[test]
+    fn page_furniture_is_drawn_before_everything_else() {
+        // Border → title block → text blocks → frames → edges → labels →
+        // nodes: the decoration goes first, so it can never cover content.
+        let svg = render(
+            "diagram top-down\n\
+             border\n\
+             titleblock Title=\"T\"\nend\n\
+             textblock top\n note\n end\n\
+             group \"G\"\n a --> b\n end\n",
+        );
+        // Distinct needles per layer: the border strokes the page-inset
+        // rectangle, the group frame is the only `rx="8"` rect, and a node box
+        // is the only thing stroked in the node blue.
+        let border_at = svg.find("#888").expect("border");
+        let group_at = svg.find("rx=\"8\"").expect("group frame");
+        let node_at = svg.find("#2196F3").expect("node box");
+        assert!(border_at < group_at, "border must precede group frames");
+        assert!(group_at < node_at, "frames precede nodes");
+        // The title-block table's grid rect also precedes the group frame.
+        let table_at = svg.find("fill=\"#fbfbfb\"").expect("title-block fill");
+        assert!(table_at < group_at, "title block precedes group frames");
+        let block_at = svg.find("fill=\"#fdf6ec\"").expect("text-block fill");
+        assert!(block_at < group_at, "text block precedes group frames");
+    }
+
+    #[test]
+    fn a_furniture_free_diagram_emits_no_page_groups() {
+        // The acceptance property at the SVG level: nothing is emitted.
+        let svg = render("diagram top-down\na --> b\n");
+        for needle in ["#fbfbfb", "#fdf6ec", "#fdf6ec"] {
+            assert!(!svg.contains(needle), "unexpected {needle} in {svg}");
+        }
+        // No extra top-level `<g>` for the furniture.
+        assert_eq!(
+            svg.matches("<g fill=\"none\" stroke-linejoin=\"round\">")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn suppressed_border_strokes_nothing() {
+        let svg = render("diagram top-down\nborder color=\"\"\na --> b\n");
+        assert!(
+            !svg.contains("stroke=\"#888\""),
+            "a suppressed border must not stroke a rectangle"
+        );
+        // The page is still reserved (the canvas is bigger than a plain one).
+        let plain = render("diagram top-down\na --> b\n");
+        let width = |s: &str| -> f32 {
+            let start = s.find("width=\"").unwrap() + 7;
+            s[start..start + s[start..].find('\"').unwrap()]
+                .parse()
+                .unwrap()
+        };
+        assert!(width(&svg) > width(&plain), "inset still reserved");
+    }
+
+    #[test]
+    fn empty_paint_values_draw_nothing() {
+        // `color=""` / `fill=""` on a page block mean "draw nothing", never an
+        // invalid `stroke=""` that inherits from the enclosing group.
+        let svg = render(
+            "diagram top-down\n\
+             border color=\"\"\n\
+             titleblock Title=\"T\" color=\"\" fill=\"\"\nend\n\
+             textblock top color=\"\" fill=\"\"\n hi\n end\n\
+             a --> b\n",
+        );
+        assert!(!svg.contains("stroke=\"\""), "{svg}");
+        assert!(!svg.contains("fill=\"\""), "{svg}");
+        assert!(
+            svg.contains("stroke=\"none\""),
+            "blocks should draw nothing"
+        );
+    }
+
+    #[test]
+    fn styled_runs_render_with_their_attributes() {
+        let svg = render("diagram top-down\ntextblock left\n a **b** _c_\n end\n");
+        assert!(svg.contains("font-weight=\"bold\">b</text>"), "{svg}");
+        assert!(svg.contains("font-style=\"italic\">c</text>"), "{svg}");
+    }
+
+    #[test]
+    fn a_rule_line_renders_a_hairline() {
+        let svg = render("diagram top-down\ntextblock top\n above\n ---\n below\n end\n");
+        // The rule is a `<line>` with the block's ink color, not a rect.
+        let rules: Vec<&str> = svg
+            .lines()
+            .filter(|l| l.contains("<line") && l.contains("stroke=\"#333\""))
+            .collect();
+        assert_eq!(rules.len(), 1, "expected one rule line: {svg}");
+    }
+
+    #[test]
+    fn title_block_renders_one_row_per_field_with_the_title_one_size_up() {
+        let svg = render(
+            "diagram top-down\n\
+             titleblock\n Title = \"Big\"\n Version = \"1\"\n end\n",
+        );
+        // Both keys render (bold, as labels) and both values.
+        assert!(svg.contains(">Title</text>"), "{svg}");
+        assert!(svg.contains(">Version</text>"), "{svg}");
+        assert!(svg.contains(">Big</text>"), "{svg}");
+        // The Title row's font size is the one-up size.
+        let title_line = svg
+            .lines()
+            .find(|l| l.contains(">Title</text>"))
+            .expect("title row");
+        assert!(
+            title_line.contains(&format!(
+                "font-size=\"{}\"",
+                fmt(decorate::TITLEBLOCK_TITLE_SIZE)
+            )),
+            "title row size: {title_line}"
+        );
+        let version_line = svg
+            .lines()
+            .find(|l| l.contains(">Version</text>"))
+            .expect("version row");
+        assert!(
+            version_line.contains(&format!("font-size=\"{}\"", fmt(decorate::TITLEBLOCK_SIZE))),
+            "version row size: {version_line}"
+        );
+    }
+
+    #[test]
+    fn text_block_text_is_xml_escaped() {
+        let svg = render("diagram top-down\ntextblock top\n a < b & c > d\n end\n");
+        assert!(svg.contains("a &lt; b &amp; c &gt; d"), "{svg}");
+    }
+
+    #[test]
+    fn empty_diagram_with_a_title_block_renders_it() {
+        // The `layout_impl` early-return must not skip the decoration: a
+        // title-block-only file still renders a table (and a border).
+        let svg = render("diagram top-down\nborder\ntitleblock Title=\"Only\"\nend\n");
+        assert!(svg.contains(">Only</text>"), "{svg}");
+        assert!(svg.contains(">Title</text>"), "{svg}");
+        // A visible canvas, not the 1×1 of a bare empty diagram.
+        let start = svg.find("width=\"").unwrap() + 7;
+        let w: f32 = svg[start..start + svg[start..].find('\"').unwrap()]
+            .parse()
+            .unwrap();
+        assert!(w > 100.0, "canvas too small: {w}");
+    }
+
+    #[test]
+    fn text_block_index_correspondence_holds_in_the_renderer() {
+        // Two text blocks render at two different anchors (a zip, not a lookup
+        // by anchor), so swapping their order would move the drawing.
+        let svg = render(
+            "diagram top-down\n\
+             textblock top\n topmarker\n end\n\
+             textblock bottom\n bottommarker\n end\n\
+             a --> b\n",
+        );
+        let top_y = text_ys(&svg, "topmarker")[0];
+        let bottom_y = text_ys(&svg, "bottommarker")[0];
+        assert!(top_y < bottom_y, "top block should be above the bottom one");
+    }
+
     // ---- Golden snapshots (lock the output) ----
 
     #[test]
@@ -1673,6 +2079,73 @@ mod tests {
         assert!(
             node.contains("fill=\"#c0e1fc\""),
             "node keeps its own default fill: {node}"
+        );
+    }
+
+    // ---- M21.3: page furniture snapshots ----
+
+    #[test]
+    fn snapshot_titleblock() {
+        // A title block alone: the table in the lower-right corner, snapping
+        // its bottom and right edges to the (unstroked) page border rect.
+        assert_snapshot(
+            "titleblock",
+            &render(
+                "diagram top-down\n\
+                 titleblock\n\
+                 \x20   Title   = \"Finance: Network Architecture\"\n\
+                 \x20   Company = \"Big Corp, LLC\"\n\
+                 \x20   Author  = \"John Doe\"\n\
+                 \x20   Version = \"0.1\"\n\
+                 \x20   Date    = \"2026-11-04\"\n\
+                 end\n\
+                 web \"Web\" --> api \"API\"\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn snapshot_textblock() {
+        // All eight anchors in one diagram, plus inline bold/italic, a rule,
+        // and a paragraph gap.
+        assert_snapshot(
+            "textblock",
+            &render(
+                "diagram top-down\n\
+                 border\n\
+                 textblock upper-left\n upper-left note\n end\n\
+                 textblock top\n top note\n end\n\
+                 textblock upper-right\n upper-right note\n end\n\
+                 textblock left\n left note\n end\n\
+                 textblock right\n right **bold** and _italic_\n end\n\
+                 textblock lower-left\n lower-left note\n end\n\
+                 textblock bottom\n bottom note\n end\n\
+                 a \"A\" --> b \"B\"\n",
+            ),
+        );
+    }
+
+    #[test]
+    fn snapshot_page_furniture() {
+        // The whole M21 surface in one diagram: border, a title block with a
+        // one-size-up `Title` row, and a wrapped text block with markup.
+        assert_snapshot(
+            "page_furniture",
+            &render(
+                "diagram top-down\n\
+                 border color=\"#333\"\n\
+                 titleblock\n\
+                 \x20   Title   = \"Page Furniture\"\n\
+                 \x20   Version = \"1.0\"\n\
+                 end\n\
+                 textblock right width=\"200\"\n\
+                 \x20   A text block wraps its body to **width=** when given, and\n\
+                 \x20   understands _italic_, **bold**, and a rule below.\n\
+                 \x20   ---\n\
+                 \x20   Done.\n\
+                 end\n\
+                 src \"Source\" --> db \"Postgres\" : cylinder\n",
+            ),
         );
     }
 

@@ -33,6 +33,10 @@ source string
                     whole-path maze routing for every edge (M20.3) + M9
                     edge separation & lane assignment + M13 label placement;
                     forced `from=`/`to=` sides bind the endpoint node only)
+  → decorate.rs     post-routing page furniture (M21.3): the `decorate` pass
+                    runs after `assemble` has finished routing and grows the
+                    canvas for `border`/`titleblock`/`textblock`; no-op when
+                    none is declared
   → render/svg.rs   self-contained SVG string
   → main.rs         CLI: `diagrammer <in.dgmr> [-o <out.svg>]`
 ```
@@ -47,11 +51,11 @@ downstream is forced to care. `resolve` validates it (uniqueness, the
 lower-right/title-block corner conflict, the open-but-duplicate-free
 title-block keys, a positive `textblock` `width`, a non-empty body, `line`
 against `Style`) and hands on the validated style values, which are the
-single source of truth for M21.3's `decorate` pass. Until then their only
-production reader is the CLI summary, which appends `; page: …` **only when
-something is present** — that is what keeps every pre-M21 summary (and every
-snapshot) byte-identical, and what keeps the fields live under
-`dead_code = "deny"`.
+single source of truth for `decorate.rs`'s placement pass — the renderer draws
+what `resolve` validated instead of re-deriving (and possibly disagreeing
+about) a color or a line style. The CLI summary also appends `; page: …`
+**only when something is present**, which is what keeps every pre-M21 summary
+(and every snapshot) byte-identical.
 
 `text.rs` measures labels against the baked
 DejaVu Sans metrics in `metrics_table.rs` — generated from the embedded fonts
@@ -105,7 +109,13 @@ src/
                  union-merge lane grouping with content-keyed (endpoint-id)
                  sort tie-breaks, so phase-1 routing is invariant under edge
                  permutation
-                 → Layout
+                 → Layout (plus `Layout::{border, title_block, text_blocks}`,
+                 filled in by the post-routing `decorate` pass)
+  decorate.rs    M21.3: the post-routing page-furniture pass — sizes and places
+                 `border`/`titleblock`/`textblock` against the finished canvas
+                 (band reservation, the title table's geometry, text-block
+                 inline markup + wrapping) and grows the canvas; a no-op when
+                 none is declared
   text.rs        label measurement against the baked metrics tables;
                  `measure` = Regular, `measure_run(.., Weight)` for bold
   metrics_table.rs  GENERATED baked DejaVu metrics (Regular + Bold faces) —
@@ -113,9 +123,9 @@ src/
   error.rs       Error enum + line_of()
   render/
     mod.rs       `pub mod svg;`
-    svg.rs       Layout+Diagram → self-contained SVG (boxes, cylinders, edges,
-                 edge labels at their layout-given anchors, per-color
-                 arrowhead markers)
+    svg.rs       Layout+Diagram → self-contained SVG (page furniture first,
+                 then boxes, cylinders, edges, edge labels at their
+                 layout-given anchors, per-color arrowhead markers)
 ```
 
 ## Build, test, run
@@ -157,7 +167,9 @@ costs and the signing options.
   in declaration order. The renderer `zip`s them directly. Any new output
   keyed by id must preserve this. (Edge-label anchors ride on `EdgePath` —
   `label_at: Option<(f32, f32)>`, M13 — for exactly this reason; don't move
-  them into a separate keyed collection.)
+  them into a separate keyed collection. M21.3's `Layout.text_blocks`
+  extends the invariant: `text_blocks[i]` is `diagram.text_blocks[i]`, and the
+  renderer zips them.)
 - **Canonical top-down space, then transform.** All layout math runs in
   canonical top-down space (rank grows down, order is horizontal), then a
   rigid transform maps rects + waypoints into the requested direction. The
@@ -170,12 +182,20 @@ costs and the signing options.
   `border`/`titleblock`/`textblock` are not graph participants: no block is a
   node, an edge endpoint, or a group member, and none joins the layout graph,
   the obstacle model, or the routing vocabulary. They live in `Diagram`
-  (`border`, `title_block`, `text_blocks`) and, from M21.3, in `Layout` as
-  rects drawn *after* routing against the finished canvas — never before, so
-  no block can influence a route. The acceptance property is that a diagram
-  using none of them renders **byte-identical**, which is why the model is
-  `Option`/empty by default and why the CLI summary only appends its
-  `; page: …` suffix when something is present. Don't make a block a layout
+  (`border`, `title_block`, `text_blocks`) and in `Layout`
+  (`border: Option<Rect>`, `title_block: Option<Rect>`, `text_blocks:
+  Vec<BlockRect>`), filled in by `decorate.rs`'s `decorate` pass, which
+  `layout()` runs **after** `assemble` has finished routing — never before, so
+  no block can influence a route. The pass early-returns when none of the three
+  is declared, which is the acceptance property: a diagram using none of them
+  renders **byte-identical**. That is why the model is `Option`/empty by
+  default, why the CLI summary only appends its `; page: …` suffix when
+  something is present, and why the renderer emits no page groups at all for
+  such a diagram. The border is drawn on the fixed page *inset* (28 px, outside
+  the 20 px content margin), so `border` present-vs-absent changes no
+  coordinate — it only strokes a rectangle the inset already reserved; the
+  same inset positions the title block and every text block, so all three are
+  decoupled from each other and from `border`. Don't make a block a layout
   participant (that was considered and dropped for text blocks: an anchored
   block is positioned from the finished canvas, so making it an endpoint
   would need a bounded place→route→re-place loop and a new endpoint
@@ -412,6 +432,23 @@ breaks geometry):
   `MIN_TERMINAL_STUB` must exceed the arrowhead's back-extent (`render`'s
   `markerHeight`, 10) — keep the two in step.
 
+- `decorate::PAGE_INSET = 28.0`, `decorate::BLOCK_GAP = 12.0`, and
+  `decorate::BLOCK_PAD = 10.0` — the page-furniture geometry (M21.3). The inset
+  is the gap between the canvas edge and the page border rectangle; it exists
+  whenever any furniture is declared (so `border` present-vs-absent changes no
+  coordinate). `BLOCK_GAP` is the clearance a block keeps from the border, and
+  `BLOCK_PAD` the padding inside a text block's frame. The renderer reads
+  `PAGE_INSET` (for its palette's corner radius only — the rect itself comes
+  from `Layout::border`) and `TB_PAD`/`TB_COL_GAP` (for the title-block grid),
+  so the two sides cannot disagree about a table's columns. `MARGIN` (20.0) is
+  the *content's* clearance: the border sits outside it, so content keeps its
+  pre-M21 guarantee with furniture present.
+- `decorate::TEXT_SIZE = 13.0`, `TITLEBLOCK_SIZE = 12.0`, and
+  `TITLEBLOCK_TITLE_SIZE = 14.0` — the text-block body size, the title-block
+  body size, and the one-size-up size of a `Title` field. The renderer reads
+  these to size its `<text>` to the widths `decorate` measured the blocks
+  from; a mismatch would overflow the frame.
+
 ## Editor tooling
 
 - `contrib/vim/` — vim/neovim runtime files (syntax, ftdetect, ftplugin) for
@@ -440,6 +477,8 @@ breaks geometry):
   check that the canonical sample parses identically in all four on-disk
   spellings.
 - `src/render/svg.rs` — unit checks + golden snapshots (`assert_snapshot`).
+  The M21.3 snapshots (`titleblock`, `textblock`, `page_furniture`) pin the
+  decoration; a furniture-free diagram emits no page groups at all.
 - `src/layout.rs` — geometry/alignment/cross-boundary tests (the bulk).
   Three `#[ignore]`d inspection helpers dump a layout (`--ignored
   --nocapture`): `_dump_infra_for_inspection` reads `DIAG_SRC` (path to a
@@ -448,6 +487,11 @@ breaks geometry):
   prints the phase-2 negotiation trace for `DIAG_SRC`. These are the only
   env-driven debug switches; production code has none (M20.6 deleted the one
   that had crept in — a `DIAG_Q` block in `whole_path_candidate`).
+- `src/decorate.rs` — M21.3 unit tests: inline-markup parsing (bold/italic/
+  nesting, word-boundary `_`, escapes, unbalanced markers literal), block
+  layout (wrapping, rules, paragraph gaps), band reservation, and placement
+  (a block sits inside the border and clear of the content; the title block
+  snaps to the lower-right; a `right` block stacks above it).
 - `src/resolve.rs` — validation + error-case tests.
 - `src/text.rs` — measurement sanity tests + `font_verification` (proves the
   baked table ≡ live font lookups, exhaustively over all Unicode codepoints;

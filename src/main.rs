@@ -11,6 +11,7 @@
 //! [`docs/milestones.md`](../docs/milestones.md).
 
 mod ast;
+mod decorate;
 mod error;
 mod layout;
 mod lexer;
@@ -112,6 +113,7 @@ fn normalize_source(s: &str) -> String {
 }
 
 /// What `run` produced: either a textual summary (no `-o`) or a written file.
+#[cfg_attr(test, derive(Debug))]
 enum RunOutcome {
     Summary(String),
     Wrote(PathBuf),
@@ -375,6 +377,94 @@ mod tests {
             "{out}"
         );
         assert!(out.contains("textblock right (2 lines) width=320"), "{out}");
+    }
+
+    // ---- M21.3: page furniture end-to-end ----
+
+    /// A diagram using no page furniture renders exactly as it did before
+    /// M21.3 existed. The snapshots pin the bytes; this pins the property that
+    /// makes them safe: the furniture is invisible unless declared.
+    #[test]
+    fn page_furniture_is_absent_unless_declared() {
+        let svg = render(include_str!("../examples/infra.dgmr"));
+        for needle in ["#fbfbfb", "#fdf6ec"] {
+            assert!(!svg.contains(needle), "unexpected page furniture: {needle}");
+        }
+    }
+
+    /// A block statement inside a `group` body is a parse error with the right
+    /// line number (the group-body trap M21.1 closed).
+    #[test]
+    fn block_in_a_group_body_is_a_parse_error_with_its_line() {
+        let src = "diagram top-down\ngroup \"G\"\na\ntextblock right\nend\n";
+        let err = run(src, None).expect_err("a block in a group body must fail");
+        let (offset, message) = match err {
+            crate::error::Error::Parse { offset, message }
+            | crate::error::Error::Resolve { offset, message } => (offset, message),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("`textblock` cannot be a group member"),
+            "{message}"
+        );
+        assert_eq!(crate::error::line_of(src, offset), 4);
+    }
+
+    /// A duplicate text-block anchor is a resolve error pointing at the second
+    /// block.
+    #[test]
+    fn duplicate_text_block_anchor_is_a_resolve_error_with_its_line() {
+        let src = "diagram top-down\ntextblock right\none\nend\ntextblock right\ntwo\nend\n";
+        let err = run(src, None).expect_err("duplicate anchor must fail");
+        let (offset, message) = match err {
+            crate::error::Error::Parse { offset, message }
+            | crate::error::Error::Resolve { offset, message } => (offset, message),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(
+            message.contains("duplicate text block anchor `right`"),
+            "{message}"
+        );
+        assert_eq!(crate::error::line_of(src, offset), 5);
+    }
+
+    /// A `textblock lower-right` alongside a `titleblock` is a resolve error
+    /// pointing at the text block (the statement that has to move), whatever
+    /// order the two were written in.
+    #[test]
+    fn lower_right_text_block_conflicts_with_a_title_block() {
+        let src = "diagram top-down\ntextblock lower-right\nx\nend\ntitleblock Title=\"T\"\nend\n";
+        let err = run(src, None).expect_err("lower-right + title block must fail");
+        let (offset, message) = match err {
+            crate::error::Error::Parse { offset, message }
+            | crate::error::Error::Resolve { offset, message } => (offset, message),
+            other => panic!("unexpected error: {other:?}"),
+        };
+        assert!(message.contains("lower-right"), "{message}");
+        assert_eq!(
+            crate::error::line_of(src, offset),
+            2,
+            "the error points at the text block, not the title block: {message}"
+        );
+    }
+
+    /// A page-furniture diagram renders end to end through the CLI path.
+    #[test]
+    fn page_furniture_renders_end_to_end() {
+        let svg = render(
+            "diagram top-down\n\
+             border\n\
+             titleblock Title=\"T\"\nend\n\
+             textblock top\n hello\n end\n\
+             a --> b\n",
+        );
+        assert!(svg.contains(">hello</text>"), "{svg}");
+        assert!(svg.contains(">Title</text>"), "{svg}");
+        // Content is still there, under the decoration.
+        assert!(
+            svg.contains(">a</text>") && svg.contains(">b</text>"),
+            "{svg}"
+        );
     }
 
     /// Render `src` the way `run` would with `-o`, without touching the disk.

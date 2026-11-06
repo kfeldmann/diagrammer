@@ -50,6 +50,34 @@ end
 
 Unknown attributes and values cause errors. The tool does not ignore them. For example, `from="north"` and `line="wavy"` cause errors.
 
+### Page furniture
+
+Three statements draw on the page *around* the diagram. They are optional, independent, and decoration only — no block is a node, an edge endpoint, or a group member, and none can influence how anything is routed or placed. A diagram that uses none of them renders exactly as it did before they existed. None may appear inside a `group` body.
+
+```
+border color="#333"                 # page frame. attrs: color, line (solid|dotted|dashed|thick)
+
+titleblock                          # metadata table in the lower-right corner
+    Title   = "Finance: Network"     # keys are open and verbatim; duplicate key is an error
+    Company = "Big Corp, LLC"       # `Title` renders one size up
+    Version = "0.1"                 # `color` / `fill` are style keys, not fields
+end
+
+textblock right                     # free text at a page anchor (see the eight anchors below)
+    Prose with **bold**, _italic_,   # body is RAW: `#` is not a comment, `-->` is not an arrow
+    and ***bold italic*** runs.      # leading indentation is stripped per line
+    ---                              # a line that is exactly `---` draws a horizontal rule
+    A blank line above is a paragraph gap.
+end
+```
+
+- **Anchors** are page-space compass words: `top`, `bottom`, `left`, `right`, `upper-left`, `upper-right`, `lower-left`, `lower-right`. At most one text block per anchor.
+- **Text-block attrs:** `color` (frame border), `fill` (interior), `text` (ink), `width` (a maximum content width in pixels; the body word-wraps to it — without `width=` a line never wraps).
+- **Inline markup** (applied per line, never across a line break): `**bold**`, `_italic_` or `*italic*`, `***bold italic***`, and nesting (`**bold _and italic_**`). A marker opens a run only at a word boundary, so `snake_case_name` stays literal. `\*`, `\_`, and `\\` are escapes. An unbalanced marker is literal text, not an error.
+- **The page inset** is fixed (28 px) and exists whether or not you write `border`, so adding or removing `border` changes no coordinate — it only strokes a rectangle that was already reserved. Content keeps its normal margin inside that border, and each block reserves its own band so it never overlaps a node, frame, edge, or label.
+- **The title block owns the lower-right corner.** A `textblock lower-right` alongside a `titleblock` is an error; a `right` or `bottom` block takes the span beside the table.
+- **Empty blocks:** an empty `titleblock` is legal (nothing is drawn, the inset is still reserved); an empty `textblock` is an error.
+
 ### Strings
 
 All strings must be double-quoted. Supported escape sequences: `\"`, `\\`, `\n`. The `\n` escape creates a multi-line label. Nodes, frames, and edge labels all size to the tallest line. No other escape sequences are supported. Inside a string, `#` is a literal character.
@@ -68,7 +96,7 @@ All strings must be double-quoted. Supported escape sequences: `\"`, `\\`, `\n`.
 4. **Write one statement per line.** Edge chains cannot continue on the next line. Split long chains into separate statements.
 5. **Hyphens in IDs:** An ID can contain `-` (for example, `api-server` is one ID). A hyphen followed by a space or another hyphen is not part of an ID. `A-->B` and `A --> B` produce the same result.
 6. **Node redeclaration must be consistent.** If you use a node again in a chain, its label and shape must match the original declaration. A mismatch causes a parse error.
-7. **Reserved words:** Only `diagram`, `group`, and `end` are reserved words.  Words such as `box`, `cylinder`, `solid`, and `top-down` are contextual.  You can use them as node names (for example, a node named `box` is valid).
+7. **Reserved words:** Only `diagram`, `group`, `end`, `border`, `titleblock`, and `textblock` are reserved words (the last three only at the start of a statement — `a --> border` is a node named `border`).  Words such as `box`, `cylinder`, `solid`, and `top-down` are contextual.  You can use them as node names (for example, a node named `box` is valid).
 8. **Unsupported features:** No-arrow edges (`---`), style classes, and shapes other than `box` and `cylinder` are not supported. Do not create new syntax. The tool will not parse it.
 9. **`from=` and `to=` name the sides of the endpoint node only.** They do not apply to frames. The tool follows these values literally. If a forced side contradicts the flow direction, the edge wraps orthogonally. This is valid but may produce incorrect visual output. If the output looks wrong, remove or change the attribute. Do not expect the layout engine to correct it.
 

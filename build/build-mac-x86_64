@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+#
+# Cross-build the x86_64-apple-darwin (Intel Mac) release binary.
+#
+# Runs inside the shared Debian trixie image (build/debian.Dockerfile) using
+# cargo-zigbuild, which drives Zig as the linker. Zig ships the libSystem
+# stubs, so no macOS SDK is required. The container runs as the host UID:GID so
+# everything written into the mounted project (target/) stays owned by you.
+#
+# Minimum OS version: MACOSX_DEPLOYMENT_TARGET is the only way to pin it —
+# unlike a glibc floor, a macOS version cannot be appended to --target. Setting
+# it matters because Zig's own default floor (13.0 as of Zig 0.16) is *newer*
+# than rustc's (10.12 for x86_64-apple-darwin), so leaving it unset would
+# silently produce a binary that refuses to start on macOS 12. The default here
+# is 12.0, i.e. the macOS 12 major release, so the result runs on any 12.x
+# (12.7.6 included); override with MACOS_MIN=<version> for a different floor.
+
+set -euo pipefail
+
+here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd -- "$here/.." && pwd)"
+
+image="diagrammer-build-debian:latest"
+uid="$(id -u)"
+gid="$(id -g)"
+macos_min="${MACOS_MIN:-12.0}"
+
+docker build -f "$here/debian.Dockerfile" -t "$image" "$here"
+
+# Cargo's home and $HOME live under the (gitignored) target/ directory, so the
+# container user can write them and they persist across runs.
+mkdir -p "$root/target/.cargo-home" "$root/target/.home"
+
+docker run --rm \
+  --user "$uid:$gid" \
+  -v "$root:/work" \
+  -w /work \
+  -e HOME=/work/target/.home \
+  -e CARGO_HOME=/work/target/.cargo-home \
+  -e MACOSX_DEPLOYMENT_TARGET="$macos_min" \
+  "$image" \
+  cargo zigbuild --release -p diagrammer --target x86_64-apple-darwin
+
+echo "built: $root/target/x86_64-apple-darwin/release/diagrammer (macOS >= $macos_min)"

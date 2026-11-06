@@ -148,9 +148,10 @@ files (don't hand-edit them).
 
 **Release builds** are Docker-based and live in `build/`: one script per
 platform (`build-linux-glibc`, `build-linux-musl`, `build-mac`,
-`build-windows`), sharing `build/debian.Dockerfile` (glibc + macOS and Windows
-cross via `cargo-zigbuild`) and `build/alpine.Dockerfile` (musl). Each mounts
-the project at `/work` and runs as the host UID:GID. See `build/README.md`.
+`build-mac-x86_64`, `build-windows`), sharing `build/debian.Dockerfile` (glibc
++ macOS and Windows cross via `cargo-zigbuild`) and `build/alpine.Dockerfile`
+(musl). Each mounts the project at `/work` and runs as the host UID:GID. See
+`build/README.md`.
 
 Windows is `x86_64-pc-windows-gnu`, not `-msvc`: zig can't drive the MSVC
 linker (`/NOLOGO: unrecognized file extension`), and the gnu target

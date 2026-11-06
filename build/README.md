@@ -8,6 +8,7 @@ the project directory mounted at `/work`, so artifacts land in the host's
 build/build-linux-glibc   # x86_64-unknown-linux-gnu, dynamically linked
 build/build-linux-musl    # x86_64 musl, dynamically linked
 build/build-mac           # aarch64-apple-darwin (Apple Silicon)
+build/build-mac-x86_64    # x86_64-apple-darwin (Intel; macOS >= 12.0)
 build/build-windows       # x86_64-pc-windows-gnu (diagrammer.exe)
 ```
 
@@ -16,6 +17,7 @@ build/build-windows       # x86_64-pc-windows-gnu (diagrammer.exe)
 | `build-linux-glibc`  | `debian.Dockerfile`| `cargo zigbuild --target x86_64-unknown-linux-gnu.2.26` | `target/x86_64-unknown-linux-gnu/release/diagrammer`  |
 | `build-linux-musl`   | `alpine.Dockerfile`| `cargo build` (native musl)                          | `target/release/diagrammer`                           |
 | `build-mac`          | `debian.Dockerfile`| `cargo zigbuild --target aarch64-apple-darwin`       | `target/aarch64-apple-darwin/release/diagrammer`      |
+| `build-mac-x86_64`   | `debian.Dockerfile`| `MACOSX_DEPLOYMENT_TARGET=12.0 cargo zigbuild --target x86_64-apple-darwin` | `target/x86_64-apple-darwin/release/diagrammer` |
 | `build-windows`      | `debian.Dockerfile`| `cargo zigbuild --target x86_64-pc-windows-gnu`      | `target/x86_64-pc-windows-gnu/release/diagrammer.exe` |
 
 Only the `diagrammer` package is built (`-p diagrammer`); the
@@ -23,9 +25,10 @@ Only the `diagrammer` package is built (`-p diagrammer`); the
 
 ## Design notes
 
-- **Shared Debian image.** `linux-glibc`, `mac`, and `windows` use the same
-  image; the scripts distinguish them by passing a different cargo command to
-  `docker run`. `linux-musl` is separate because Alpine is musl-based.
+- **Shared Debian image.** `linux-glibc`, both `mac` scripts, and `windows`
+  use the same image; the scripts distinguish them by passing a different
+  cargo command to `docker run`. `linux-musl` is separate because Alpine is
+  musl-based.
 - **Runs as the host user.** Each script passes `--user "$(id -u):$(id -g)"`
   so files written into the mounted project keep your ownership. Because an
   arbitrary UID can't write to the image's toolchain directories, `CARGO_HOME`
@@ -36,12 +39,22 @@ Only the `diagrammer` package is built (`-p diagrammer`); the
   an explicit `x86_64-unknown-linux-gnu.2.26` triple, which caps the minimum
   glibc version at 2.26 regardless of the Debian version inside the image.
 - **Toolchain choice.** The Debian image uses rustup rather than Debian's
-  `rustc` because the macOS cross build needs the `aarch64-apple-darwin` std,
-  which only rustup can add. The Alpine image uses the distro `rust`/`cargo`
-  packages, since the build is native.
+  `rustc` because the macOS cross builds need the `aarch64-apple-darwin` and
+  `x86_64-apple-darwin` stds, which only rustup can add. The Alpine image uses
+  the distro `rust`/`cargo` packages, since the build is native.
 - **No macOS SDK.** `cargo-zigbuild` is installed from PyPI, which also pulls
   the bundled `ziglang` wheel. Zig ships the libSystem stubs needed to link
   this pure-Rust binary.
+- **macOS minimum version.** A macOS floor is set with
+  `MACOSX_DEPLOYMENT_TARGET`, not a `--target` suffix (unlike glibc's `.2.26`;
+  `cargo zigbuild` rejects one for darwin). `build-mac-x86_64` sets it from
+  `${MACOS_MIN:-12.0}` — `12.0` is the macOS 12 major release, so the binary
+  runs on any 12.x. Pinning matters because Zig's own default floor is newer
+  than rustc's (13.0 vs 10.12 as of Zig 0.16), so an unpinned build would
+  refuse to start on macOS 12. Override the floor with
+  `MACOS_MIN=13.0 build/build-mac-x86_64`. `build-mac` (arm64) does not set
+  the variable and so inherits Zig's default; give it the same treatment if a
+  floor is wanted there.
 - **Windows is `-gnu`, not `-msvc`.** Both targets produce a working `.exe`,
   but zig cannot drive the MSVC linker (`--target x86_64-pc-windows-msvc`
   fails with `/NOLOGO: unrecognized file extension`), and the gnu target has

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="463.56" height="401.50" viewBox="0 0 463.56 401.50">
+<svg xmlns="http://www.w3.org/2000/svg" width="506.47" height="401.50" viewBox="0 0 506.47 401.50">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -8,32 +8,32 @@
     </marker>
   </defs>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="176.22" y="259.50" width="259.34" height="114.00" fill="#fbfbfb"/>
-    <line x1="242.00" y1="259.50" x2="242.00" y2="373.50"/>
-    <line x1="176.22" y1="287.50" x2="435.56" y2="287.50"/>
-    <line x1="176.22" y1="307.50" x2="435.56" y2="307.50"/>
-    <line x1="176.22" y1="327.50" x2="435.56" y2="327.50"/>
-    <line x1="176.22" y1="347.50" x2="435.56" y2="347.50"/>
+    <rect x="180.52" y="259.50" width="297.95" height="114.00" fill="#fbfbfb"/>
+    <line x1="255.13" y1="259.50" x2="255.13" y2="373.50"/>
+    <line x1="180.52" y1="287.50" x2="478.47" y2="287.50"/>
+    <line x1="180.52" y1="307.50" x2="478.47" y2="307.50"/>
+    <line x1="180.52" y1="327.50" x2="478.47" y2="327.50"/>
+    <line x1="180.52" y1="347.50" x2="478.47" y2="347.50"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif">
-    <text x="182.22" y="276.50" font-size="14.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Title</text>
-    <text x="248.00" y="276.50" font-size="14.00" text-anchor="start" dominant-baseline="central">Finance: Network Architecture</text>
-    <text x="182.22" y="297.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Company</text>
-    <text x="248.00" y="297.50" font-size="12.00" text-anchor="start" dominant-baseline="central">Big Corp, LLC</text>
-    <text x="182.22" y="317.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Author</text>
-    <text x="248.00" y="317.50" font-size="12.00" text-anchor="start" dominant-baseline="central">John Doe</text>
-    <text x="182.22" y="337.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Version</text>
-    <text x="248.00" y="337.50" font-size="12.00" text-anchor="start" dominant-baseline="central">0.1</text>
-    <text x="182.22" y="357.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Date</text>
-    <text x="248.00" y="357.50" font-size="12.00" text-anchor="start" dominant-baseline="central">2026-11-04</text>
+    <text x="186.52" y="276.50" font-size="14.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Title</text>
+    <text x="261.13" y="276.50" font-size="14.00" text-anchor="start" dominant-baseline="central">Finance: Network Architecture</text>
+    <text x="186.52" y="297.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Company</text>
+    <text x="261.13" y="297.50" font-size="12.00" text-anchor="start" dominant-baseline="central">Big Corp, LLC</text>
+    <text x="186.52" y="317.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Author</text>
+    <text x="261.13" y="317.50" font-size="12.00" text-anchor="start" dominant-baseline="central">John Doe</text>
+    <text x="186.52" y="337.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Version</text>
+    <text x="261.13" y="337.50" font-size="12.00" text-anchor="start" dominant-baseline="central">0.1</text>
+    <text x="186.52" y="357.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Date</text>
+    <text x="261.13" y="357.50" font-size="12.00" text-anchor="start" dominant-baseline="central">2026-11-04</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="102.11,110.00 102.11,173.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="104.26,110.00 104.26,173.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g>
-    <rect x="68.00" y="68.00" width="68.22" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="102.11" y="89.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Web</text>
-    <rect x="71.60" y="177.50" width="61.03" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="102.11" y="198.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">API</text>
+    <rect x="68.00" y="68.00" width="72.52" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="104.26" y="89.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Web</text>
+    <rect x="72.19" y="177.50" width="64.15" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="104.26" y="198.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">API</text>
   </g>
 </svg>

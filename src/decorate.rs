@@ -788,16 +788,29 @@ fn wrap_runs(runs: Vec<TextRun>, width: Option<f32>) -> Vec<Vec<TextRun>> {
         return vec![Vec::new()];
     }
 
+    // The space that separates two words takes the style of the word it
+    // *follows*, so a run of same-style words collapses into a single run (and
+    // therefore a single `<text>`). Pushing a Regular space between Bold words
+    // instead would break the run at every word boundary — which is what made
+    // an all-bold line render as one `<text>` per word, with the inter-word
+    // gap coming only from the next element's `x`.
+    // Italic shares Regular's advances (see [`crate::text::Weight`]), so the
+    // weight alone decides a space's width.
+    let space_w = |bold: bool| -> f32 {
+        let weight = if bold { Weight::Bold } else { Weight::Regular };
+        text::measure_run(" ", TEXT_SIZE, weight).width
+    };
+
     // Greedy packing.
-    let space_w = text::measure_run(" ", TEXT_SIZE, Weight::Regular).width;
     let mut lines: Vec<Vec<usize>> = Vec::new();
     let mut cur: Vec<usize> = Vec::new();
     let mut cur_w = 0.0_f32;
     for (i, word) in words.iter().enumerate() {
-        let needed = if cur.is_empty() {
-            word.w
+        let needed = if let Some(&prev) = cur.last() {
+            let last = words[prev].pieces.last().expect("a word has a piece");
+            space_w(last.bold) + word.w
         } else {
-            space_w + word.w
+            word.w
         };
         if width.is_some_and(|max| !cur.is_empty() && cur_w + needed > max) {
             lines.push(std::mem::take(&mut cur));
@@ -809,18 +822,20 @@ fn wrap_runs(runs: Vec<TextRun>, width: Option<f32>) -> Vec<Vec<TextRun>> {
     }
     lines.push(cur);
 
-    // Re-join each line's words into runs, merging neighbours of one style and
-    // inserting a plain space between words.
+    // Re-join each line's words into runs, merging neighbours of one style.
+    // The separating space carries the style of the word before it, so
+    // `**PUBLIC ENTRY**` stays one bold run instead of five.
     lines
         .into_iter()
         .map(|idxs| {
             let mut out: Vec<TextRun> = Vec::new();
             for (k, i) in idxs.iter().enumerate() {
-                if k > 0 {
-                    push_run(&mut out, " ", false, false);
-                }
                 for p in &words[*i].pieces {
                     push_run(&mut out, &p.text, p.bold, p.italic);
+                }
+                if k + 1 < idxs.len() {
+                    let last = words[*i].pieces.last().expect("a word has a piece");
+                    push_run(&mut out, " ", last.bold, last.italic);
                 }
             }
             out
@@ -1011,6 +1026,58 @@ mod tests {
             .map(line_text)
             .collect();
         assert_eq!(joined.join(" "), long);
+    }
+
+    #[test]
+    fn same_style_words_join_into_one_run() {
+        // A line of one style must come out as a *single* run, so the renderer
+        // emits one `<text>` rather than one per word. The separating space
+        // takes the style of the word before it — a Regular space between Bold
+        // words would split the run at every boundary and make the word gap
+        // depend on the next element's `x` instead of on a real space glyph.
+        let t = text_layout(&block(Anchor::Top, &["**PUBLIC ENTRY POINTS**"], None));
+        let BlockLine::Text { runs, .. } = &t.lines[0] else {
+            panic!("expected a text line");
+        };
+        assert_eq!(runs.len(), 1, "expected one merged run, got {runs:?}");
+        assert_eq!(runs[0].text, "PUBLIC ENTRY POINTS");
+        assert_eq!(runs[0].weight, Weight::Bold);
+        // The measured width includes the spaces, so the run cannot be drawn
+        // narrower than the sum of its words plus two bold spaces.
+        let words: f32 = ["PUBLIC", "ENTRY", "POINTS"]
+            .iter()
+            .map(|w| text::measure_run(w, TEXT_SIZE, Weight::Bold).width)
+            .sum();
+        let sp = text::measure_run(" ", TEXT_SIZE, Weight::Bold).width;
+        assert!(
+            (runs[0].width - (words + 2.0 * sp)).abs() < 0.01,
+            "run width {} should equal words + 2 bold spaces ({})",
+            runs[0].width,
+            words + 2.0 * sp
+        );
+    }
+
+    #[test]
+    fn a_style_change_still_starts_a_new_run() {
+        // Merging must not swallow a real style boundary.
+        let t = text_layout(&block(Anchor::Top, &["plain **bold** plain"], None));
+        let BlockLine::Text { runs, .. } = &t.lines[0] else {
+            panic!("expected a text line");
+        };
+        let styled: Vec<(String, Weight)> =
+            runs.iter().map(|r| (r.text.clone(), r.weight)).collect();
+        // The space after `**bold**` carries the *bold* style (it follows the
+        // bold word), so it stays inside the bold run; the renderer trims the
+        // run's trailing space and advances past it.
+        assert_eq!(
+            styled,
+            vec![
+                ("plain ".to_string(), Weight::Regular),
+                ("bold ".to_string(), Weight::Bold),
+                ("plain".to_string(), Weight::Regular),
+            ],
+            "got {styled:?}"
+        );
     }
 
     #[test]

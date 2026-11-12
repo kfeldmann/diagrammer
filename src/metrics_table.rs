@@ -2,7 +2,7 @@
 //!
 //! Regenerate with `cargo run -p gen-metrics-table` (see the
 //! tool's header comment for the exact semantics baked here). Values
-//! are in font units (em = `ascent - descent`); `text::measure_run`
+//! are in font units (em = `unitsPerEm`); `text::measure_run`
 //! scales them to pixels. Both faces are baked with identical
 //! semantics, from the two fonts the `dejavu` crate bundles; the
 //! `font_verification` tests prove each table matches live
@@ -10,13 +10,16 @@
 
 /// One face's baked metrics, in font units. `text::measure_run` scales
 /// these to pixels at the requested font size; the two faces differ in
-/// every field but the em box (they share `ascent - descent`, so line
+/// every field but the em box (they share `unitsPerEm`, so line
 /// heights are weight-independent).
 pub struct Face {
     /// `hhea` ascender.
     pub ascent: i16,
     /// `hhea` descender (negative).
     pub descent: i16,
+    /// `head.unitsPerEm` — the divisor that turns font units into pixels.
+    /// This is what a renderer uses, and it is **not** `ascent - descent`.
+    pub units_per_em: u16,
     /// char → glyph id runs (see the emitted comment).
     pub char_runs: &'static [(u32, u16, u16)],
     /// Advance per glyph id.
@@ -3440,6 +3443,7 @@ const REGULAR_KERN: &[(u32, i16)] = &[
 pub const REGULAR: Face = Face {
     ascent: 1901,
     descent: -483,
+    units_per_em: 2048,
     char_runs: REGULAR_CHAR_RUNS,
     advances: REGULAR_ADVANCES,
     kern: REGULAR_KERN,
@@ -5654,6 +5658,7 @@ const BOLD_KERN: &[(u32, i16)] = &[
 pub const BOLD: Face = Face {
     ascent: 1901,
     descent: -483,
+    units_per_em: 2048,
     char_runs: BOLD_CHAR_RUNS,
     advances: BOLD_ADVANCES,
     kern: BOLD_KERN,

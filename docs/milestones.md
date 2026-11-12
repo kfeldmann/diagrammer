@@ -24,11 +24,14 @@ diagram byte-identical. Three of its four parts are **done**: **M21.1** (the
 grammar, AST, resolve, and tooling), **M21.2** (bold metrics — the baked table
 now carries a DejaVu Sans Bold face beside Regular, so an inline `**bold**`
 run can be measured to the same standard), and **M21.3** (the `decorate` pass
-and the renderer — the three blocks are now drawn). All twelve pre-M21
-snapshots are still byte-identical, and three new furniture snapshots pin the
-drawing. What remains is **M21.4**, the optional polish pass.
+and the renderer — the three blocks are now drawn). What remains is **M21.4**,
+the optional polish pass.
 
-Also complete: the **Windows portability pass** (recorded in full below) —
+Also complete: a **post-M21.3 measurement fix** (recorded in full below) —
+text was measured against the wrong em divisor (`ascent − descent` instead of
+`unitsPerEm`), which under-measured every string by ~14% and so overflowed
+boxes and closed up inter-word gaps; all 15 snapshots were regenerated.
+**And the Windows portability pass** (recorded in full below) —
 `build/build-windows` cross-compiles a self-contained `diagrammer.exe`, and
 two Windows-input/portability defects it surfaced are fixed (a
 platform-dependent `f32::hypot` in the geometry, and unnormalized BOM/CRLF
@@ -2674,6 +2677,47 @@ wrong):
 
 **Blocked by:** M21.1 (grammar), M21.2 (bold measurement).
 **Blocks:** nothing.
+
+## ✅ Post-M21.3 fix — text measurement used the wrong em divisor
+
+A defect report ("all-caps words look glued together; text-block lines run
+past the right edge") traced to **one** root cause in `text::measure_run`,
+plus a second, independent run-splitting wart in `wrap_runs`.
+
+- [x] **`font_size / unitsPerEm`, not `font_size / (ascent − descent)`.**
+      `h_scale_factor` divided by the `hhea` ascent-descent span (2384 for
+      DejaVu Sans) where every SVG/CSS renderer divides by `head.unitsPerEm`
+      (2048). The ratio 2384/2048 = **1.164**, so every string was measured
+      ~14% *narrow* — the widest possible error, since the same tables then
+      drew at their true width. Two symptoms, one bug:
+      * a node box or text block was sized from the too-small width, so drawn
+        text overflowed its frame (the reported "lines stick out the right");
+      * the renderer advances `cx` by each run's *measured* width while the
+        glyphs occupy their *true* width, so every inter-word gap was eaten by
+        the next word's overrun. Lowercase words have enough side bearing to
+        hide it; an all-caps bold line has none, so the spaces vanished (the
+        reported "all-caps words too close together").
+      The generator now bakes `units_per_em` (asserted `> 0` and equal across
+      faces by the `const _` block), `font_verification`'s reference
+      implementation uses the same divisor, and
+      `width_scales_by_units_per_em_not_the_ascent_descent_span` pins both the
+      correct value and the fact that the old divisor materially disagrees.
+      `Metrics::height` is untouched: it uses `font_size` directly as the em
+      height, which was always right.
+- [x] **A line of one style is one run (and one `<text>`).** `wrap_runs`
+      re-joined words by pushing a **Regular** space between them regardless
+      of the surrounding style, so every word boundary in a bold line started
+      a new run — one `<text>` per word, with the gap coming only from the
+      next element's `x`. The space now takes the style of the word it
+      *follows*, so `**PUBLIC ENTRY POINTS**` is a single bold run.
+      (`same_style_words_join_into_one_run`, `a_style_change_still_starts_a_new_run`.)
+      This is why the user saw "each word in a separate text box": it was not
+      a design choice, it was the Regular-space split.
+
+**Blast radius:** all 15 snapshots change — every box widens to fit its
+now-correctly-measured label, and group/canvas sizes follow. The change is a
+strict correctness fix, not a re-tuning: `cargo test` (349), `clippy`,
+`doc`, and `fmt` are clean.
 
 ### ☐ M21.4 — Polish (optional, may fold into M21.3)
 

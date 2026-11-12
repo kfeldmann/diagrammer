@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="89.63" height="191.50" viewBox="0 0 89.63 191.50">
+<svg xmlns="http://www.w3.org/2000/svg" width="90.89" height="191.50" viewBox="0 0 90.89 191.50">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -8,13 +8,13 @@
     </marker>
   </defs>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="44.82,62.00 44.82,125.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
-    <polyline points="54.82,129.50 54.82,66.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="45.44,62.00 45.44,125.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="55.44,129.50 55.44,66.00" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g>
-    <rect x="20.13" y="20.00" width="49.37" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="44.82" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">a</text>
-    <rect x="20.00" y="129.50" width="49.63" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="44.82" y="150.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">b</text>
+    <rect x="20.15" y="20.00" width="50.58" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="45.44" y="41.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">a</text>
+    <rect x="20.00" y="129.50" width="50.89" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="45.44" y="150.50" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">b</text>
   </g>
 </svg>

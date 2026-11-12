@@ -42,6 +42,10 @@ struct Tables {
     name: &'static str,
     ascent: i16,
     descent: i16,
+    /// `head.unitsPerEm` — the divisor CSS/SVG use to turn font units into
+    /// pixels. **Not** the same as `ascent - descent` (2384 for DejaVu Sans,
+    /// where `unitsPerEm` is 2048).
+    units_per_em: u16,
     /// char → glyph as `(char_start, gid_start, len)` runs.
     runs: Vec<(u32, u16, u16)>,
     /// Advance per glyph id, in font units.
@@ -121,6 +125,7 @@ fn extract(ident: &'static str, name: &'static str, data: &'static [u8]) -> Tabl
         name,
         ascent: face.ascender(),
         descent: face.descender(),
+        units_per_em: face.units_per_em(),
         runs,
         advances,
         kern: kern.into_iter().collect(),
@@ -192,6 +197,7 @@ fn write_face(out: &mut String, t: &Tables) {
     writeln!(out, "pub const {upper}: Face = Face {{").unwrap();
     writeln!(out, "    ascent: {},", t.ascent).unwrap();
     writeln!(out, "    descent: {},", t.descent).unwrap();
+    writeln!(out, "    units_per_em: {},", t.units_per_em).unwrap();
     writeln!(out, "    char_runs: {upper}_CHAR_RUNS,").unwrap();
     writeln!(out, "    advances: {upper}_ADVANCES,").unwrap();
     writeln!(out, "    kern: {upper}_KERN,").unwrap();
@@ -264,7 +270,7 @@ fn main() {
     .unwrap();
     writeln!(
         out,
-        "//! are in font units (em = `ascent - descent`); `text::measure_run`"
+        "//! are in font units (em = `unitsPerEm`); `text::measure_run`"
     )
     .unwrap();
     writeln!(
@@ -300,7 +306,7 @@ fn main() {
     .unwrap();
     writeln!(
         out,
-        "/// every field but the em box (they share `ascent - descent`, so line"
+        "/// every field but the em box (they share `unitsPerEm`, so line"
     )
     .unwrap();
     writeln!(out, "/// heights are weight-independent).").unwrap();
@@ -309,6 +315,17 @@ fn main() {
     writeln!(out, "    pub ascent: i16,").unwrap();
     writeln!(out, "    /// `hhea` descender (negative).").unwrap();
     writeln!(out, "    pub descent: i16,").unwrap();
+    writeln!(
+        out,
+        "    /// `head.unitsPerEm` — the divisor that turns font units into pixels."
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "    /// This is what a renderer uses, and it is **not** `ascent - descent`."
+    )
+    .unwrap();
+    writeln!(out, "    pub units_per_em: u16,").unwrap();
     writeln!(
         out,
         "    /// char → glyph id runs (see the emitted comment)."

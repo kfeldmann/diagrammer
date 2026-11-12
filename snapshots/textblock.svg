@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="445.14" height="382.70" viewBox="0 0 445.14 382.70">
+<svg xmlns="http://www.w3.org/2000/svg" width="478.86" height="382.70" viewBox="0 0 478.86 382.70">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -8,60 +8,60 @@
     </marker>
   </defs>
   <g fill="none" stroke-linejoin="round">
-    <rect x="28.00" y="28.00" width="389.14" height="326.70" rx="6" ry="6" stroke="#888" stroke-width="1"/>
+    <rect x="28.00" y="28.00" width="422.86" height="326.70" rx="6" ry="6" stroke="#888" stroke-width="1"/>
   </g>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="40.00" y="40.00" width="102.83" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
+    <rect x="40.00" y="40.00" width="116.42" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
   </g>
   <g fill="#333" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="13.00">
     <text x="50.00" y="57.80" text-anchor="start" dominant-baseline="central">upper-left note</text>
   </g>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="174.45" y="40.00" width="67.01" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
+    <rect x="184.86" y="40.00" width="74.72" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
   </g>
   <g fill="#333" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="13.00">
-    <text x="184.45" y="57.80" text-anchor="start" dominant-baseline="central">top note</text>
+    <text x="194.86" y="57.80" text-anchor="start" dominant-baseline="central">top note</text>
   </g>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="294.16" y="40.00" width="110.98" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
+    <rect x="312.95" y="40.00" width="125.91" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
   </g>
   <g fill="#333" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="13.00">
-    <text x="304.16" y="57.80" text-anchor="start" dominant-baseline="central">upper-right note</text>
+    <text x="322.95" y="57.80" text-anchor="start" dominant-baseline="central">upper-right note</text>
   </g>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="40.00" y="173.55" width="66.80" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
+    <rect x="40.00" y="173.55" width="74.48" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
   </g>
   <g fill="#333" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="13.00">
     <text x="50.00" y="191.35" text-anchor="start" dominant-baseline="central">left note</text>
   </g>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="273.08" y="173.55" width="132.06" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
+    <rect x="288.03" y="173.55" width="150.84" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
   </g>
   <g fill="#333" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="13.00">
-    <text x="283.08" y="191.35" text-anchor="start" dominant-baseline="central">right</text>
-    <text x="312.87" y="191.35" text-anchor="start" dominant-baseline="central" font-weight="bold">bold</text>
-    <text x="343.91" y="191.35" text-anchor="start" dominant-baseline="central">and</text>
-    <text x="368.47" y="191.35" text-anchor="start" dominant-baseline="central" font-style="italic">italic</text>
+    <text x="298.03" y="191.35" text-anchor="start" dominant-baseline="central">right</text>
+    <text x="332.70" y="191.35" text-anchor="start" dominant-baseline="central" font-weight="bold">bold</text>
+    <text x="369.23" y="191.35" text-anchor="start" dominant-baseline="central">and</text>
+    <text x="397.82" y="191.35" text-anchor="start" dominant-baseline="central" font-style="italic">italic</text>
   </g>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="40.00" y="307.10" width="100.64" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
+    <rect x="40.00" y="307.10" width="113.88" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
   </g>
   <g fill="#333" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="13.00">
     <text x="50.00" y="324.90" text-anchor="start" dominant-baseline="central">lower-left note</text>
   </g>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="163.41" y="307.10" width="89.10" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
+    <rect x="172.00" y="307.10" width="100.44" height="35.60" rx="6" ry="6" fill="#fdf6ec"/>
   </g>
   <g fill="#333" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="13.00">
-    <text x="173.41" y="324.90" text-anchor="start" dominant-baseline="central">bottom note</text>
+    <text x="182.00" y="324.90" text-anchor="start" dominant-baseline="central">bottom note</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="207.96,157.60 207.96,221.10" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="222.22,157.60 222.22,221.10" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g>
-    <rect x="182.84" y="115.60" width="50.23" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="207.96" y="136.60" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">A</text>
-    <rect x="182.83" y="225.10" width="50.25" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="207.96" y="246.10" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">B</text>
+    <rect x="196.43" y="115.60" width="51.58" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="222.22" y="136.60" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">A</text>
+    <rect x="196.42" y="225.10" width="51.60" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="222.22" y="246.10" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">B</text>
   </g>
 </svg>

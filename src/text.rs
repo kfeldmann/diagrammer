@@ -3,8 +3,10 @@
 //!
 //! Node labels must be sized before the boxes can be placed (milestone 2).
 //! We measure the *layout width* (summed glyph advance, with kerning) and the
-//! em height (ascent − descent) at a fixed pixel size, deterministically,
-//! from baked metrics so that output is reproducible across machines. The
+//! em height at a fixed pixel size, deterministically, from baked metrics so
+//! that output is reproducible across machines. Widths scale by
+//! `font_size / unitsPerEm` — exactly what a renderer does with `font-size` —
+//! while heights use `font_size` directly as the em height. The
 //! tables are generated from the DejaVu Sans **Regular** and **Bold** faces
 //! embedded via the `dejavu` crate (`cargo run -p gen-metrics-table`) and
 //! verified against them by the `font_verification` tests.
@@ -66,11 +68,18 @@ impl Weight {
 /// Regular's table without changing any line's height.) Checked at compile
 /// time against the generated tables, so a regenerated table that drifted
 /// would fail the build rather than quietly mis-space bold lines.
+///
+/// `units_per_em` is asserted too, and not for height: it is the *horizontal*
+/// scale divisor ([`h_scale_factor`]). A face whose `unitsPerEm` differed from
+/// Regular's would still be measurable, but the check keeps the two tables on
+/// one em box so the height and width scalings can never disagree.
 const _: () = {
     let mut i = 0;
     while i < Weight::ALL.len() {
         let face = Weight::ALL[i].face();
         assert!(face.ascent - face.descent == mt::REGULAR.ascent - mt::REGULAR.descent);
+        assert!(face.units_per_em == mt::REGULAR.units_per_em);
+        assert!(face.units_per_em > 0);
         assert!(!face.char_runs.is_empty() && !face.advances.is_empty());
         i += 1;
     }
@@ -108,11 +117,21 @@ pub struct Metrics {
     pub height: f32,
 }
 
-/// Pixels per font unit at `font_size` pixels. The em box is the font's
-/// `ascent − descent` (not `units_per_em`) — matching the historical `ab_glyph`
-/// `PxScaleFont` scaling exactly, so measurements are unchanged.
+/// Pixels per font unit at `font_size` pixels: `font_size / unitsPerEm`.
+///
+/// This is the scaling every SVG/CSS renderer applies to `font-size`, so the
+/// width measured here is the width drawn. It is **not** `font_size / (ascent
+/// − descent)`: for DejaVu Sans those differ by a factor of 2384/2048 = 1.164,
+/// and using the wrong one under-measured every string by ~14% — boxes came
+/// out too narrow (text overflowed a node label or a text block) and, because
+/// the renderer positions each run at the *measured* x while the glyphs are
+/// drawn at their *true* width, adjacent words collided (most visibly in
+/// all-caps bold, where the inter-word gap vanished).
+///
+/// The `ascent − descent` divisor survives only in `Metrics::height`, where it
+/// is the em height of a *line* and has nothing to do with advance widths.
 fn h_scale_factor(face: &mt::Face, font_size: f32) -> f32 {
-    font_size / (face.ascent as f32 - face.descent as f32)
+    font_size / face.units_per_em as f32
 }
 
 /// Map `c` to a glyph id via the baked cmap runs; unmapped chars map to
@@ -307,6 +326,57 @@ mod tests {
         }
     }
 
+    /// Widths scale by `font_size / unitsPerEm`, **not** by
+    /// `font_size / (ascent - descent)`.
+    ///
+    /// This is the regression guard for the bug that made text blocks overflow
+    /// and run words together: the two divisors differ by 2384/2048 = 1.164 for
+    /// DejaVu Sans, so the wrong one under-measured every string by ~14%. The
+    /// expected widths below are computed from the font's own `unitsPerEm`
+    /// scaling, i.e. exactly what an SVG renderer draws for that `font-size`.
+    #[test]
+    fn width_scales_by_units_per_em_not_the_ascent_descent_span() {
+        // Glyph `M` is 1767 font units wide in DejaVu Sans Regular; ten of them
+        // at 13 px is `10 * 1767 * 13 / 2048`.
+        let m_units = 1767.0_f32;
+        let upem = Weight::Regular.face().units_per_em as f32;
+        let expected = 10.0 * m_units * 13.0 / upem;
+        let got = measure_run("MMMMMMMMMM", 13.0, Weight::Regular).width;
+        assert!(
+            (got - expected).abs() < 0.01,
+            "measured {got} but unitsPerEm scaling predicts {expected}"
+        );
+
+        // And the old divisor really is different, so this test cannot pass
+        // under it: assert the two disagree by the font's known ratio.
+        let span = (Weight::Regular.face().ascent - Weight::Regular.face().descent) as f32;
+        assert!(
+            (span / upem - 1.164).abs() < 0.01,
+            "ascent-descent / unitsPerEm should be ~1.164 for DejaVu Sans, got {}",
+            span / upem
+        );
+        let wrong = 10.0 * m_units * 13.0 / span;
+        assert!(
+            (got - wrong).abs() > 1.0,
+            "the unitsPerEm and ascent-descent scalings must differ materially"
+        );
+    }
+
+    /// A space is measured in the face it will be drawn in, so bold text gets
+    /// bold word gaps. Measured with the *wrong* weight the gap is ~9% narrow,
+    /// which is invisible in lowercase but closes up an all-caps line.
+    #[test]
+    fn a_space_is_wider_in_bold_than_in_regular() {
+        let reg = measure_run(" ", 13.0, Weight::Regular).width;
+        let bold = measure_run(" ", 13.0, Weight::Bold).width;
+        assert!(bold > reg, "bold space {bold} should exceed regular {reg}");
+        // DejaVu Sans: 649 vs 651 units — close, but not equal.
+        assert!(
+            (bold / reg - 1.0).abs() < 0.10,
+            "space weights should be within 10%, got {bold}/{reg}"
+        );
+    }
+
     /// Both faces share an em box, so weight changes only the width — the
     /// property `line_height` (and therefore every line's height) relies on.
     #[test]
@@ -456,10 +526,10 @@ mod font_verification {
         });
     }
 
-    /// Reference implementation measuring straight from the font, with the
-    /// exact historical `ab_glyph` scaling.
+    /// Reference implementation measuring straight from the font, using the
+    /// renderer's own scaling (`font_size / unitsPerEm`).
     fn measure_live(f: &Face<'_>, text: &str, font_size: f32) -> Metrics {
-        let h_scale = font_size / (f.ascender() as f32 - f.descender() as f32);
+        let h_scale = font_size / f.units_per_em() as f32;
         let measure_line = |line: &str| -> f32 {
             let mut width = 0.0_f32;
             let mut prev: Option<GlyphId> = None;

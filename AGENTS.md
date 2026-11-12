@@ -370,12 +370,20 @@ costs and the signing options.
   `font_verification` tests in `text.rs` prove **each** face is bit-identical
   to live `ttf-parser` lookups over the whole Unicode range — keep them green
   (they are the slowest tests in the suite; running both faces costs ~40 s
-  instead of ~20 s). Two load-bearing quirks (pinned by those tests): pixel
-  scaling is `font_size / (ascent − descent)` (the em box, **not**
-  `units_per_em`), and kerning is *first horizontal subtable wins* with
-  zero-valued pairs treated as absent. Both faces share an em box, which is
-  why `line_height`/`Metrics::height` carry no weight term — a compile-time
-  `const _` block in `text.rs` asserts it, so a regenerated table that
+  instead of ~20 s). Two load-bearing quirks (pinned by those tests): the
+  horizontal pixel scale is `font_size / units_per_em` — **exactly what a
+  renderer does with `font-size`**, and *not* `font_size / (ascent −
+  descent)`; those divisors differ by 2384/2048 = 1.164 for DejaVu Sans, and
+  using the ascent-descent span under-measured every string by ~14% (boxes
+  too narrow, text overflowing a node or a text block, and — because the
+  renderer places each run at its *measured* x while glyphs are drawn at
+  their *true* width — adjacent words colliding). `Metrics::height` still
+  uses `font_size` directly as the em height, which is a separate thing.
+  Kerning is *first horizontal subtable wins* with zero-valued pairs treated
+  as absent. Both faces share an em box, which is why
+  `line_height`/`Metrics::height` carry no weight term — a compile-time
+  `const _` block in `text.rs` asserts it (and that both faces agree on
+  `units_per_em`, the horizontal divisor), so a regenerated table that
   drifted fails the build.
 
 ## Shared constants across the layout/render boundary

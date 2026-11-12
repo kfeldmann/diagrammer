@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" width="459.38" height="355.50" viewBox="0 0 459.38 355.50">
+<svg xmlns="http://www.w3.org/2000/svg" width="463.02" height="355.50" viewBox="0 0 463.02 355.50">
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="6.00" refY="5"
             markerWidth="10" markerHeight="10" orient="auto"
@@ -8,43 +8,43 @@
     </marker>
   </defs>
   <g fill="none" stroke-linejoin="round">
-    <rect x="28.00" y="28.00" width="403.38" height="299.50" rx="6" ry="6" stroke="#333" stroke-width="1"/>
+    <rect x="28.00" y="28.00" width="407.02" height="299.50" rx="6" ry="6" stroke="#333" stroke-width="1"/>
   </g>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="276.87" y="273.50" width="154.52" height="54.00" fill="#fbfbfb"/>
-    <line x1="332.45" y1="273.50" x2="332.45" y2="327.50"/>
-    <line x1="276.87" y1="301.50" x2="431.38" y2="301.50"/>
+    <rect x="259.09" y="273.50" width="175.93" height="54.00" fill="#fbfbfb"/>
+    <line x1="321.82" y1="273.50" x2="321.82" y2="327.50"/>
+    <line x1="259.09" y1="301.50" x2="435.02" y2="301.50"/>
   </g>
   <g fill="#222" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif">
-    <text x="282.87" y="290.50" font-size="14.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Title</text>
-    <text x="338.45" y="290.50" font-size="14.00" text-anchor="start" dominant-baseline="central">Page Furniture</text>
-    <text x="282.87" y="311.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Version</text>
-    <text x="338.45" y="311.50" font-size="12.00" text-anchor="start" dominant-baseline="central">1.0</text>
+    <text x="265.09" y="290.50" font-size="14.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Title</text>
+    <text x="327.82" y="290.50" font-size="14.00" text-anchor="start" dominant-baseline="central">Page Furniture</text>
+    <text x="265.09" y="311.50" font-size="12.00" font-weight="bold" text-anchor="start" dominant-baseline="central">Version</text>
+    <text x="327.82" y="311.50" font-size="12.00" text-anchor="start" dominant-baseline="central">1.0</text>
   </g>
   <g fill="none" stroke="#888" stroke-width="1">
-    <rect x="201.14" y="93.95" width="218.24" height="113.60" rx="6" ry="6" fill="#fdf6ec"/>
+    <rect x="209.53" y="93.95" width="213.49" height="113.60" rx="6" ry="6" fill="#fdf6ec"/>
   </g>
   <g fill="#333" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="13.00">
-    <text x="211.14" y="111.75" text-anchor="start" dominant-baseline="central">A text block wraps its body to</text>
-    <text x="211.14" y="127.35" text-anchor="start" dominant-baseline="central" font-weight="bold">width=</text>
-    <text x="259.48" y="127.35" text-anchor="start" dominant-baseline="central">when given, and</text>
-    <text x="211.14" y="142.95" text-anchor="start" dominant-baseline="central">understands</text>
-    <text x="284.43" y="142.95" text-anchor="start" dominant-baseline="central" font-style="italic">italic</text>
-    <text x="311.10" y="142.95" text-anchor="start" dominant-baseline="central">,</text>
-    <text x="318.20" y="142.95" text-anchor="start" dominant-baseline="central" font-weight="bold">bold</text>
-    <text x="345.69" y="142.95" text-anchor="start" dominant-baseline="central">, and a rule</text>
-    <text x="211.14" y="158.55" text-anchor="start" dominant-baseline="central">below.</text>
-    <line x1="211.14" y1="174.15" x2="409.38" y2="174.15" stroke="#333" stroke-width="1"/>
-    <text x="211.14" y="189.75" text-anchor="start" dominant-baseline="central">Done.</text>
+    <text x="219.53" y="111.75" text-anchor="start" dominant-baseline="central">A text block wraps its body to</text>
+    <text x="219.53" y="127.35" text-anchor="start" dominant-baseline="central" font-weight="bold">width=</text>
+    <text x="276.19" y="127.35" text-anchor="start" dominant-baseline="central">when given, and</text>
+    <text x="219.53" y="142.95" text-anchor="start" dominant-baseline="central">understands</text>
+    <text x="304.84" y="142.95" text-anchor="start" dominant-baseline="central" font-style="italic">italic</text>
+    <text x="335.89" y="142.95" text-anchor="start" dominant-baseline="central">,</text>
+    <text x="344.15" y="142.95" text-anchor="start" dominant-baseline="central" font-weight="bold">bold</text>
+    <text x="376.15" y="142.95" text-anchor="start" dominant-baseline="central">, and</text>
+    <text x="219.53" y="158.55" text-anchor="start" dominant-baseline="central">a rule below.</text>
+    <line x1="219.53" y1="174.15" x2="413.02" y2="174.15" stroke="#333" stroke-width="1"/>
+    <text x="219.53" y="189.75" text-anchor="start" dominant-baseline="central">Done.</text>
   </g>
   <g fill="none" stroke-linecap="round" stroke-linejoin="round">
-    <polyline points="114.57,110.00 114.57,173.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
+    <polyline points="118.77,110.00 118.77,173.50" stroke="#333" stroke-width="1.5" marker-end="url(#arrow)"/>
   </g>
   <g>
-    <rect x="72.92" y="68.00" width="83.31" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="114.57" y="89.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Source</text>
-    <path d="M68.00,182.50 L68.00,228.50 A46.57,5.00 0 0 0 161.14,228.50 L161.14,182.50 A46.57,5.00 0 0 0 68.00,182.50 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <ellipse cx="114.57" cy="182.50" rx="46.57" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
-    <text x="114.57" y="209.92" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Postgres</text>
+    <rect x="73.73" y="68.00" width="90.08" height="42.00" rx="6" ry="6" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="118.77" y="89.00" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Source</text>
+    <path d="M68.00,182.50 L68.00,228.50 A50.77,5.00 0 0 0 169.53,228.50 L169.53,182.50 A50.77,5.00 0 0 0 68.00,182.50 Z" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <ellipse cx="118.77" cy="182.50" rx="50.77" ry="5.00" fill="#c0e1fc" stroke="#2196F3" stroke-width="1.5"/>
+    <text x="118.77" y="209.92" font-family="Arial, Helvetica, Liberation Sans, DejaVu Sans, sans-serif" font-size="14" fill="#222" text-anchor="middle" dominant-baseline="central">Postgres</text>
   </g>
 </svg>
